@@ -1,0 +1,113 @@
+services:
+  # ============================================================================
+  # 1. Banco de Dados Relacional (PostgreSQL)
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: unifacens-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    env_file:
+      - .env.api
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-unifacens_map}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - unifacens-network
+
+  # ============================================================================
+  # 2. Backend API (NestJS 12 + Drizzle ORM)
+  # ============================================================================
+  api:
+    container_name: unifacens-api
+    build:
+      context: .
+      dockerfile: ./unifacens-api/dockerfile
+      target: development
+    restart: unless-stopped
+    init: true
+    develop:
+      watch:
+        - action: sync
+          path: ./packages/shared
+          target: /app/packages/shared
+        - action: sync
+          path: ./unifacens-api/src
+          target: /app/unifacens-api/src
+        - action: rebuild
+          path: ./unifacens-api/package*.json
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./packages/shared:/app/packages/shared
+      - ./unifacens-api/src:/app/unifacens-api/src
+      - ./unifacens-api/drizzle:/app/unifacens-api/drizzle
+      - ./unifacens-api/drizzle.config.ts:/app/unifacens-api/drizzle.config.ts
+      - /app/node_modules
+      - /app/unifacens-api/node_modules
+    networks:
+      - unifacens-network
+
+  # ============================================================================
+  # 3. Frontend Client (Expo SDK 57 / React Native Web)
+  # ============================================================================
+  client:
+    container_name: unifacens-client
+    build:
+      context: .
+      dockerfile: ./unifacens-client/dockerfile
+      target: development
+    restart: unless-stopped
+    init: true
+    stdin_open: true
+    tty: true
+    develop:
+      watch:
+      - action: sync
+        path: ./packages/shared
+        target: /app/packages/shared
+      - action: sync
+        path: ./unifacens-client/src
+        target: /app/unifacens-client/src
+      - action: rebuild
+        path: ./unifacens-client/package*.json
+    ports:
+      - "8081:8081"
+      - "8080:8081"
+    env_file:
+      - .env.client
+    depends_on:
+      - api
+    volumes:
+      - ./packages/shared:/app/packages/shared
+      - ./unifacens-client/src:/app/unifacens-client/src
+      - ./unifacens-client/assets:/app/unifacens-client/assets
+      - ./unifacens-client/app.json:/app/unifacens-client/app.json
+      - /app/node_modules
+      - /app/unifacens-client/node_modules
+    networks:
+      - unifacens-network
+
+# ==============================================================================
+# Redes & Volumes Persistentes
+# ==============================================================================
+networks:
+  unifacens-network:
+    name: unifacens-network
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: unifacens_postgres_data
+    driver: local

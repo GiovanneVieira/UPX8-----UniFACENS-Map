@@ -1,0 +1,31 @@
+# Dependencies
+node_modules
+*/node_modules
+packages/*/node_modules
+
+# Environment Variables
+.env.api
+.env.client
+.env*.local
+!.env.api.example
+!.env.client.example
+
+# Builds e compilação
+dist
+*/dist
+.expo
+*/.expo
+output.css
+
+# IDEs e Sistema Operacional
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

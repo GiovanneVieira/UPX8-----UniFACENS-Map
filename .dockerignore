@@ -1,0 +1,33 @@
+# Git & Version Control
+.git
+.gitignore
+
+# Dependencies (devem ser instaladas dentro do container)
+node_modules
+*/node_modules
+packages/*/node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build e compilação
+dist
+*/dist
+packages/*/dist
+.expo
+*/.expo
+output.css
+
+# IDEs e editores
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Testes e cobertura
+coverage
+*/coverage
+
+# Logs
+*.log

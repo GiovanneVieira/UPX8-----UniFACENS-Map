@@ -1,0 +1,75 @@
+# ==============================================================================
+# Dockerfile para unifacens-api (NestJS 12 + Drizzle ORM + Node.js 24 LTS)
+# Contexto de Build: Raiz do Monorepo (.)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Stage 1: Base (Debian Bookworm Slim com Node 24 LTS)
+# ------------------------------------------------------------------------------
+FROM node:24-bookworm-slim AS base
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates procps && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------------------------
+# Stage 2: Instalação das dependências do monorepo
+# ------------------------------------------------------------------------------
+FROM base AS dependencies
+
+# Copia manifests para cache eficiente de camadas Docker
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY unifacens-api/package.json ./unifacens-api/
+COPY unifacens-client/package.json ./unifacens-client/
+
+# Instala todas as dependências respeitando os workspaces do npm
+RUN npm ci
+
+# ------------------------------------------------------------------------------
+# Stage 3: Ambiente de Desenvolvimento (com hot-reload via volume)
+# ------------------------------------------------------------------------------
+FROM dependencies AS development
+ENV NODE_ENV=development
+WORKDIR /app
+
+COPY packages/shared ./packages/shared
+COPY unifacens-api ./unifacens-api
+
+EXPOSE 8000
+
+CMD ["npm", "--workspace=unifacens-api", "run", "start:dev"]
+
+# ------------------------------------------------------------------------------
+# Stage 4: Builder de Produção
+# ------------------------------------------------------------------------------
+FROM dependencies AS builder
+ENV NODE_ENV=production
+WORKDIR /app
+
+COPY packages/shared ./packages/shared
+COPY unifacens-api ./unifacens-api
+
+# Compila a aplicação NestJS
+RUN npm --workspace=unifacens-api run build
+
+# ------------------------------------------------------------------------------
+# Stage 5: Runner de Produção (Enxuto e Seguro)
+# ------------------------------------------------------------------------------
+FROM base AS runner
+ENV NODE_ENV=production
+WORKDIR /app
+
+# Usuário não-root por segurança
+USER node
+
+# Copia dependências e código compilado
+COPY --chown=node:node --from=dependencies /app/node_modules ./node_modules
+COPY --chown=node:node --from=dependencies /app/unifacens-api/node_modules ./unifacens-api/node_modules
+COPY --chown=node:node --from=dependencies /app/package.json ./package.json
+COPY --chown=node:node --from=builder /app/packages/shared ./packages/shared
+COPY --chown=node:node --from=builder /app/unifacens-api/dist ./unifacens-api/dist
+COPY --chown=node:node --from=builder /app/unifacens-api/package.json ./unifacens-api/package.json
+
+EXPOSE 8000
+
+WORKDIR /app/unifacens-api
+CMD ["node", "dist/main.js"]

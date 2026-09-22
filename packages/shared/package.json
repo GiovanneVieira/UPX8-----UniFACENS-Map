@@ -1,0 +1,30 @@
+{
+  "name": "shared",
+  "version": "1.0.0",
+  "description": "Contratos, schemas Zod e utilitários compartilhados entre API e Client",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublish": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}
