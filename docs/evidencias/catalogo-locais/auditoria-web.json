@@ -1,0 +1,39 @@
+{
+  "checks": [
+    "empty catalog",
+    "missing maps key fallback",
+    "empty coordinates rejected in form",
+    "real POST and PostgreSQL persistence from form",
+    "comma decimals",
+    "unverified metadata and demo warning",
+    "search via Enter",
+    "category filtering",
+    "selection and details",
+    "360px and 768px: no horizontal overflow; controls at least 44px",
+    "modal Escape dismissal",
+    "network error and recovery"
+  ],
+  "errors": [],
+  "audits": [
+    {
+      "state": "empty desktop",
+      "violations": []
+    },
+    {
+      "state": "create modal",
+      "violations": []
+    },
+    {
+      "state": "populated desktop",
+      "violations": []
+    },
+    {
+      "state": "360px",
+      "violations": []
+    },
+    {
+      "state": "768px",
+      "violations": []
+    }
+  ]
+}

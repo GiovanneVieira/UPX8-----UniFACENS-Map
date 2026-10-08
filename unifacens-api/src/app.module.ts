@@ -4,6 +4,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { DatabaseModule } from './db/database.module.js';
 import { AnchorsModule } from './anchors/anchors.module.js';
+import { PlacesModule } from './modules/places/places.module.js';
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
@@ -18,6 +19,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
   imports: [
     DatabaseModule,
     AnchorsModule,
+    PlacesModule,
     ...(hasObserveKeys
       ? [
           ObserveModule.forRoot({

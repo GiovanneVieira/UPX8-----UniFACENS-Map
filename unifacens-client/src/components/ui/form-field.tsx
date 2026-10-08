@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, TextInput, type TextInputProps } from 'react-native';
+import React, { useId } from "react";
+import { View, Text, TextInput, type TextInputProps } from "react-native";
 
 interface FormInputFieldProps extends TextInputProps {
   label: string;
@@ -21,17 +21,25 @@ export function FormInputField({
   onBlur,
   errors = [],
   helperText,
-  className = '',
+  className = "",
   ...textInputProps
 }: FormInputFieldProps) {
   const hasError = errors.length > 0;
+  const labelId = useId();
 
   return (
     <View className="mb-4">
-      <Text className="text-sm font-semibold text-slate-200 mb-1.5">{label}</Text>
+      <Text
+        nativeID={labelId}
+        className="text-sm font-semibold text-slate-200 mb-1.5"
+      >
+        {label}
+      </Text>
       <TextInput
-        className={`w-full bg-slate-900 border rounded-xl px-3.5 py-2.5 text-sm text-slate-100 ${
-          hasError ? 'border-rose-500' : 'border-slate-700'
+        accessibilityLabel={label}
+        accessibilityLabelledBy={labelId}
+        className={`min-h-[44px] w-full bg-slate-900 border rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-sky-400 ${
+          hasError ? "border-rose-500" : "border-slate-700"
         } ${className}`}
         value={value}
         onChangeText={onChangeText}
@@ -40,7 +48,12 @@ export function FormInputField({
         {...textInputProps}
       />
       {hasError ? (
-        <Text className="text-xs text-rose-400 mt-1 font-medium">{errors.join(', ')}</Text>
+        <Text
+          accessibilityLiveRegion="polite"
+          className="text-xs text-rose-300 mt-1 font-medium"
+        >
+          {errors.join(", ")}
+        </Text>
       ) : helperText ? (
         <Text className="text-xs text-slate-400 mt-1">{helperText}</Text>
       ) : null}

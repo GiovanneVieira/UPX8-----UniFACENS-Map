@@ -1,14 +1,17 @@
 import { NestFactory } from '@nestjs/core';
-import { ExpressAdapter, type NestExpressApplication } from '@nestjs/platform-express';
+import {
+  ExpressAdapter,
+  type NestExpressApplication,
+} from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AppModule, ObserveInstrument } from './app.module.js';
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
-    process.env.OBSERVE_APP_KEY !== 'YOUR_APP_KEY' &&
-    process.env.OBSERVE_APP_SECRET &&
-    process.env.OBSERVE_APP_SECRET !== 'YOUR_APP_SECRET',
+  process.env.OBSERVE_APP_KEY !== 'YOUR_APP_KEY' &&
+  process.env.OBSERVE_APP_SECRET &&
+  process.env.OBSERVE_APP_SECRET !== 'YOUR_APP_SECRET',
 );
 
 async function bootstrap() {
@@ -28,13 +31,16 @@ async function bootstrap() {
 
   // Configuração OpenAPI / Swagger
   const swaggerConfig = new DocumentBuilder()
-    .setBasePath('/scalar')
     .setTitle('UniFACENS Map API')
     .setDescription(
-      'Catálogo de Âncoras Espaciais e Google ARCore Cloud Anchors para o campus UniFACENS',
+      'Catálogo de locais do campus UniFACENS e âncoras espaciais para realidade aumentada',
     )
     .setVersion('1.0.0')
     .addTag('anchors', 'Gerenciamento de Google ARCore Cloud Anchors')
+    .addTag(
+      'places',
+      'Catálogo de locais do campus, coordenadas e origem das informações',
+    )
     .addTag('health', 'Healthcheck e Status da Aplicação')
     .build();
 
@@ -42,7 +48,7 @@ async function bootstrap() {
 
   // Documentação Interativa com Scalar UI
   app.use(
-    '/scalar',
+    ['/reference', '/scalar'],
     apiReference({
       spec: {
         content: document,

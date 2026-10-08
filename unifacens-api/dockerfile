@@ -36,7 +36,7 @@ COPY unifacens-api ./unifacens-api
 
 EXPOSE 8000
 
-CMD ["npm", "--workspace=unifacens-api", "run", "start:dev"]
+CMD ["sh", "-c", "npm run build --workspace=shared && npm --workspace=unifacens-api run start:dev"]
 
 # ------------------------------------------------------------------------------
 # Stage 4: Builder de Produção
@@ -49,6 +49,7 @@ COPY packages/shared ./packages/shared
 COPY unifacens-api ./unifacens-api
 
 # Compila a aplicação NestJS
+RUN npm --workspace=shared run build
 RUN npm --workspace=unifacens-api run build
 
 # ------------------------------------------------------------------------------
@@ -67,6 +68,7 @@ COPY --chown=node:node --from=dependencies /app/unifacens-api/node_modules ./uni
 COPY --chown=node:node --from=dependencies /app/package.json ./package.json
 COPY --chown=node:node --from=builder /app/packages/shared ./packages/shared
 COPY --chown=node:node --from=builder /app/unifacens-api/dist ./unifacens-api/dist
+COPY --chown=node:node --from=builder /app/unifacens-api/drizzle ./unifacens-api/drizzle
 COPY --chown=node:node --from=builder /app/unifacens-api/package.json ./unifacens-api/package.json
 
 EXPOSE 8000

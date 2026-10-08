@@ -1,0 +1,8 @@
+{
+  "checks": [
+    "visible loading state until actual request completes",
+    "failed save keeps form values and supports retry",
+    "all 53 results reachable through pagination, without duplicate cards"
+  ],
+  "errors": []
+}

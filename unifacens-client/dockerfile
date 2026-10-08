@@ -38,7 +38,7 @@ COPY unifacens-client ./unifacens-client
 EXPOSE 8081
 
 WORKDIR /app/unifacens-client
-CMD ["npx", "expo", "start", "--port", "8081", "--offline"]
+CMD ["sh", "-c", "npm run build --workspace=shared && npx expo start --port 8081 --offline"]
 
 # ------------------------------------------------------------------------------
 # Stage 4: Builder de Produção (Exportação estática Web do Expo)
@@ -51,6 +51,7 @@ COPY packages/shared ./packages/shared
 COPY unifacens-client ./unifacens-client
 
 # Exporta a versão web estática para a pasta dist
+RUN npm run build --workspace=shared
 RUN npx --workspace=unifacens-client expo export --platform web
 
 # ------------------------------------------------------------------------------

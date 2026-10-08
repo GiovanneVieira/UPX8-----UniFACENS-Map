@@ -1,12 +1,13 @@
-import '../../global.css';
-import React from 'react';
-import { View } from 'react-native';
-import ViroARAnchorContainer from '@/components/ar/ViroARAnchorContainer';
+import { PlacesFeature } from "@/features/places/components/places-feature";
+import Head from "expo-router/head";
 
 export default function HomeScreen() {
   return (
-    <View className="flex-1 bg-slate-950">
-      <ViroARAnchorContainer />
-    </View>
+    <>
+      <Head>
+        <title>UniFACENS Map — Locais do campus</title>
+      </Head>
+      <PlacesFeature />
+    </>
   );
 }
