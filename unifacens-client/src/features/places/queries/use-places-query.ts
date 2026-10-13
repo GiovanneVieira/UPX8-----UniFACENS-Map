@@ -8,8 +8,10 @@ import {
   createPlace,
   fetchPlace,
   fetchPlaces,
+  updatePlace,
   type PlaceFilters,
 } from "../services/places-api";
+import type { CreatePlaceDto } from "shared";
 
 export const placeKeys = {
   all: ["places"] as const,
@@ -37,10 +39,11 @@ export function usePlacesQuery(filters: PlaceFilters) {
   });
 }
 
-export function useCreatePlaceMutation() {
+export function useSavePlaceMutation() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: createPlace,
+    mutationFn: ({ id, dto }: { id?: string; dto: CreatePlaceDto }) =>
+      id ? updatePlace(id, dto) : createPlace(dto),
     onSuccess: async (place) => {
       await client.invalidateQueries({ queryKey: placeKeys.all });
       client.setQueryData(placeKeys.detail(place.id), place);

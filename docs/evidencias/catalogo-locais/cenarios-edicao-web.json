@@ -1,0 +1,10 @@
+{
+  "checks": [
+    "manual POST succeeds with Google script blocked; zero coordinates and nullable floor preserved",
+    "out-of-range edit rejected before HTTP request",
+    "real HTTP 404 keeps draft and shows specific recovery message",
+    "new form has fresh values; keyboard reaches manual coordinates and Escape cancels",
+    "Google authorization failure callback switches to explicit fallback",
+    "loading feedback does not block opening manual form"
+  ]
+}

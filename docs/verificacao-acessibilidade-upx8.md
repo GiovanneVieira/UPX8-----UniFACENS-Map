@@ -96,3 +96,11 @@ Resultados permitidos: **atendido com evidência**, **não atendido**, **pendent
 Prioridades: corrigir contraste e semântica no N12; criar a ficha física no levantamento/N01; documentar as regras no N02; verificar erro/estados no N05/N07/N12; comprovar funcionamento no N14 e avaliações N15/N16.
 
 O card de pesquisa normativa pode concluir quando entregar fontes, edições, aplicabilidade, requisitos e instrumentos de verificação revisados. A conformidade do produto depende das implementações e dos testes registrados nos outros cards.
+
+## 6. Evidência adicional do catálogo — 12/10/2026
+
+O cadastro e a edição de locais oferecem coordenadas manuais como alternativa à seleção visual pelo mapa. Cancelamento não altera o registro; falhas de envio preservam os campos e exibem mensagem em português. O seletor de mapa expõe estado expandido na web, e as opções escolhidas de categoria/origem têm nome que comunica a seleção. Os marcadores web têm nome acessível; a lista de locais permanece como alternativa ao mapa.
+
+Foram verificados layout em 360/768/1280 px, ausência de transbordamento horizontal e alvos de pelo menos 44 px nos controles próprios do formulário. O controle de ajuda do rodapé do Google foi ajustado para o mínimo de 24 px, mantendo atribuição e links legais; os controles do fornecedor ainda não são declarados como atendendo à meta de 44 px do projeto.
+
+A auditoria axe-core não encontrou violações nos quatro estados registrados, com Google Maps real, API e PostgreSQL de teste. Ver [evidências e limites](./catalogo-locais-upx8.md). Permanecem pendentes a avaliação manual completa por teclado/leitor de tela, aparelho Android, texto ampliado, AR e as condições físicas do campus. O diagnóstico inicial acima continua como registro histórico de 07/10/2026, sem aprovação global de conformidade.

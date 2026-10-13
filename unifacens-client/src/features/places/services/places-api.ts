@@ -1,10 +1,12 @@
 import {
   createPlaceSchema,
+  updatePlaceSchema,
   placeSchema,
   placesPageSchema,
   type CreatePlaceDto,
   type PlacesPage,
   type PlaceCategory,
+  type UpdatePlaceDto,
 } from "shared";
 import { getApiBaseUrl } from "@/services/api";
 
@@ -41,10 +43,33 @@ export async function createPlace(dto: CreatePlaceDto) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(createPlaceSchema.parse(dto)),
+  }).catch(() => {
+    throw new Error(
+      "Não foi possível salvar o local. Confira a conexão e tente novamente.",
+    );
   });
   if (!response.ok)
     throw new Error(
       "Não foi possível salvar o local. Confira os dados e tente novamente.",
+    );
+  return placeSchema.parse(await response.json());
+}
+
+export async function updatePlace(id: string, dto: UpdatePlaceDto) {
+  const response = await fetch(`${getApiBaseUrl()}/places/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updatePlaceSchema.parse(dto)),
+  }).catch(() => {
+    throw new Error(
+      "Não foi possível atualizar o local. Confira a conexão e tente novamente.",
+    );
+  });
+  if (!response.ok)
+    throw new Error(
+      response.status === 404
+        ? "Este local não está mais disponível. Feche a edição e atualize a lista."
+        : "Não foi possível atualizar o local. Confira a conexão e tente novamente.",
     );
   return placeSchema.parse(await response.json());
 }

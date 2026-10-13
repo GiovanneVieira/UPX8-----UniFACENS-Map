@@ -8,7 +8,7 @@ import type { PlaceFilters } from "../services/places-api";
 
 export function usePlacesExplorer() {
   const [filters, setFilters] = useState<PlaceFilters>({ search: "" });
-  const [isCreating, setCreating] = useState(false);
+  const [editor, setEditor] = useState<"create" | "edit" | null>(null);
   const [notice, setNotice] = useState("");
   const { selectedId, selectPlace } = usePlacesStore(
     useShallow((state) => ({
@@ -32,11 +32,13 @@ export function usePlacesExplorer() {
     selectPlace(null);
     setFilters((current) => ({ ...current, category }));
   }
-  function onCreated(place: Place) {
-    setCreating(false);
+  function onSaved(place: Place) {
+    setEditor(null);
     selectPlace(place.id);
     setNotice(
-      "Local cadastrado. As informações ainda precisam de verificação.",
+      editor === "edit"
+        ? "Local atualizado. As informações precisam de nova verificação."
+        : "Local cadastrado. As informações ainda precisam de verificação.",
     );
   }
   return {
@@ -49,9 +51,9 @@ export function usePlacesExplorer() {
     selectCategory,
     places: query.data?.pages.flatMap((page) => page.items) ?? [],
     total: query.data?.pages[0]?.total ?? 0,
-    isCreating,
-    setCreating,
-    onCreated,
+    editor,
+    setEditor,
+    onSaved,
     notice,
   };
 }

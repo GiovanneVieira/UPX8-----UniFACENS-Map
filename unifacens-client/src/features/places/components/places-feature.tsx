@@ -8,7 +8,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { usePlacesExplorer } from "../hooks/use-places-explorer";
 import CampusMap from "./campus-map";
-import { CreatePlaceModal } from "./create-place-modal";
+import { PlaceFormModal } from "./place-form-modal";
 import { PlaceCard } from "./place-card";
 import { PlaceDetails } from "./place-details";
 import { PlacesSearch } from "./places-search";
@@ -40,7 +40,7 @@ export function PlacesFeature() {
             </View>
             <Pressable
               accessibilityRole="button"
-              onPress={() => explorer.setCreating(true)}
+              onPress={() => explorer.setEditor("create")}
               className="min-h-[44px] justify-center rounded-xl bg-blue-700 px-4 active:opacity-80"
             >
               <Text className="font-semibold text-white">Cadastrar local</Text>
@@ -95,6 +95,7 @@ export function PlacesFeature() {
             <PlaceDetails
               place={details.data}
               onClose={() => selectPlace(null)}
+              onEdit={() => explorer.setEditor("edit")}
             />
           ) : null}
           <View className="gap-3">
@@ -170,10 +171,13 @@ export function PlacesFeature() {
           </View>
         </View>
       </ScrollView>
-      {explorer.isCreating ? (
-        <CreatePlaceModal
-          onClose={() => explorer.setCreating(false)}
-          onCreated={explorer.onCreated}
+      {explorer.editor === "create" ||
+      (explorer.editor === "edit" && details.data) ? (
+        <PlaceFormModal
+          key={explorer.editor === "edit" ? selectedId : "create"}
+          initialPlace={explorer.editor === "edit" ? details.data : undefined}
+          onClose={() => explorer.setEditor(null)}
+          onSaved={explorer.onSaved}
         />
       ) : null}
     </SafeAreaView>

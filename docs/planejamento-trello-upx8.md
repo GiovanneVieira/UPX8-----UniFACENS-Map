@@ -4,6 +4,8 @@ Análise inicial em 07/10/2026. Base: artigo AC1 de 26 páginas, exportação do
 
 Incremento implementado em 08/10/2026: catálogo de locais com cadastro, API, busca, categorias e detalhes, com tratamento da ausência de chave do mapa. Isso representa evolução parcial de N01, N03 e N05; os levantamentos reais, caminhos e validação dos marcadores continuam pendentes. Execução, limites e evidências estão em [Catálogo de locais](./catalogo-locais-upx8.md).
 
+Evolução em 12/10/2026: seleção de posição por clique/arraste no mapa e edição de locais pela interface. O mapa web e os marcadores foram validados com a chave configurada, e o fluxo de cadastro/edição foi exercitado com PostgreSQL real. N03/N05 avançaram; a validação nativa, os dados reais do setor piloto, a escolha de origem/destino e os caminhos continuam pendentes. O próximo incremento é cadastrar e conferir um setor piloto, seguido da modelagem das conexões de N01/N02/N04. Evidências estão no guia do catálogo; nenhum cartão foi alterado no Trello.
+
 Revisão de acessibilidade em 07/10/2026: os critérios abaixo foram complementados a partir da pesquisa normativa fornecida e da verificação estática do sistema. A cobertura do plano não comprova conformidade do aplicativo. Evidências, limites e matriz de pendências estão em [Verificação de acessibilidade](./verificacao-acessibilidade-upx8.md).
 
 ## 1. O que o artigo exige que o planejamento cubra

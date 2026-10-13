@@ -1,0 +1,6 @@
+/* Enlarge Google's footer buttons while keeping attribution and legal links visible. */
+.campus-google-map .gm-style-cc button {
+  min-width: 24px;
+  min-height: 24px;
+  transform: translateY(-10px);
+}

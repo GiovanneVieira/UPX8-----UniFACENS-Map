@@ -76,6 +76,15 @@ const coordinateInput = z
     "Informe uma coordenada em graus decimais",
   )
   .transform((value) => Number(value.replace(",", ".")));
+export const placePositionSchema = createPlaceSchema.pick({
+  latitude: true,
+  longitude: true,
+});
+export type PlacePosition = z.infer<typeof placePositionSchema>;
+export const placePositionFormSchema = z.object({
+  latitude: coordinateInput.pipe(createPlaceSchema.shape.latitude),
+  longitude: coordinateInput.pipe(createPlaceSchema.shape.longitude),
+});
 export const createPlaceFormSchema = z
   .strictObject({
     name: z.string(),

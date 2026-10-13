@@ -4,9 +4,11 @@ import { PLACE_CATEGORY_LABELS, PLACE_SOURCE_LABELS, type Place } from "shared";
 export function PlaceDetails({
   place,
   onClose,
+  onEdit,
 }: {
   place: Place;
   onClose: () => void;
+  onEdit: () => void;
 }) {
   return (
     <View className="rounded-2xl border border-sky-500 bg-slate-900 p-5">
@@ -26,6 +28,14 @@ export function PlaceDetails({
           <Text className="text-sm text-white">Fechar</Text>
         </Pressable>
       </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Editar local ${place.name}`}
+        onPress={onEdit}
+        className="mt-3 min-h-[44px] self-start justify-center rounded-xl bg-blue-700 px-4 active:opacity-80"
+      >
+        <Text className="font-semibold text-white">Editar local</Text>
+      </Pressable>
       <Text className="mt-2 text-sm text-sky-300">
         {PLACE_CATEGORY_LABELS[place.category]}
       </Text>

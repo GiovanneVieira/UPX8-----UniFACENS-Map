@@ -1,0 +1,36 @@
+{
+  "checks": [
+    "Google map click fills coordinates without manual input",
+    "dragging Google advanced marker updates coordinates",
+    "POST real PostgreSQL persistence",
+    "manual comma decimals and ground floor preserved",
+    "new place rendered as advanced map marker",
+    "edit form prefilled including source and zero floor",
+    "cancel leaves record unchanged",
+    "failed PATCH keeps form and edits for retry",
+    "real PATCH updates record, cache, list, details and map marker",
+    "edit remains unverified with no verification timestamp",
+    "360px editor: no horizontal overflow; own controls at least 44px",
+    "768px editor: no horizontal overflow; own controls at least 44px",
+    "Google script failure: clear fallback and manual coordinates remain usable"
+  ],
+  "audits": [
+    {
+      "state": "create with real Google picker",
+      "violations": []
+    },
+    {
+      "state": "updated desktop",
+      "violations": []
+    },
+    {
+      "state": "edit picker 360px",
+      "violations": []
+    },
+    {
+      "state": "edit picker 768px",
+      "violations": []
+    }
+  ],
+  "errors": []
+}

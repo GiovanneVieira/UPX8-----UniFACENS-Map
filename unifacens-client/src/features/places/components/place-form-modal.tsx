@@ -13,9 +13,11 @@ import {
   placeCategorySchema,
   placeSourceSchema,
   type Place,
+  placePositionFormSchema,
 } from "shared";
 import { FormInputField } from "@/components/ui/form-field";
-import { useCreatePlaceForm } from "../hooks/use-create-place-form";
+import { usePlaceForm } from "../hooks/use-place-form";
+import PlacePositionMap from "./place-position-map";
 
 const textFields = [
   {
@@ -48,16 +50,32 @@ const textFields = [
   },
 ] as const;
 
-export function CreatePlaceModal({
+export function PlaceFormModal({
   onClose,
-  onCreated,
+  onSaved,
+  initialPlace,
 }: {
   onClose: () => void;
-  onCreated: (place: Place) => void;
+  onSaved: (place: Place) => void;
+  initialPlace?: Place;
 }) {
-  const { form, mutation } = useCreatePlaceForm(onCreated);
+  const {
+    form,
+    mutation,
+    isPickingPosition,
+    setPickingPosition,
+    positionNotice,
+    selectPosition,
+  } = usePlaceForm(onSaved, initialPlace);
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+    <Modal
+      visible
+      transparent
+      animationType="slide"
+      onRequestClose={() => {
+        if (!form.state.isSubmitting) onClose();
+      }}
+    >
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         className="flex-1 justify-center bg-black/70 p-4"
@@ -72,12 +90,62 @@ export function CreatePlaceModal({
                 accessibilityRole="header"
                 className="text-2xl font-bold text-white"
               >
-                Cadastrar local
+                {initialPlace ? "Editar local" : "Cadastrar local"}
               </Text>
               <Text className="mb-5 mt-2 text-sm text-slate-300">
-                O cadastro ficará como ainda não verificado. Uma rampa ou um
-                elevador cadastrado não comprova acessibilidade.
+                {initialPlace
+                  ? "A edição exigirá nova verificação. "
+                  : "O cadastro ficará como ainda não verificado. "}
+                Uma rampa ou um elevador cadastrado não comprova acessibilidade.
               </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: isPickingPosition }}
+                aria-expanded={isPickingPosition}
+                onPress={() => setPickingPosition(!isPickingPosition)}
+                className="mb-3 min-h-[44px] justify-center rounded-xl border border-sky-400 bg-slate-900 px-4 active:opacity-80"
+              >
+                <Text className="font-semibold text-sky-200">
+                  {isPickingPosition
+                    ? "Ocultar mapa de seleção"
+                    : "Selecionar posição no mapa"}
+                </Text>
+              </Pressable>
+              {isPickingPosition ? (
+                <View className="mb-4 gap-3">
+                  <Text className="text-sm text-slate-200">
+                    Toque ou clique no local desejado. Para ajustar, escolha
+                    outro ponto ou arraste o marcador. Você também pode
+                    preencher as coordenadas nos campos abaixo.
+                  </Text>
+                  <form.Subscribe
+                    selector={(state) =>
+                      [state.values.latitude, state.values.longitude] as const
+                    }
+                  >
+                    {([latitude, longitude]) => {
+                      const position = placePositionFormSchema.safeParse({
+                        latitude,
+                        longitude,
+                      });
+                      return (
+                        <PlacePositionMap
+                          position={position.success ? position.data : null}
+                          onSelectPosition={selectPosition}
+                        />
+                      );
+                    }}
+                  </form.Subscribe>
+                </View>
+              ) : null}
+              {positionNotice ? (
+                <Text
+                  accessibilityLiveRegion="polite"
+                  className="mb-3 text-sm text-sky-200"
+                >
+                  {positionNotice}
+                </Text>
+              ) : null}
               {textFields.map((input) => (
                 <form.Field key={input.name} name={input.name}>
                   {(field) => (
@@ -120,6 +188,7 @@ export function CreatePlaceModal({
                       <Pressable
                         key={category}
                         accessibilityRole="button"
+                        accessibilityLabel={`${PLACE_CATEGORY_LABELS[category]}${field.state.value === category ? ", selecionada" : ""}`}
                         accessibilityState={{
                           selected: field.state.value === category,
                         }}
@@ -144,6 +213,7 @@ export function CreatePlaceModal({
                       <Pressable
                         key={source}
                         accessibilityRole="button"
+                        accessibilityLabel={`${PLACE_SOURCE_LABELS[source]}${field.state.value === source ? ", selecionada" : ""}`}
                         accessibilityState={{
                           selected: field.state.value === source,
                         }}
@@ -163,7 +233,7 @@ export function CreatePlaceModal({
                   accessibilityLiveRegion="polite"
                   className="mb-4 text-sm text-rose-300"
                 >
-                  Não foi possível salvar. Confira a conexão e tente novamente.
+                  {mutation.error.message}
                 </Text>
               ) : null}
               <form.Subscribe selector={(state) => state.isSubmitting}>
