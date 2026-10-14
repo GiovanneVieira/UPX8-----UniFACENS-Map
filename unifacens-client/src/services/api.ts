@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import type { Anchor, CreateAnchorDto } from 'shared';
+import { getTeamAuthorization } from './team-authorization';
 
 export function getApiBaseUrl(): string {
   if (process.env.EXPO_PUBLIC_API_URL) {
@@ -65,6 +66,7 @@ export async function createAnchor(data: CreateAnchorDto): Promise<Anchor> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...getTeamAuthorization(),
       Accept: 'application/json',
     },
     body: JSON.stringify(data),
@@ -86,6 +88,7 @@ export async function deleteAnchor(id: string): Promise<{ success: boolean }> {
     method: 'DELETE',
     headers: {
       Accept: 'application/json',
+      ...getTeamAuthorization(),
     },
   });
 

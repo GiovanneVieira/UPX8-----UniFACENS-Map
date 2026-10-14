@@ -3,6 +3,8 @@
 > Plataforma de mapeamento e navegação indoor/outdoor pelo campus da UniFACENS com suporte a **Realidade Aumentada (AR)**.
 > Monorepo estruturado com **NestJS**, **Expo (React Native)** e **PostgreSQL**.
 
+Publicação do catálogo web e da API com banco compartilhado: [guia Render + Neon](./docs/publicacao-render-neon.md). O arquivo `render.yaml` configura os dois serviços e mantém o banco no Neon.
+
 ---
 
 ## 🏗️ Arquitetura do Monorepo

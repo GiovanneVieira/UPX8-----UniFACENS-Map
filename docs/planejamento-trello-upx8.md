@@ -6,6 +6,8 @@ Incremento implementado em 08/10/2026: catálogo de locais com cadastro, API, bu
 
 Evolução em 12/10/2026: seleção de posição por clique/arraste no mapa e edição de locais pela interface. O mapa web e os marcadores foram validados com a chave configurada, e o fluxo de cadastro/edição foi exercitado com PostgreSQL real. N03/N05 avançaram; a validação nativa, os dados reais do setor piloto, a escolha de origem/destino e os caminhos continuam pendentes. O próximo incremento é cadastrar e conferir um setor piloto, seguido da modelagem das conexões de N01/N02/N04. Evidências estão no guia do catálogo; nenhum cartão foi alterado no Trello.
 
+Preparação em 14/10/2026: publicação da API e do front no Render com banco novo no Neon, acesso da equipe para edição/exclusão, cadastro público e CI. N13/N19 avançaram com configuração e verificações locais; a criação dos recursos e validação do endereço público permanecem pendentes até acesso às contas. Procedimento e limites: [Render + Neon](./publicacao-render-neon.md).
+
 Revisão de acessibilidade em 07/10/2026: os critérios abaixo foram complementados a partir da pesquisa normativa fornecida e da verificação estática do sistema. A cobertura do plano não comprova conformidade do aplicativo. Evidências, limites e matriz de pendências estão em [Verificação de acessibilidade](./verificacao-acessibilidade-upx8.md).
 
 ## 1. O que o artigo exige que o planejamento cubra

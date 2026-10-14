@@ -5,6 +5,9 @@ import { AppService } from './app.service.js';
 import { DatabaseModule } from './db/database.module.js';
 import { AnchorsModule } from './anchors/anchors.module.js';
 import { PlacesModule } from './modules/places/places.module.js';
+import { RuntimeConfigModule } from './config/runtime-config.js';
+import { AccessModule } from './common/auth/access.module.js';
+import { HealthController } from './health/health.controller.js';
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
@@ -17,7 +20,9 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
 @Module({
   imports: [
+    RuntimeConfigModule,
     DatabaseModule,
+    AccessModule,
     AnchorsModule,
     PlacesModule,
     ...(hasObserveKeys
@@ -30,7 +35,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
         ]
       : []),
   ],
-  controllers: [AppController],
+  controllers: [AppController, HealthController],
   providers: [AppService],
 })
 export class AppModule {}

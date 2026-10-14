@@ -1,0 +1,31 @@
+{
+  "checks": [
+    "public contribution saved to real Docker/PostgreSQL production API; editing hidden for visitors",
+    "invalid credential rejected with Portuguese error and masked input",
+    "team credential verified against real API; credential kept out of persistent browser storage",
+    "team edit sends Authorization and persists through real API",
+    "sign-out removes team editing immediately",
+    "360px: no horizontal overflow, own controls >=44px, Escape cancels",
+    "768px: no horizontal overflow, own controls >=44px, Escape cancels",
+    "reload requires team code again"
+  ],
+  "audits": [
+    {
+      "state": "public desktop",
+      "violations": []
+    },
+    {
+      "state": "invalid code",
+      "violations": []
+    },
+    {
+      "state": "team access 360px",
+      "violations": []
+    },
+    {
+      "state": "team access 768px",
+      "violations": []
+    }
+  ],
+  "errors": []
+}

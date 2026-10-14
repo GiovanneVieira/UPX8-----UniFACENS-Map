@@ -1,22 +1,33 @@
-import { Global, Module, OnModuleInit } from '@nestjs/common';
+import {
+  Global,
+  Inject,
+  Module,
+  OnModuleInit,
+  OnApplicationShutdown,
+} from '@nestjs/common';
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import * as schema from './schema.js';
 import { runMigrations } from './migrate.js';
+import { API_CONFIG } from '../config/runtime-config.js';
+import type { ApiEnvironment } from 'shared';
 
 export const DRIZZLE = Symbol('DRIZZLE');
 export type DrizzleDB = NodePgDatabase;
 
 const poolProvider = {
   provide: 'PG_POOL',
-  useFactory: () => {
+  useFactory: (config: ApiEnvironment) => {
     const pool = new pg.Pool({
       connectionString:
-        process.env.DATABASE_URL ||
+        config.DATABASE_URL ||
         'postgresql://postgres:postgres@postgres:5432/unifacens_map',
+      max: 5,
+      connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: 30000,
     });
     return pool;
   },
+  inject: [API_CONFIG],
 };
 
 const drizzleProvider = {
@@ -32,13 +43,17 @@ const drizzleProvider = {
   providers: [poolProvider, drizzleProvider],
   exports: [DRIZZLE, 'PG_POOL'],
 })
-export class DatabaseModule implements OnModuleInit {
+export class DatabaseModule implements OnModuleInit, OnApplicationShutdown {
+  constructor(
+    @Inject('PG_POOL') private readonly pool: pg.Pool,
+    @Inject(API_CONFIG) private readonly config: ApiEnvironment,
+  ) {}
   async onModuleInit() {
-    try {
-      await runMigrations();
-    } catch (err) {
-      console.error('[DatabaseModule] Erro ao executar migrações automáticas:', err);
-    }
+    await runMigrations(
+      this.config.DATABASE_MIGRATION_URL || this.config.DATABASE_URL,
+    );
+  }
+  async onApplicationShutdown() {
+    await this.pool.end();
   }
 }
-

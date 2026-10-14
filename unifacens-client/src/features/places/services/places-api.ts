@@ -9,6 +9,8 @@ import {
   type UpdatePlaceDto,
 } from "shared";
 import { getApiBaseUrl } from "@/services/api";
+import { getTeamAuthorization } from "@/services/team-authorization";
+import { useTeamAccessStore } from "@/stores/use-team-access-store";
 
 export interface PlaceFilters {
   search: string;
@@ -58,13 +60,19 @@ export async function createPlace(dto: CreatePlaceDto) {
 export async function updatePlace(id: string, dto: UpdatePlaceDto) {
   const response = await fetch(`${getApiBaseUrl()}/places/${id}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getTeamAuthorization() },
     body: JSON.stringify(updatePlaceSchema.parse(dto)),
   }).catch(() => {
     throw new Error(
       "Não foi possível atualizar o local. Confira a conexão e tente novamente.",
     );
   });
+  if (response.status === 401) {
+    useTeamAccessStore.getState().signOut();
+    throw new Error(
+      "Acesso da equipe expirado ou inválido. Entre novamente para editar.",
+    );
+  }
   if (!response.ok)
     throw new Error(
       response.status === 404

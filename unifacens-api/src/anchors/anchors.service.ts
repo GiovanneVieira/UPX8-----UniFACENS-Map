@@ -10,6 +10,7 @@ export class AnchorsService implements OnModuleInit {
   constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
 
   async onModuleInit() {
+    if (process.env.NODE_ENV === 'production') return;
     await this.seedSampleAnchorsIfEmpty();
   }
 

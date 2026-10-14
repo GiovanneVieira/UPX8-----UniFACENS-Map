@@ -6,6 +6,9 @@ import {
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { AppModule, ObserveInstrument } from './app.module.js';
+import { API_CONFIG } from './config/runtime-config.js';
+import type { ApiEnvironment } from 'shared';
+import { configureHttp } from './config/configure-http.js';
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
@@ -18,16 +21,11 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule,
     new ExpressAdapter(),
-    {
-      ...(hasObserveKeys ? { instrument: ObserveInstrument } : {}),
-    },
+    hasObserveKeys ? { instrument: ObserveInstrument } : {},
   );
   app.enableShutdownHooks();
-  app.enableCors({
-    origin: true,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
-  });
+  const config = app.get<ApiEnvironment>(API_CONFIG);
+  configureHttp(app, config);
 
   // Configuração OpenAPI / Swagger
   const swaggerConfig = new DocumentBuilder()
@@ -36,6 +34,8 @@ async function bootstrap() {
       'Catálogo de locais do campus UniFACENS e âncoras espaciais para realidade aumentada',
     )
     .setVersion('1.0.0')
+    .addBearerAuth({ type: 'http', scheme: 'bearer' }, 'team-access')
+    .addTag('access', 'Acesso da equipe para edição e exclusão')
     .addTag('anchors', 'Gerenciamento de Google ARCore Cloud Anchors')
     .addTag(
       'places',
@@ -57,12 +57,12 @@ async function bootstrap() {
     }),
   );
 
-  const port = Number(process.env.PORT ?? 3000);
+  const port = config.PORT;
 
   let retries = 5;
   while (retries > 0) {
     try {
-      await app.listen(port);
+      await app.listen(port, '0.0.0.0');
       break;
     } catch (err: any) {
       if (err.code === 'EADDRINUSE' && retries > 1) {
@@ -73,16 +73,5 @@ async function bootstrap() {
       }
     }
   }
-
-  const shutdown = async () => {
-    try {
-      await app.close();
-    } finally {
-      process.exit(0);
-    }
-  };
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
 }
 await bootstrap();

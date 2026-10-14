@@ -2,6 +2,10 @@
 .git
 .gitignore
 
+# Segredos locais nunca entram no contexto de build.
+.env*
+**/.env*
+
 # Dependencies (devem ser instaladas dentro do container)
 node_modules
 */node_modules

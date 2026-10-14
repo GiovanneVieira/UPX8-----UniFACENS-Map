@@ -1,0 +1,53 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Banco externo: Neon. Não cria Render Postgres nem recursos pagos.
+services:
+  - type: web
+    name: unifacens-map-api
+    runtime: docker
+    plan: free
+    region: virginia
+    dockerfilePath: ./unifacens-api/dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_MIGRATION_URL
+        sync: false
+      - key: TEAM_ACCESS_TOKEN
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+  - type: web
+    name: unifacens-map
+    runtime: static
+    buildCommand: node scripts/render-build-web.mjs
+    staticPublishPath: unifacens-client/dist
+    routes:
+      - type: rewrite
+        source: /ar
+        destination: /ar.html
+      - type: rewrite
+        source: /explore
+        destination: /explore.html
+      - type: rewrite
+        source: /_sitemap
+        destination: /_sitemap.html
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
+      - key: EXPO_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: unifacens-map-api
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY
+        sync: false
+      - key: EXPO_PUBLIC_GOOGLE_MAPS_MAP_ID
+        value: DEMO_MAP_ID

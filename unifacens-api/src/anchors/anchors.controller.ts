@@ -14,7 +14,7 @@ import {
   type Anchor,
   type CreateAnchorDto,
 } from 'shared';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 @ApiTags('anchors')
 @Controller('anchors')
@@ -38,6 +38,7 @@ export class AnchorsController {
   }
 
   @Post()
+  @ApiBearerAuth('team-access')
   @ApiOperation({ summary: 'Cadastrar nova âncora com Cloud Anchor ID gerado pelo ARCore' })
   async createAnchor(
     @Body(new ZodValidationPipe(createAnchorSchema)) dto: CreateAnchorDto,
@@ -46,6 +47,7 @@ export class AnchorsController {
   }
 
   @Delete(':id')
+  @ApiBearerAuth('team-access')
   @ApiOperation({ summary: 'Excluir uma âncora do catálogo pelo ID' })
   async deleteAnchor(@Param('id') id: string): Promise<{ success: boolean }> {
     const res = await this.anchorsService.remove(id);
