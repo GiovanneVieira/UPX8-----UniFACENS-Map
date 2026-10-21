@@ -8,8 +8,13 @@ export const anchors = pgTable('anchors', {
   positionX: doublePrecision('position_x'),
   positionY: doublePrecision('position_y'),
   positionZ: doublePrecision('position_z'),
+  latitude: doublePrecision('latitude'),
+  longitude: doublePrecision('longitude'),
+  altitude: doublePrecision('altitude'),
+  heading: doublePrecision('heading'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type Anchor = typeof anchors.$inferSelect;
 export type NewAnchor = typeof anchors.$inferInsert;
+

@@ -5,11 +5,20 @@
   "main": "index.js",
   "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "npm run lint -w unifacens-api && ./unifacens-api/node_modules/.bin/oxlint unifacens-client/src",
+    "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p unifacens-client",
+    "test": "npm run test -w unifacens-api",
+    "android:connect": "/home/giovanne/Android/Sdk/platform-tools/adb reverse tcp:8081 tcp:8081 && /home/giovanne/Android/Sdk/platform-tools/adb reverse tcp:8000 tcp:8000",
+    "postinstall": "node -e 'const fs=require(\"fs\"); if(!fs.existsSync(\"node_modules/expo-router\")) fs.symlinkSync(\"../unifacens-client/node_modules/expo-router\", \"node_modules/expo-router\", \"junction\"); if(!fs.existsSync(\"node_modules/@expo/metro-runtime\")) fs.symlinkSync(\"../../unifacens-client/node_modules/@expo/metro-runtime\", \"node_modules/@expo/metro-runtime\", \"junction\");'"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "devDependencies": {
+    "@expo/metro-runtime": "~57.0.15",
+    "@types/react": "~19.2.2",
+    "expo-router": "~57.0.21"
+  },
   "workspaces": [
     "./packages/*",
     "./unifacens-api",

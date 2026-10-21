@@ -55,7 +55,7 @@ describe('AnchorsController (Unit)', () => {
   it('deve retornar a lista de cloud anchors', async () => {
     const result = await controller.getAnchors();
     expect(result).toEqual(mockAnchors);
-    expect(service.findAll).toHaveBeenCalled();
+    expect(service['findAll']).toHaveBeenCalled();
   });
 
   it('deve buscar uma âncora por ID existente', async () => {
@@ -76,7 +76,7 @@ describe('AnchorsController (Unit)', () => {
     });
     expect(result.id).toBe('new-uuid');
     expect(result.cloudAnchorId).toBe('ua-biblio-999');
-    expect(service.create).toHaveBeenCalledWith({
+    expect(service['create']).toHaveBeenCalledWith({
       name: 'Entrada Biblioteca',
       cloudAnchorId: 'ua-biblio-999',
       description: 'Porta principal',
@@ -86,7 +86,7 @@ describe('AnchorsController (Unit)', () => {
   it('deve excluir uma âncora com sucesso', async () => {
     const result = await controller.deleteAnchor('123e4567-e89b-12d3-a456-426614174000');
     expect(result).toEqual({ success: true });
-    expect(service.remove).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000');
+    expect(service['remove']).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000');
   });
 
   it('deve lançar NotFoundException ao excluir âncora inexistente', async () => {

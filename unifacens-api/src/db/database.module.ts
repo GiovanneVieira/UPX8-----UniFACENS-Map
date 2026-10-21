@@ -1,7 +1,6 @@
 import { Global, Module, OnModuleInit } from '@nestjs/common';
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import * as schema from './schema.js';
 import { runMigrations } from './migrate.js';
 
 export const DRIZZLE = Symbol('DRIZZLE');

@@ -15,9 +15,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule,
     new ExpressAdapter(),
-    {
-      ...(hasObserveKeys ? { instrument: ObserveInstrument } : {}),
-    },
+    hasObserveKeys ? { instrument: ObserveInstrument } : {},
   );
   app.enableShutdownHooks();
   app.enableCors({

@@ -31,6 +31,10 @@ export class AnchorsService implements OnModuleInit {
         record.positionX !== null && record.positionY !== null && record.positionZ !== null
           ? [record.positionX, record.positionY, record.positionZ]
           : null,
+      latitude: record.latitude ?? null,
+      longitude: record.longitude ?? null,
+      altitude: record.altitude ?? null,
+      heading: record.heading ?? null,
       createdAt: record.createdAt.toISOString(),
     }));
   }
@@ -56,12 +60,16 @@ export class AnchorsService implements OnModuleInit {
         record.positionX !== null && record.positionY !== null && record.positionZ !== null
           ? [record.positionX, record.positionY, record.positionZ]
           : null,
+      latitude: record.latitude ?? null,
+      longitude: record.longitude ?? null,
+      altitude: record.altitude ?? null,
+      heading: record.heading ?? null,
       createdAt: record.createdAt.toISOString(),
     };
   }
 
   /**
-   * Registra uma nova âncora vinculada a um Cloud Anchor ID gerado pelo Google ARCore.
+   * Registra uma nova âncora vinculada a um Cloud Anchor ID gerado pelo Google ARCore ou pose Geoespacial WGS84.
    */
   async create(dto: CreateAnchorDto): Promise<Anchor> {
     const [inserted] = await this.db
@@ -73,6 +81,10 @@ export class AnchorsService implements OnModuleInit {
         positionX: dto.position ? dto.position[0] : null,
         positionY: dto.position ? dto.position[1] : null,
         positionZ: dto.position ? dto.position[2] : null,
+        latitude: dto.latitude ?? null,
+        longitude: dto.longitude ?? null,
+        altitude: dto.altitude ?? null,
+        heading: dto.heading ?? null,
       })
       .returning();
 
@@ -85,6 +97,10 @@ export class AnchorsService implements OnModuleInit {
         inserted.positionX !== null && inserted.positionY !== null && inserted.positionZ !== null
           ? [inserted.positionX, inserted.positionY, inserted.positionZ]
           : null,
+      latitude: inserted.latitude ?? null,
+      longitude: inserted.longitude ?? null,
+      altitude: inserted.altitude ?? null,
+      heading: inserted.heading ?? null,
       createdAt: inserted.createdAt.toISOString(),
     };
   }
@@ -113,15 +129,47 @@ export class AnchorsService implements OnModuleInit {
             description: 'Praça central do campus Facens',
             positionX: 0,
             positionY: 0,
-            positionZ: -2,
+            positionZ: 0,
+            latitude: -23.4699,
+            longitude: -47.4297,
+            altitude: 605,
+            heading: 0,
           },
           {
-            name: 'Bancada de Testes AR',
-            cloudAnchorId: 'ua-facens-demo-lab-002',
-            description: 'Laboratório de testes e experimentação AR',
-            positionX: 1,
-            positionY: 0,
-            positionZ: -2,
+            name: 'Bloco A (Engenharias)',
+            cloudAnchorId: 'ua-facens-demo-bloco-a',
+            description: 'Prédio das engenharias e salas de aula',
+            positionX: null,
+            positionY: null,
+            positionZ: null,
+            latitude: -23.47035,
+            longitude: -47.4294,
+            altitude: 606,
+            heading: 135,
+          },
+          {
+            name: 'Bloco B (Laboratórios)',
+            cloudAnchorId: 'ua-facens-demo-bloco-b',
+            description: 'Laboratórios práticos e oficinas',
+            positionX: null,
+            positionY: null,
+            positionZ: null,
+            latitude: -23.4695,
+            longitude: -47.42995,
+            altitude: 605,
+            heading: 315,
+          },
+          {
+            name: 'Biblioteca Universitária',
+            cloudAnchorId: 'ua-facens-demo-biblioteca',
+            description: 'Centro de estudos e acervo acadêmico',
+            positionX: null,
+            positionY: null,
+            positionZ: null,
+            latitude: -23.4701,
+            longitude: -47.4302,
+            altitude: 605,
+            heading: 225,
           },
         ]);
         console.log('[AnchorsService] Cloud Anchors de exemplo inseridos com sucesso.');

@@ -15,8 +15,13 @@ export const anchorSchema = z.object({
   cloudAnchorId: z.string().min(1, 'O Cloud Anchor ID é obrigatório'),
   description: z.string().max(1000).optional().nullable(),
   position: vector3Schema.optional().nullable(),
+  latitude: z.number().optional().nullable(),
+  longitude: z.number().optional().nullable(),
+  altitude: z.number().optional().nullable(),
+  heading: z.number().optional().nullable(),
   createdAt: z.string(),
   arPosition: vector3Schema.optional(),
+  distanceMeters: z.number().optional(),
 });
 export type Anchor = z.infer<typeof anchorSchema>;
 
@@ -25,12 +30,17 @@ export const anchorCoordinateSchema = anchorSchema;
 export type AnchorCoordinate = Anchor;
 
 /**
- * Schema para criação de uma âncora vinculada ao Google Cloud Anchor.
+ * Schema para criação de uma âncora vinculada ao Google Cloud Anchor ou Geoespacial.
  */
 export const createAnchorSchema = z.object({
   name: z.string().trim().min(1, 'O nome da âncora é obrigatório').max(255),
   cloudAnchorId: z.string().trim().min(1, 'O Cloud Anchor ID é obrigatório'),
   description: z.string().trim().max(1000).optional().nullable(),
   position: vector3Schema.optional().nullable(),
+  latitude: z.number().optional().nullable(),
+  longitude: z.number().optional().nullable(),
+  altitude: z.number().optional().nullable(),
+  heading: z.number().optional().nullable(),
 });
 export type CreateAnchorDto = z.infer<typeof createAnchorSchema>;
+
