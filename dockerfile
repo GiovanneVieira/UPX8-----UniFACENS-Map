@@ -24,6 +24,7 @@ COPY package.json package-lock.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY unifacens-api/package.json ./unifacens-api/
 COPY unifacens-client/package.json ./unifacens-client/
+COPY scripts ./scripts
 RUN npm ci
 
 # ------------------------------------------------------------------------------

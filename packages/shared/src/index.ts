@@ -1,11 +1,5 @@
-/**
- * @file packages/shared/src/index.ts
- * Ponto de entrada do pacote compartilhado (contratos, tipos, DTOs, schemas de validação e utilitários).
- */
-
-export const SHARED_PACKAGE_VERSION = '1.0.0';
-
-// Reexporta Zod unificado para todos os consumidores do monorepo (API e Client)
+// Re-exporta Zod universalmente a partir de packages/shared
+// Cumpre a regra arquitetural: Apenas shared declara 'zod' em dependencies
 export { z } from 'zod';
 export type { ZodSchema, ZodError, ZodType } from 'zod';
 
@@ -13,3 +7,6 @@ export type { ZodSchema, ZodError, ZodType } from 'zod';
 export * from './schemas/anchor.schema.js';
 export * from './schemas/place.schema.js';
 export * from './schemas/access.schema.js';
+
+// Motor Geodésico e Utilitários de Projeção Espacial
+export * from './utils/geodesy.js';

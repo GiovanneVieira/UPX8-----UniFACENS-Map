@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import type { Anchor, CreateAnchorDto } from 'shared';
 import { getTeamAuthorization } from './team-authorization';
 
@@ -15,7 +16,17 @@ export function getApiBaseUrl(): string {
     return process.env.INTERNAL_API_URL || 'http://api:8000';
   }
 
-  // Mobile (Android emulator usa 10.0.2.2, dispositivo físico usa localhost via adb reverse ou IP da LAN)
+  // Tenta extrair o IP do host a partir do Metro Bundler (Constants.expoConfig?.hostUri)
+  // Exemplo: hostUri = "192.168.3.2:8081" -> ip = "192.168.3.2"
+  const hostUri = Constants.expoConfig?.hostUri;
+  if (hostUri) {
+    const ip = hostUri.split(':')[0];
+    if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
+      return `http://${ip}:8000`;
+    }
+  }
+
+  // Mobile fallback (se via USB com adb reverse ou emulador)
   return 'http://localhost:8000';
 }
 

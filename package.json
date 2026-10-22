@@ -5,17 +5,29 @@
   "main": "index.js",
   "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "npm run lint -w unifacens-api && node unifacens-api/node_modules/oxlint/bin/oxlint unifacens-client/src",
+    "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p unifacens-client",
+    "test": "npm run test -w unifacens-api",
+    "android:connect": "adb reverse tcp:8081 tcp:8081 && adb reverse tcp:8000 tcp:8000",
+    "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "devDependencies": {
+    "@expo/metro-runtime": "~57.0.15",
+    "@types/react": "~19.2.2",
+    "cross-env": "^10.1.0",
+    "expo-router": "~57.0.21"
+  },
   "workspaces": [
     "./packages/*",
     "./unifacens-api",
     "./unifacens-client"
   ],
-  "devDependencies": {
-    "@types/react": "~19.2.2"
+  "optionalDependencies": {
+    "@oxlint-tsgolint/win32-x64": "^7.0.2004",
+    "@oxlint/binding-win32-x64-msvc": "^1.89.0",
+    "@rolldown/binding-win32-x64-msvc": "^1.2.15"
   }
 }
