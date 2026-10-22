@@ -43,9 +43,9 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "start": "EXPO_UNSAFE_DOTENV_KEYS=REACT_NATIVE_PACKAGER_HOSTNAME expo start",
+    "start": "cross-env EXPO_UNSAFE_DOTENV_KEYS=REACT_NATIVE_PACKAGER_HOSTNAME expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "EXPO_UNSAFE_DOTENV_KEYS=REACT_NATIVE_PACKAGER_HOSTNAME expo run:android",
+    "android": "cross-env EXPO_UNSAFE_DOTENV_KEYS=REACT_NATIVE_PACKAGER_HOSTNAME expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint"

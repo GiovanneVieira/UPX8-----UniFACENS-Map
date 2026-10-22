@@ -5,11 +5,11 @@
   "main": "index.js",
   "private": true,
   "scripts": {
-    "lint": "npm run lint -w unifacens-api && ./unifacens-api/node_modules/.bin/oxlint unifacens-client/src",
+    "lint": "npm run lint -w unifacens-api && node unifacens-api/node_modules/oxlint/bin/oxlint unifacens-client/src",
     "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p unifacens-client",
     "test": "npm run test -w unifacens-api",
-    "android:connect": "/home/giovanne/Android/Sdk/platform-tools/adb reverse tcp:8081 tcp:8081 && /home/giovanne/Android/Sdk/platform-tools/adb reverse tcp:8000 tcp:8000",
-    "postinstall": "node -e 'const fs=require(\"fs\"); if(!fs.existsSync(\"node_modules/expo-router\")) fs.symlinkSync(\"../unifacens-client/node_modules/expo-router\", \"node_modules/expo-router\", \"junction\"); if(!fs.existsSync(\"node_modules/@expo/metro-runtime\")) fs.symlinkSync(\"../../unifacens-client/node_modules/@expo/metro-runtime\", \"node_modules/@expo/metro-runtime\", \"junction\");'"
+    "android:connect": "adb reverse tcp:8081 tcp:8081 && adb reverse tcp:8000 tcp:8000",
+    "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [],
   "author": "",
@@ -17,11 +17,17 @@
   "devDependencies": {
     "@expo/metro-runtime": "~57.0.15",
     "@types/react": "~19.2.2",
+    "cross-env": "^10.1.0",
     "expo-router": "~57.0.21"
   },
   "workspaces": [
     "./packages/*",
     "./unifacens-api",
     "./unifacens-client"
-  ]
+  ],
+  "optionalDependencies": {
+    "@oxlint-tsgolint/win32-x64": "^7.0.2004",
+    "@oxlint/binding-win32-x64-msvc": "^1.89.0",
+    "@rolldown/binding-win32-x64-msvc": "^1.2.15"
+  }
 }
