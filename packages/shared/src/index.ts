@@ -10,3 +10,4 @@ export * from './schemas/access.schema.js';
 
 // Motor Geodésico e Utilitários de Projeção Espacial
 export * from './utils/geodesy.js';
+export * from './utils/ar-points.js';

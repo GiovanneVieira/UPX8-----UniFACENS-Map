@@ -1,45 +1,28 @@
-import React, { FC, useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  TextInput,
-  Modal,
-  ActivityIndicator,
-  Alert,
-  StyleSheet,
-  useWindowDimensions,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-} from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  Easing as ReEasing,
-  runOnJS,
-} from 'react-native-reanimated';
+import React, { FC, useState, useRef, useCallback, useMemo } from 'react';
+import { Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { GestureDetector } from 'react-native-gesture-handler';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
-import * as Location from 'expo-location';
-import {
-  type Anchor,
-  calculateRelativeARPosition,
-  calculateDistance,
-  magneticToTrueHeading,
-  CircularLowPassFilter,
-  SOROCABA_MAGNETIC_DECLINATION,
-} from 'shared';
 import { useQueryClient } from '@tanstack/react-query';
+import { type Anchor, isUsablePoint } from 'shared';
 import {
   useAnchorsQuery,
   useCreateAnchorMutation,
   useDeleteAnchorMutation,
   anchorKeys,
 } from '@/features/anchors/queries/use-anchors-query';
+import type { CampusLandmark } from '@/constants/campus-landmarks';
 import { ViroARAnchorScene } from './ViroARAnchorScene';
+import { useARGeolocation } from './hooks/use-ar-geolocation';
+import { useARProjection } from './hooks/use-ar-projection';
+import { useARZoom } from './hooks/use-ar-zoom';
+import { ARStatusHud } from './hud/ar-status-hud';
+import { ARCompassRadiusBar } from './hud/ar-compass-radius-bar';
+import { ARZoomSelector } from './hud/ar-zoom-selector';
+import { ARReticle } from './hud/ar-reticle';
+import { CalibrationModal } from './modals/calibration-modal';
+import { PlaceAnchorModal } from './modals/place-anchor-modal';
 
 const HIT_TEST_PRIORITY = [
   'DepthPoint',
@@ -49,388 +32,56 @@ const HIT_TEST_PRIORITY = [
   'FeaturePoint',
 ];
 
-const ZOOM_LEVELS = [1.0, 2.0, 3.0, 5.0];
-
 // Constante estática da cena inicial para nunca recriar a instância nativa do ViroARSceneNavigator
 const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
 
-interface CampusLandmark {
-  name: string;
-  description: string;
-  latitude: number;
-  longitude: number;
-  altitude: number;
+/** Facade mínima do ref da cena Viro utilizada para hit-tests. */
+interface ViroSceneHitTestRef {
+  performARHitTestWithPoint?: (x: number, y: number) => Promise<unknown>;
 }
-
-const CAMPUS_CALIBRATION_POINTS: CampusLandmark[] = [
-  {
-    name: 'Ponto Central (Origem Facens)',
-    description: 'Praça central do campus Facens',
-    latitude: -23.4699,
-    longitude: -47.4297,
-    altitude: 605,
-  },
-  {
-    name: 'Bloco A (Engenharias)',
-    description: 'Entrada principal do Bloco A',
-    latitude: -23.47035,
-    longitude: -47.4294,
-    altitude: 606,
-  },
-  {
-    name: 'Bloco B (Laboratórios)',
-    description: 'Entrada dos laboratórios e oficinas',
-    latitude: -23.4695,
-    longitude: -47.42995,
-    altitude: 605,
-  },
-  {
-    name: 'Biblioteca Universitária',
-    description: 'Entrada da biblioteca e centro de estudos',
-    latitude: -23.4701,
-    longitude: -47.4302,
-    altitude: 605,
-  },
-];
-
-const isUsablePoint = (
-  p?: [number, number, number] | number[] | null,
-): p is [number, number, number] => {
-  return Boolean(
-    Array.isArray(p) &&
-      p.length >= 3 &&
-      p.every((n) => typeof n === 'number' && Number.isFinite(n)) &&
-      !(Math.abs(p[0]) < 0.005 && Math.abs(p[1]) < 0.005 && Math.abs(p[2]) < 0.005),
-  );
-};
 
 export const ViroARAnchorContainer: FC = () => {
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const navigatorRef = useRef<any>(null);
-  const arSceneRef = useRef<any>(null);
+  const arSceneRef = useRef<ViroSceneHitTestRef | any>(null);
 
-  // Server State (TanStack Query v5): cache, retry e invalidação automáticos (AGENTS.MD §8)
+  // ── Server State (TanStack Query v5 — AGENTS.MD §8) ─────────────────────
   const queryClient = useQueryClient();
   const anchorsQuery = useAnchorsQuery();
   const createAnchorMutation = useCreateAnchorMutation();
   const deleteAnchorMutation = useDeleteAnchorMutation();
-
-  // Espelho local das âncoras brutas para o motor de projeção geodésica
-  const rawAnchorsRef = useRef<Anchor[]>([]);
-  const [anchors, setAnchors] = useState<Anchor[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   // Override de status do HUD durante mutações (null = status derivado do query)
   const [mutationStatus, setMutationStatus] = useState<string | null>(null);
 
-  // Filtro de Raio (0: Todos, 100: <100m, 50: <50m)
-  const [radiusFilter, setRadiusFilter] = useState<number>(0);
+  // ── Motores de domínio (hooks dedicados) ─────────────────────────────────
+  const geo = useARGeolocation();
+  const projection = useARProjection({ serverAnchors: anchorsQuery.data, geo });
+  const { zoomLevel, applyZoom, pinchGesture, arZoomAnimatedStyle } = useARZoom();
 
-  // Calibração Zero-Marker (Pinpoint em Marco Conhecido do Campus)
-  const [calibratedLandmark, setCalibratedLandmark] = useState<CampusLandmark | null>(null);
-  const calibratedLandmarkRef = useRef<CampusLandmark | null>(null);
+  // ── Estado de UI local ────────────────────────────────────────────────────
+  const [radiusFilter, setRadiusFilter] = useState<number>(0);
   const [calibrationModalVisible, setCalibrationModalVisible] = useState(false);
 
-  // Coordenadas do Usuário (GPS + Altitude)
-  const userCoordsRef = useRef<{
-    latitude: number;
-    longitude: number;
-    altitude: number;
-    accuracy: number;
-  }>({
-    latitude: -23.4699,
-    longitude: -47.4297,
-    altitude: 605,
-    accuracy: 10,
-  });
-  const [userCoords, setUserCoords] = useState(userCoordsRef.current);
-
-  // Bússola e Filtro Passa-Baixa Circular (Alpha = 0.15)
-  const compassFilterRef = useRef<CircularLowPassFilter>(new CircularLowPassFilter(0.15));
-  const userTrueHeadingRef = useRef<number>(0);
-  const [userTrueHeading, setUserTrueHeading] = useState<number>(0);
-
-  // Cache de posições travadas na sessão atual (pontos criados pelo usuário que NUNCA devem ser recalculados)
-  const sessionLockedPositionsRef = useRef<Map<string, [number, number, number]>>(new Map());
-
-  // Orientação e coordenadas de referência para a projeção espacial (imutável durante a sessão a menos que recalibrado)
-  const referenceHeadingRef = useRef<number | null>(null);
-  const lastProjectedCoordsRef = useRef<{ latitude: number; longitude: number } | null>(null);
-
-  // Modal de Criação de Ponto
+  // Modal de criação de ponto
   const [modalVisible, setModalVisible] = useState(false);
   const [anchorName, setAnchorName] = useState('');
   const [anchorDescription, setAnchorDescription] = useState('');
   const [pendingCoords, setPendingCoords] = useState<[number, number, number]>([0, 0, -2.0]);
   const [pendingDistance, setPendingDistance] = useState<number>(2.0);
-  const [_planesCount, setPlanesCount] = useState<number>(0);
-
-  // Linha de visada para micro-ajuste de profundidade no modal
-  const rayOriginRef = useRef<[number, number, number]>([0, 0, 0]);
-  const rayDirectionRef = useRef<[number, number, number]>([0, 0, -1]);
-
-  // Zoom da Câmera AR (1.0x a 5.0x) com Pinch-to-Zoom e botões rápidos.
-  // F1: gesto 100% na UI thread nativa (RNGH + Reanimated) — zero eventos JS durante o pinch.
-  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
-  const zoomLevelRef = useRef<number>(1.0);
-
-  // Shared value permanente desde a montagem: o transform de escala nunca alterna
-  // entre null/valor, preservando o buffer da GLSurfaceView (invariante do AGENTS.MD §12).
-  const zoom = useSharedValue(1.0);
-  const pinchStartZoom = useSharedValue(1.0);
-
-  const applyZoom = useCallback(
-    (targetZoom: number, animate = true) => {
-      const clamped = Math.min(5.0, Math.max(1.0, Number(targetZoom.toFixed(1))));
-      zoomLevelRef.current = clamped;
-      setZoomLevel(clamped);
-      zoom.value = animate
-        ? withTiming(clamped, { duration: 180, easing: ReEasing.out(ReEasing.quad) })
-        : clamped;
-    },
-    [zoom],
-  );
-
-  // Commite único do estado React ao FINALIZAR o gesto (badge/botões atualizam 1x,
-  // sem re-renders concorrendo com os toques durante o pinch).
-  const commitPinchZoom = useCallback((finalZoom: number) => {
-    const clamped = Math.min(5.0, Math.max(1.0, Number(finalZoom.toFixed(1))));
-    zoomLevelRef.current = clamped;
-    setZoomLevel(clamped);
-  }, []);
-
-  const pinchGesture = useMemo(
-    () =>
-      Gesture.Pinch()
-        .onBegin(() => {
-          'worklet';
-          pinchStartZoom.value = zoom.value;
-        })
-        .onUpdate((event) => {
-          'worklet';
-          const calculated = pinchStartZoom.value * event.scale;
-          zoom.value = Math.min(5.0, Math.max(1.0, calculated));
-        })
-        .onEnd(() => {
-          'worklet';
-          runOnJS(commitPinchZoom)(zoom.value);
-        }),
-    [zoom, pinchStartZoom, commitPinchZoom],
-  );
-
-  // Transform permanente aplicado na UI thread nativa em sincronia com os frames.
-  const arZoomAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: zoom.value }],
-  }));
-
-  // Estado de Rastreamento SLAM (1: Indisponível, 2: Mapeando, 3: Estável)
-  const [trackingState, setTrackingState] = useState<number>(2);
 
   // Pose instantânea da câmera no espaço AR
   const cameraPosRef = useRef<[number, number, number]>([0, 0, 0]);
   const cameraFwdRef = useRef<[number, number, number]>([0, 0, -1]);
 
-  // Motor Geodésico: Projeção de WGS84 para Frustum AR (executado apenas na calibração ou startup)
-  const updateProjectedAnchors = useCallback(
-    (
-      sourceAnchors: Anchor[],
-      coords: { latitude: number; longitude: number; altitude: number },
-      heading: number,
-      calibrated: CampusLandmark | null,
-    ) => {
-      const activeLat = calibrated ? calibrated.latitude : coords.latitude;
-      const activeLon = calibrated ? calibrated.longitude : coords.longitude;
-      const activeAlt = calibrated ? calibrated.altitude : coords.altitude;
+  // Linha de visada para micro-ajuste de profundidade no modal
+  const rayOriginRef = useRef<[number, number, number]>([0, 0, 0]);
+  const rayDirectionRef = useRef<[number, number, number]>([0, 0, -1]);
 
-      const projected: Anchor[] = sourceAnchors.map((anchor) => {
-        // 1. Se a âncora foi criada ou travada nesta sessão, preserva a pose SLAM exata (100% rígida no espaço)
-        if (sessionLockedPositionsRef.current.has(anchor.id)) {
-          const lockedPos = sessionLockedPositionsRef.current.get(anchor.id)!;
-          return {
-            ...anchor,
-            arPosition: lockedPos,
-            distanceMeters: anchor.distanceMeters ?? Math.hypot(lockedPos[0], lockedPos[1], lockedPos[2]),
-          };
-        }
-
-        // 2. Projeta âncoras conhecidas em relação à origem ativa
-        if (
-          typeof anchor.latitude === 'number' &&
-          Number.isFinite(anchor.latitude) &&
-          typeof anchor.longitude === 'number' &&
-          Number.isFinite(anchor.longitude)
-        ) {
-          const targetAlt =
-            typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude)
-              ? anchor.altitude
-              : activeAlt;
-
-          const distanceMeters = calculateDistance(
-            activeLat,
-            activeLon,
-            anchor.latitude,
-            anchor.longitude,
-          );
-
-          // Se for o próprio marco de calibração, posiciona logo à frente na altura dos olhos
-          if (
-            calibrated &&
-            Math.abs(anchor.latitude - calibrated.latitude) < 0.00002 &&
-            Math.abs(anchor.longitude - calibrated.longitude) < 0.00002
-          ) {
-            return {
-              ...anchor,
-              distanceMeters: 0,
-              arPosition: [0, 0, -1.2] as [number, number, number],
-            };
-          }
-
-          const arPos = calculateRelativeARPosition(
-            activeLat,
-            activeLon,
-            activeAlt,
-            heading,
-            anchor.latitude,
-            anchor.longitude,
-            targetAlt,
-          );
-
-          return {
-            ...anchor,
-            distanceMeters,
-            arPosition: arPos,
-          };
-        }
-
-        return anchor;
-      });
-
-      setAnchors(projected);
-    },
-    [],
-  );
-
-  // Subscrições contínuas a GPS e Bússola com compensação de declinação (-21.3°)
-  useEffect(() => {
-    let isMounted = true;
-    let posSub: Location.LocationSubscription | null = null;
-    let headingSub: Location.LocationSubscription | null = null;
-
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          console.warn('[ViroARAnchorContainer] Permissão de localização não concedida');
-          return;
-        }
-
-        // 1. Posição inicial rápida
-        const initialLoc = await Location.getLastKnownPositionAsync({});
-        if (initialLoc && isMounted) {
-          userCoordsRef.current = {
-            latitude: initialLoc.coords.latitude,
-            longitude: initialLoc.coords.longitude,
-            altitude: initialLoc.coords.altitude ?? 605,
-            accuracy: initialLoc.coords.accuracy ?? 10,
-          };
-          setUserCoords(userCoordsRef.current);
-        }
-
-        // 2. Rastreamento de posição GPS (apenas atualiza estado; não recalcula se estiver em modo SLAM / calibrado)
-        posSub = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            distanceInterval: 5,
-            timeInterval: 2000,
-          },
-          (loc) => {
-            if (!isMounted) return;
-            const newCoords = {
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-              altitude: loc.coords.altitude ?? 605,
-              accuracy: loc.coords.accuracy ?? 10,
-            };
-            userCoordsRef.current = newCoords;
-            setUserCoords(newCoords);
-
-            // Se NÃO estiver calibrado (modo GPS outdoor), só re-projeta se o deslocamento for relevante (> 15m)
-            if (!calibratedLandmarkRef.current) {
-              if (!lastProjectedCoordsRef.current) {
-                lastProjectedCoordsRef.current = newCoords;
-              } else {
-                const movedDist = calculateDistance(
-                  lastProjectedCoordsRef.current.latitude,
-                  lastProjectedCoordsRef.current.longitude,
-                  newCoords.latitude,
-                  newCoords.longitude,
-                );
-                if (movedDist > 15) {
-                  lastProjectedCoordsRef.current = newCoords;
-                  updateProjectedAnchors(
-                    rawAnchorsRef.current,
-                    newCoords,
-                    referenceHeadingRef.current ?? userTrueHeadingRef.current,
-                    null,
-                  );
-                }
-              }
-            }
-          },
-        );
-
-        // 3. Rastreamento contínuo de bússola para orientação do HUD (NÃO move os nós 3D em tempo real!)
-        headingSub = await Location.watchHeadingAsync((headingData) => {
-          if (!isMounted) return;
-          const rawMag =
-            typeof headingData.magHeading === 'number' &&
-            Number.isFinite(headingData.magHeading) &&
-            headingData.magHeading >= 0
-              ? headingData.magHeading
-              : (headingData.trueHeading ?? 0);
-
-          const filteredMag = compassFilterRef.current.update(rawMag);
-          const trueHeading = magneticToTrueHeading(filteredMag, SOROCABA_MAGNETIC_DECLINATION);
-          userTrueHeadingRef.current = trueHeading;
-          setUserTrueHeading(Math.round(trueHeading));
-
-          // Inicializa a orientação de referência inicial se ainda não definida
-          if (referenceHeadingRef.current === null && trueHeading !== 0) {
-            referenceHeadingRef.current = trueHeading;
-            updateProjectedAnchors(
-              rawAnchorsRef.current,
-              userCoordsRef.current,
-              trueHeading,
-              calibratedLandmarkRef.current,
-            );
-          }
-        });
-      } catch (sensorErr) {
-        console.warn('[ViroARAnchorContainer] Erro nos sensores:', sensorErr);
-      }
-    })();
-
-    return () => {
-      isMounted = false;
-      posSub?.remove();
-      headingSub?.remove();
-    };
-  }, [updateProjectedAnchors]);
-
-  // Sincroniza o server state (TanStack Query) com o motor de projeção geodésica.
-  // Efeito legítimo (AGENTS.MD §7): sincronização com fonte externa — roda só quando `data` muda.
-  const anchorsData = anchorsQuery.data;
-  useEffect(() => {
-    if (!anchorsData) return;
-    rawAnchorsRef.current = anchorsData;
-    const headingToUse = referenceHeadingRef.current ?? userTrueHeadingRef.current;
-    updateProjectedAnchors(
-      anchorsData,
-      userCoordsRef.current,
-      headingToUse,
-      calibratedLandmarkRef.current,
-    );
-  }, [anchorsData, updateProjectedAnchors]);
+  // Estado de Rastreamento SLAM (1: Indisponível, 2: Mapeando, 3: Estável)
+  const [trackingState, setTrackingState] = useState<number>(2);
+  const [_planesCount, setPlanesCount] = useState<number>(0);
 
   // Status do HUD derivado do estado do query — sem estado espelho (§7/§8)
   const cloudStatusDerived = useMemo(() => {
@@ -440,6 +91,7 @@ export const ViroARAnchorContainer: FC = () => {
   }, [anchorsQuery.isPending, anchorsQuery.isError, anchorsQuery.data]);
   const cloudStatus = mutationStatus ?? cloudStatusDerived;
 
+  // ── Callbacks da cena Viro ────────────────────────────────────────────────
   const handleCameraUpdate = useCallback(
     (pos: [number, number, number], fwd: [number, number, number]) => {
       cameraPosRef.current = pos;
@@ -486,7 +138,7 @@ export const ViroARAnchorContainer: FC = () => {
     [],
   );
 
-  // Abertura do modal de criação de ponto com Hit-Test ou projeção de retículo
+  // Abertura do modal de criação com Hit-Test no centro da tela ou projeção do retículo
   const handleOpenPlaceModal = useCallback(async () => {
     const centerX = screenWidth / 2;
     const centerY = screenHeight / 2;
@@ -511,7 +163,7 @@ export const ViroARAnchorContainer: FC = () => {
           }
         }
       } catch (hitErr) {
-        console.warn('[CloudAnchor] Hit test aviso:', hitErr);
+        console.warn('[AR] Hit test aviso:', hitErr);
       }
     }
 
@@ -552,25 +204,24 @@ export const ViroARAnchorContainer: FC = () => {
     setModalVisible(true);
   }, [screenWidth, screenHeight]);
 
-  // Micro-ajuste fino de profundidade do retículo
-  const handleAdjustDistance = useCallback((delta: number) => {
-    setPendingDistance((prevDist) => {
-      const newDist = Number(Math.max(0.3, Math.min(30.0, prevDist + delta)).toFixed(2));
+  // Micro-ajuste de profundidade: setters independentes e updaters puros (§7/A4)
+  const handleAdjustDistance = useCallback(
+    (delta: number) => {
+      const newDist = Number(Math.max(0.3, Math.min(30.0, pendingDistance + delta)).toFixed(2));
       const origin = rayOriginRef.current;
       const dir = rayDirectionRef.current;
 
-      const newCoords: [number, number, number] = [
+      setPendingDistance(newDist);
+      setPendingCoords([
         Number((origin[0] + dir[0] * newDist).toFixed(2)),
         Number((origin[1] + dir[1] * newDist).toFixed(2)),
         Number((origin[2] + dir[2] * newDist).toFixed(2)),
-      ];
+      ]);
+    },
+    [pendingDistance],
+  );
 
-      setPendingCoords(newCoords);
-      return newDist;
-    });
-  }, []);
-
-  // Criação de ponto geodésico persistente baseado na posição e visada
+  // Criação de ponto geodésico persistente (offset métrico a partir da mira)
   const handleCreate = async () => {
     if (!anchorName.trim()) {
       Alert.alert('Aviso', 'Informe o nome do ponto.');
@@ -581,19 +232,13 @@ export const ViroARAnchorContainer: FC = () => {
       setIsSaving(true);
       setMutationStatus('Gravando ponto...');
 
-      const activeLat = calibratedLandmark
-        ? calibratedLandmark.latitude
-        : userCoordsRef.current.latitude;
-      const activeLon = calibratedLandmark
-        ? calibratedLandmark.longitude
-        : userCoordsRef.current.longitude;
-      const activeAlt = calibratedLandmark
-        ? calibratedLandmark.altitude
-        : userCoordsRef.current.altitude;
+      const calibrated = projection.calibratedLandmark;
+      const activeLat = calibrated ? calibrated.latitude : geo.userCoordsRef.current.latitude;
+      const activeLon = calibrated ? calibrated.longitude : geo.userCoordsRef.current.longitude;
+      const activeAlt = calibrated ? calibrated.altitude : geo.userCoordsRef.current.altitude;
 
-      // Deslocamento métrico a partir da distância da mira e do azimute da câmera
       const dist = pendingDistance;
-      const bearingRad = (userTrueHeadingRef.current * Math.PI) / 180;
+      const bearingRad = (geo.userTrueHeadingRef.current * Math.PI) / 180;
       const deltaNorth = dist * Math.cos(bearingRad);
       const deltaEast = dist * Math.sin(bearingRad);
 
@@ -620,18 +265,15 @@ export const ViroARAnchorContainer: FC = () => {
         latitude: targetLat,
         longitude: targetLon,
         altitude: targetAlt,
-        heading: userTrueHeadingRef.current,
+        heading: geo.userTrueHeadingRef.current,
       });
 
-      // 1. Trava rigidamente a posição na sessão atual (ARCore SLAM fixa no espaço 3D real sem deriva)
-      sessionLockedPositionsRef.current.set(saved.id, targetArPosition);
-
-      // 2. Atualização otimista do cache do TanStack Query: exibição imediata +
-      //    reconciliação automática via invalidação do mutation hook
+      // Trava a pose SLAM exata na sessão + cache otimista + lista bruta local
+      projection.lockPosition(saved.id, targetArPosition);
       queryClient.setQueryData<Anchor[]>(anchorKeys.lists(), (old) =>
         old ? [saved, ...old] : [saved],
       );
-      rawAnchorsRef.current = [saved, ...rawAnchorsRef.current];
+      projection.prependAnchor(saved);
 
       setMutationStatus(null);
       setAnchorName('');
@@ -654,65 +296,60 @@ export const ViroARAnchorContainer: FC = () => {
     }
   };
 
-  const handleSelectAnchor = useCallback((anchor: Anchor) => {
-    const arPos = anchor.arPosition || anchor.position || [0, 0, 0];
-    const descInfo = anchor.description ? `\nDescrição: ${anchor.description}` : '';
-    const distInfo =
-      typeof anchor.distanceMeters === 'number'
-        ? `\nDistância Real: ${Math.round(anchor.distanceMeters)} m`
-        : '';
-    const geoInfo =
-      anchor.latitude != null && anchor.longitude != null
-        ? `\nGPS: [${anchor.latitude.toFixed(6)}, ${anchor.longitude.toFixed(6)}]`
-        : '';
+  const handleSelectAnchor = useCallback(
+    (anchor: Anchor) => {
+      const arPos = anchor.arPosition || anchor.position || [0, 0, 0];
+      const descInfo = anchor.description ? `\nDescrição: ${anchor.description}` : '';
+      const distInfo =
+        typeof anchor.distanceMeters === 'number'
+          ? `\nDistância Real: ${Math.round(anchor.distanceMeters)} m`
+          : '';
+      const geoInfo =
+        anchor.latitude != null && anchor.longitude != null
+          ? `\nGPS: [${anchor.latitude.toFixed(6)}, ${anchor.longitude.toFixed(6)}]`
+          : '';
 
-    Alert.alert(
-      anchor.name,
-      `ID: ${anchor.cloudAnchorId}${descInfo}${distInfo}${geoInfo}\nPosição AR: [${arPos[0].toFixed(2)}, ${arPos[1].toFixed(2)}, ${arPos[2].toFixed(2)}]m`,
-      [
-        { text: 'Fechar', style: 'cancel' },
-        {
-          text: 'Excluir Ponto',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setIsSaving(true);
-              await deleteAnchorMutation.mutateAsync(anchor.id);
-              sessionLockedPositionsRef.current.delete(anchor.id);
-              const remaining = rawAnchorsRef.current.filter((a) => a.id !== anchor.id);
-              rawAnchorsRef.current = remaining;
-              updateProjectedAnchors(
-                remaining,
-                userCoordsRef.current,
-                userTrueHeadingRef.current,
-                calibratedLandmarkRef.current,
-              );
-              Alert.alert('Sucesso', 'Ponto excluído.');
-            } catch (err: any) {
-              console.warn('[AR] Erro ao excluir âncora:', err);
-              Alert.alert(
-                'Erro ao excluir',
-                err instanceof Error ? err.message : 'Não foi possível excluir o ponto.',
-              );
-            } finally {
-              setIsSaving(false);
-            }
+      Alert.alert(
+        anchor.name,
+        `ID: ${anchor.cloudAnchorId}${descInfo}${distInfo}${geoInfo}\nPosição AR: [${arPos[0].toFixed(2)}, ${arPos[1].toFixed(2)}, ${arPos[2].toFixed(2)}]m`,
+        [
+          { text: 'Fechar', style: 'cancel' },
+          {
+            text: 'Excluir Ponto',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                setIsSaving(true);
+                await deleteAnchorMutation.mutateAsync(anchor.id);
+                projection.removeAnchorLocal(anchor.id);
+                Alert.alert('Sucesso', 'Ponto excluído.');
+              } catch (err: any) {
+                console.warn('[AR] Erro ao excluir âncora:', err);
+                Alert.alert(
+                  'Erro ao excluir',
+                  err instanceof Error ? err.message : 'Não foi possível excluir o ponto.',
+                );
+              } finally {
+                setIsSaving(false);
+              }
+            },
           },
-        },
-      ],
-    );
-  }, [updateProjectedAnchors]);
+        ],
+      );
+    },
+    [createAnchorMutation, deleteAnchorMutation, projection],
+  );
 
-  // Aplica filtro de raio nas âncoras passadas à cena AR
+  // Filtro de raio aplicado às âncoras passadas à cena AR
   const visibleAnchors = useMemo(() => {
-    return anchors.filter((a) => {
+    return projection.anchors.filter((a) => {
       if (!isUsablePoint(a.arPosition)) return false;
       if (radiusFilter > 0 && typeof a.distanceMeters === 'number') {
         return a.distanceMeters <= radiusFilter;
       }
       return true;
     });
-  }, [anchors, radiusFilter]);
+  }, [projection.anchors, radiusFilter]);
 
   const viroAppProps = useMemo(
     () => ({
@@ -735,14 +372,19 @@ export const ViroARAnchorContainer: FC = () => {
     ],
   );
 
-  const trackingDotColor =
-    trackingState === 3 ? '#34D399' : trackingState === 2 ? '#FBBF24' : '#EF4444';
+  const calibratedLabel = projection.calibratedLandmark
+    ? `📍 ${projection.calibratedLandmark.name.split(' ')[0]}`
+    : null;
+
+  const originLabel = projection.calibratedLandmark
+    ? projection.calibratedLandmark.name.split(' ')[0]
+    : `GPS (±${Math.round(geo.userCoords.accuracy)}m)`;
 
   return (
     <View style={styles.rootContainer}>
       {/* Viewport AR com Zoom Visual Contínuo processado 100% na UI thread nativa.
           O GestureDetector cobre apenas o viewport: toques simples seguem para o
-          Viro (onPlaneTapped/onSelectAnchor) e apenas o gesto de 2 dedos ativa o zoom. */}
+          Viro (onPlaneTapped/onSelectAnchor) e apenas 2 dedos ativam o zoom. */}
       <GestureDetector gesture={pinchGesture}>
         <View style={styles.arViewportClip}>
           <Animated.View style={[styles.arZoomWrapper, arZoomAnimatedStyle]}>
@@ -760,142 +402,30 @@ export const ViroARAnchorContainer: FC = () => {
 
       {/* Indicador de Zoom Ativo */}
       {zoomLevel > 1.05 ? (
-        <View
-          style={[styles.zoomBadge, { top: Math.max(insets.top + 98, 138) }]}
-          pointerEvents="none">
+        <View style={[styles.zoomBadge, { top: Math.max(insets.top + 98, 138) }]} pointerEvents="none">
           <Text style={styles.zoomBadgeText}>🔍 Zoom: {zoomLevel.toFixed(1)}x</Text>
         </View>
       ) : null}
 
-      {/* Retículo / Mira Central em Realidade Aumentada */}
-      <View style={styles.reticleOverlay} pointerEvents="none">
-        {zoomLevel > 1.05 ? (
-          <View style={styles.telescopicContainer}>
-            <View style={styles.telescopicTag}>
-              <Text style={styles.telescopicTagText}>
-                🎯 {zoomLevel.toFixed(1)}x MIRA DE PRECISÃO
-              </Text>
-            </View>
+      <ARReticle zoomLevel={zoomLevel} />
 
-            <View style={styles.telescopicOuterRing}>
-              <View style={styles.telescopicMiddleRing}>
-                <View style={styles.telescopicInnerRing}>
-                  <View style={styles.telescopicCenterDot} />
-                </View>
-              </View>
-              <View style={styles.crosshairHorizontal} />
-              <View style={styles.crosshairVertical} />
-            </View>
-          </View>
-        ) : (
-          <View style={styles.defaultReticleRing}>
-            <View style={styles.defaultReticleDot} />
-          </View>
-        )}
-      </View>
+      <ARZoomSelector zoomLevel={zoomLevel} onZoomChange={(level) => applyZoom(level, true)} />
 
-      {/* Seletor de Zoom Flutuante (1x, 2x, 3x, 5x) na Lateral Direita */}
-      <View style={styles.zoomSelectorBar} pointerEvents="box-none">
-        {ZOOM_LEVELS.map((level) => {
-          const isActive = Math.abs(zoomLevel - level) < 0.2;
-          return (
-            <TouchableOpacity
-              key={`zoom-btn-${level}`}
-              onPress={() => applyZoom(level, true)}
-              activeOpacity={0.75}
-              style={[styles.zoomButton, isActive ? styles.zoomButtonActive : null]}>
-              <Text style={[styles.zoomButtonText, isActive ? styles.zoomButtonTextActive : null]}>
-                {level}x
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <ARStatusHud
+        cloudStatus={cloudStatus}
+        trackingState={trackingState}
+        isFetching={anchorsQuery.isFetching}
+        calibratedLabel={calibratedLabel}
+        gpsAccuracyMeters={geo.userCoords.accuracy}
+        onOpenCalibration={() => setCalibrationModalVisible(true)}
+        onRefresh={() => anchorsQuery.refetch()}
+      />
 
-      {/* HUD Superior Flutuante */}
-      <View
-        style={[styles.topHudBar, { top: Math.max(insets.top + 8, 48) }]}
-        pointerEvents="box-none">
-        <View style={styles.hudPillsRow}>
-          <View style={[styles.hudPill, styles.hudPillBlue]}>
-            <View style={[styles.statusDot, { backgroundColor: trackingDotColor }]} />
-            <Text style={styles.hudPillTextWhite}>{cloudStatus}</Text>
-          </View>
-
-          <TouchableOpacity
-            onPress={() => setCalibrationModalVisible(true)}
-            activeOpacity={0.8}
-            style={[
-              styles.hudPill,
-              calibratedLandmark ? styles.hudPillEmerald : styles.hudPillCyan,
-            ]}>
-            <Text
-              style={
-                calibratedLandmark ? styles.hudPillTextEmerald : styles.hudPillTextCyan
-              }>
-              {calibratedLandmark
-                ? `📍 ${calibratedLandmark.name.split(' ')[0]}`
-                : `📡 GPS ±${Math.round(userCoords.accuracy)}m`}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.hudActionsRow}>
-          <TouchableOpacity
-            onPress={() => setCalibrationModalVisible(true)}
-            activeOpacity={0.75}
-            style={styles.hudIconBtn}>
-            <Text style={styles.hudIconBtnText}>📍</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => anchorsQuery.refetch()}
-            disabled={anchorsQuery.isFetching}
-            activeOpacity={0.75}
-            style={styles.hudIconBtn}>
-            {anchorsQuery.isFetching ? (
-              <ActivityIndicator size="small" color="#60A5FA" />
-            ) : (
-              <Text style={styles.hudIconBtnText}>🔄</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Sub-Barra com Bússola e Filtro de Raio */}
-      <View
-        style={[styles.subHudBar, { top: Math.max(insets.top + 52, 92) }]}
-        pointerEvents="box-none">
-        <View style={styles.compassBadge}>
-          <Text style={styles.compassBadgeText}>🧭 {userTrueHeading}° N</Text>
-        </View>
-
-        <View style={styles.radiusSelector}>
-          {[
-            { label: 'Todos', value: 0 },
-            { label: '< 100m', value: 100 },
-            { label: '< 50m', value: 50 },
-          ].map((item) => {
-            const isActive = radiusFilter === item.value;
-            return (
-              <TouchableOpacity
-                key={`radius-${item.value}`}
-                onPress={() => setRadiusFilter(item.value)}
-                style={[
-                  styles.radiusOptionBtn,
-                  isActive ? styles.radiusOptionBtnActive : null,
-                ]}>
-                <Text
-                  style={[
-                    styles.radiusOptionText,
-                    isActive ? styles.radiusOptionTextActive : null,
-                  ]}>
-                  {item.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
+      <ARCompassRadiusBar
+        heading={geo.userTrueHeading}
+        radiusFilter={radiusFilter}
+        onRadiusChange={setRadiusFilter}
+      />
 
       {/* Barra Inferior com o Botão Principal */}
       <View
@@ -909,202 +439,35 @@ export const ViroARAnchorContainer: FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Modal de Calibração Zero-Marker (Entrada / Localização no Campus) */}
-      <Modal
+      <CalibrationModal
         visible={calibrationModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setCalibrationModalVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.calibrationSheet}>
-            <Text style={styles.modalTitle}>📍 Calibração de Localização</Text>
-            <Text style={styles.modalSubtitle}>
-              Selecione sua entrada ou marco de referência para zerar desvios de GPS. O SLAM manterá a precisão máxima.
-            </Text>
+        calibratedLandmark={projection.calibratedLandmark}
+        userCoords={geo.userCoords}
+        onSelect={(landmark: CampusLandmark) => {
+          projection.calibrate(landmark);
+          setCalibrationModalVisible(false);
+        }}
+        onReset={() => {
+          projection.calibrate(null);
+          setCalibrationModalVisible(false);
+        }}
+        onClose={() => setCalibrationModalVisible(false)}
+      />
 
-            {calibratedLandmark ? (
-              <View style={styles.activeCalibrationBox}>
-                <Text style={styles.activeCalibrationTitle}>
-                  ✅ Calibrado em: {calibratedLandmark.name}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => {
-                    setCalibratedLandmark(null);
-                    calibratedLandmarkRef.current = null;
-                    referenceHeadingRef.current = userTrueHeadingRef.current;
-                    lastProjectedCoordsRef.current = userCoordsRef.current;
-                    updateProjectedAnchors(
-                      rawAnchorsRef.current,
-                      userCoordsRef.current,
-                      userTrueHeadingRef.current,
-                      null,
-                    );
-                    setCalibrationModalVisible(false);
-                    Alert.alert('GPS Restaurado', 'O aplicativo voltou a usar o sinal GPS em tempo real.');
-                  }}
-                  style={styles.resetCalibrationBtn}>
-                  <Text style={styles.resetCalibrationBtnText}>Restaurar Sinal GPS</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-
-            <ScrollView style={styles.landmarksList} showsVerticalScrollIndicator={false}>
-              {CAMPUS_CALIBRATION_POINTS.map((landmark) => {
-                const distToUser = calculateDistance(
-                  userCoords.latitude,
-                  userCoords.longitude,
-                  landmark.latitude,
-                  landmark.longitude,
-                );
-
-                return (
-                  <TouchableOpacity
-                    key={landmark.name}
-                    onPress={() => {
-                      setCalibratedLandmark(landmark);
-                      calibratedLandmarkRef.current = landmark;
-                      referenceHeadingRef.current = userTrueHeadingRef.current;
-                      updateProjectedAnchors(
-                        rawAnchorsRef.current,
-                        userCoordsRef.current,
-                        userTrueHeadingRef.current,
-                        landmark,
-                      );
-                      setCalibrationModalVisible(false);
-                      Alert.alert(
-                        'Calibração Concluída!',
-                        `Origem AR alinhada com ${landmark.name}.\nTodos os pontos agora estão fixos e ancorados rigidamente no espaço físico.`,
-                      );
-                    }}
-                    style={styles.landmarkCard}
-                    activeOpacity={0.75}>
-                    <View style={styles.landmarkCardHeader}>
-                      <Text style={styles.landmarkCardTitle}>{landmark.name}</Text>
-                      <Text style={styles.landmarkCardDist}>~{Math.round(distToUser)} m</Text>
-                    </View>
-                    <Text style={styles.landmarkCardDesc}>{landmark.description}</Text>
-                    <Text style={styles.landmarkCardCoords}>
-                      GPS: [{landmark.latitude.toFixed(5)}, {landmark.longitude.toFixed(5)}]
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-
-            <TouchableOpacity
-              onPress={() => setCalibrationModalVisible(false)}
-              style={styles.closeCalibrationBtn}>
-              <Text style={styles.closeCalibrationBtnText}>Fechar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Modal de Cadastro de Ponto com Micro-Ajuste de Profundidade */}
-      <Modal
+      <PlaceAnchorModal
         visible={modalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => !isSaving && setModalVisible(false)}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalBackdrop}>
-          <ScrollView
-            contentContainerStyle={styles.modalScrollContent}
-            keyboardShouldPersistTaps="handled">
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Marcar Ponto no Espaço</Text>
-              <Text style={styles.modalSubtitle}>
-                O ponto será registrado nas coordenadas geográficas apontadas pela mira.
-              </Text>
-
-              {/* Informações de Localização e Azimute */}
-              <View style={styles.geoInfoBox}>
-                <Text style={styles.geoInfoRow}>
-                  📍 Origem:{' '}
-                  {calibratedLandmark
-                    ? calibratedLandmark.name.split(' ')[0]
-                    : `GPS (±${Math.round(userCoords.accuracy)}m)`}
-                </Text>
-                <Text style={styles.geoInfoRow}>
-                  🧭 Bússola: {userTrueHeading}° (Norte Verdadeiro)
-                </Text>
-              </View>
-
-              {/* Micro-ajuste de Distância e Profundidade do Alvo */}
-              <View style={styles.distanceAdjustPanel}>
-                <View style={styles.distanceHeaderRow}>
-                  <Text style={styles.distanceLabel}>Distância da Mira:</Text>
-                  <Text style={styles.distanceValue}>{pendingDistance.toFixed(2)} m</Text>
-                </View>
-                <View style={styles.distanceButtonsRow}>
-                  <TouchableOpacity
-                    onPress={() => handleAdjustDistance(-0.5)}
-                    disabled={isSaving}
-                    style={styles.distanceStepButton}>
-                    <Text style={styles.distanceStepTextNeg}>-0.5m</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleAdjustDistance(-0.1)}
-                    disabled={isSaving}
-                    style={styles.distanceStepButton}>
-                    <Text style={styles.distanceStepTextNeg}>-10cm</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleAdjustDistance(0.1)}
-                    disabled={isSaving}
-                    style={styles.distanceStepButton}>
-                    <Text style={styles.distanceStepTextPos}>+10cm</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleAdjustDistance(0.5)}
-                    disabled={isSaving}
-                    style={styles.distanceStepButton}>
-                    <Text style={styles.distanceStepTextPos}>+0.5m</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <Text style={styles.inputLabel}>Nome do Local *</Text>
-              <TextInput
-                value={anchorName}
-                onChangeText={setAnchorName}
-                placeholder="Ex: Bloco C, Entrada Biblioteca, Sala 102"
-                placeholderTextColor="#64748B"
-                style={styles.textInput}
-                autoFocus
-              />
-
-              <Text style={styles.inputLabel}>Descrição (opcional)</Text>
-              <TextInput
-                value={anchorDescription}
-                onChangeText={setAnchorDescription}
-                placeholder="Ex: Prédio de TI e Computação"
-                placeholderTextColor="#64748B"
-                style={[styles.textInput, styles.textInputLast]}
-              />
-
-              <View style={styles.modalActionsRow}>
-                <TouchableOpacity
-                  onPress={() => setModalVisible(false)}
-                  disabled={isSaving}
-                  style={styles.cancelButton}>
-                  <Text style={styles.cancelButtonText}>Cancelar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleCreate}
-                  disabled={isSaving}
-                  style={styles.saveButton}>
-                  {isSaving ? <ActivityIndicator size="small" color="#FFFFFF" /> : null}
-                  <Text style={styles.saveButtonText}>
-                    {isSaving ? 'Salvando...' : 'Salvar Ponto'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </Modal>
+        isSaving={isSaving}
+        originLabel={originLabel}
+        heading={geo.userTrueHeading}
+        pendingDistance={pendingDistance}
+        onAdjustDistance={handleAdjustDistance}
+        anchorName={anchorName}
+        onAnchorNameChange={setAnchorName}
+        anchorDescription={anchorDescription}
+        onAnchorDescriptionChange={setAnchorDescription}
+        onCreate={handleCreate}
+        onClose={() => setModalVisible(false)}
+      />
     </View>
   );
 };
@@ -1143,257 +506,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  reticleOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 25,
-    elevation: 25,
-  },
-  telescopicContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  telescopicTag: {
-    backgroundColor: 'rgba(37, 99, 235, 0.9)',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#60A5FA',
-    marginBottom: 8,
-  },
-  telescopicTagText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-  },
-  telescopicOuterRing: {
-    width: 84,
-    height: 84,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  telescopicMiddleRing: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 1.5,
-    borderColor: 'rgba(34, 211, 238, 0.85)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  telescopicInnerRing: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(103, 232, 249, 0.65)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  telescopicCenterDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#22D3EE',
-  },
-  crosshairHorizontal: {
-    position: 'absolute',
-    width: 96,
-    height: 1.5,
-    backgroundColor: 'rgba(34, 211, 238, 0.7)',
-  },
-  crosshairVertical: {
-    position: 'absolute',
-    width: 1.5,
-    height: 96,
-    backgroundColor: 'rgba(34, 211, 238, 0.7)',
-  },
-  defaultReticleRing: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.85)',
-    backgroundColor: 'rgba(0, 0, 0, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  defaultReticleDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#38BDF8',
-  },
-  zoomSelectorBar: {
-    position: 'absolute',
-    right: 14,
-    top: '32%',
-    backgroundColor: 'rgba(15, 23, 42, 0.82)',
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(51, 65, 85, 0.7)',
-    gap: 8,
-    alignItems: 'center',
-    zIndex: 20,
-    elevation: 20,
-  },
-  zoomButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#1E293B',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  zoomButtonActive: {
-    backgroundColor: '#2563EB',
-    borderColor: '#60A5FA',
-  },
-  zoomButtonText: {
-    color: '#94A3B8',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  zoomButtonTextActive: {
-    color: '#FFFFFF',
-  },
-  topHudBar: {
-    position: 'absolute',
-    top: 50,
-    left: 16,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    zIndex: 20,
-    elevation: 20,
-  },
-  hudPillsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flexShrink: 1,
-  },
-  hudActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  hudPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  hudPillBlue: {
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    borderColor: '#1E3A8A',
-  },
-  hudPillCyan: {
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    borderColor: '#0E7490',
-  },
-  hudPillEmerald: {
-    backgroundColor: 'rgba(6, 78, 59, 0.85)',
-    borderColor: '#059669',
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  hudPillTextWhite: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  hudPillTextCyan: {
-    color: '#67E8F9',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  hudPillTextEmerald: {
-    color: '#34D399',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  hudIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    borderWidth: 1,
-    borderColor: '#334155',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  hudIconBtnText: {
-    fontSize: 16,
-  },
-  subHudBar: {
-    position: 'absolute',
-    top: 94,
-    left: 16,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    zIndex: 20,
-    elevation: 20,
-  },
-  compassBadge: {
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  compassBadgeText: {
-    color: '#38BDF8',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  radiusSelector: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#334155',
-    padding: 2,
-    gap: 4,
-  },
-  radiusOptionBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  radiusOptionBtnActive: {
-    backgroundColor: '#2563EB',
-  },
-  radiusOptionText: {
-    color: '#94A3B8',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  radiusOptionTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
   bottomBar: {
     position: 'absolute',
     bottom: 28,
@@ -1419,247 +531,6 @@ const styles = StyleSheet.create({
   placeAnchorButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '700',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    justifyContent: 'flex-end',
-  },
-  calibrationSheet: {
-    backgroundColor: '#0F172A',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderWidth: 1,
-    borderColor: '#1E293B',
-    padding: 22,
-    maxHeight: '80%',
-  },
-  activeCalibrationBox: {
-    backgroundColor: 'rgba(6, 78, 59, 0.45)',
-    borderWidth: 1,
-    borderColor: '#059669',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 14,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  activeCalibrationTitle: {
-    color: '#34D399',
-    fontSize: 12,
-    fontWeight: '700',
-    flex: 1,
-  },
-  resetCalibrationBtn: {
-    backgroundColor: '#059669',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  resetCalibrationBtnText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  landmarksList: {
-    marginBottom: 16,
-  },
-  landmarkCard: {
-    backgroundColor: '#1E293B',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  landmarkCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  landmarkCardTitle: {
-    color: '#F8FAFC',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  landmarkCardDist: {
-    color: '#38BDF8',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  landmarkCardDesc: {
-    color: '#94A3B8',
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  landmarkCardCoords: {
-    color: '#64748B',
-    fontSize: 10,
-    fontFamily: 'monospace',
-  },
-  closeCalibrationBtn: {
-    backgroundColor: '#1E293B',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  closeCalibrationBtnText: {
-    color: '#94A3B8',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  modalScrollContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: '#0F172A',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#1E293B',
-    padding: 22,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 25,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#F8FAFC',
-    marginBottom: 4,
-  },
-  modalSubtitle: {
-    fontSize: 12,
-    color: '#94A3B8',
-    marginBottom: 16,
-    lineHeight: 17,
-  },
-  geoInfoBox: {
-    backgroundColor: '#1E293B',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#334155',
-    gap: 4,
-  },
-  geoInfoRow: {
-    color: '#38BDF8',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  distanceAdjustPanel: {
-    backgroundColor: '#1E293B',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  distanceHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  distanceLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#94A3B8',
-  },
-  distanceValue: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#38BDF8',
-  },
-  distanceButtonsRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  distanceStepButton: {
-    flex: 1,
-    backgroundColor: '#0F172A',
-    paddingVertical: 7,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  distanceStepTextNeg: {
-    color: '#F87171',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  distanceStepTextPos: {
-    color: '#4ADE80',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#CBD5E1',
-    marginBottom: 6,
-  },
-  textInput: {
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    color: '#F8FAFC',
-    fontSize: 14,
-    marginBottom: 12,
-  },
-  textInputLast: {
-    marginBottom: 18,
-  },
-  modalActionsRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  cancelButton: {
-    flex: 1,
-    backgroundColor: '#1E293B',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  cancelButtonText: {
-    color: '#94A3B8',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  saveButton: {
-    flex: 1.5,
-    backgroundColor: '#2563EB',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    borderWidth: 1,
-    borderColor: '#60A5FA',
-  },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
     fontWeight: '700',
   },
 });

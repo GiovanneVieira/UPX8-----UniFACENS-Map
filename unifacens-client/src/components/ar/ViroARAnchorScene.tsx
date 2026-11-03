@@ -11,17 +11,7 @@ import {
   ViroMaterials,
 } from '@reactvision/react-viro';
 import type { Anchor } from 'shared';
-
-const isUsablePoint = (
-  p?: [number, number, number] | number[] | null,
-): p is [number, number, number] => {
-  return Boolean(
-    Array.isArray(p) &&
-      p.length >= 3 &&
-      p.every((n) => typeof n === 'number' && Number.isFinite(n)) &&
-      !(Math.abs(p[0]) < 0.005 && Math.abs(p[1]) < 0.005 && Math.abs(p[2]) < 0.005),
-  );
-};
+import { isUsablePoint } from 'shared';
 
 // Registra materiais vivos com Constant lighting para visualização 3D garantida em qualquer iluminação
 ViroMaterials.createMaterials({

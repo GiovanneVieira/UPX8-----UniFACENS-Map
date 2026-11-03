@@ -1,0 +1,292 @@
+import React from 'react';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+interface PlaceAnchorModalProps {
+  visible: boolean;
+  isSaving: boolean;
+  /** Rótulo da origem ativa (marco calibrado ou GPS). */
+  originLabel: string;
+  /** Heading verdadeiro em graus. */
+  heading: number;
+  pendingDistance: number;
+  onAdjustDistance: (delta: number) => void;
+  anchorName: string;
+  onAnchorNameChange: (value: string) => void;
+  anchorDescription: string;
+  onAnchorDescriptionChange: (value: string) => void;
+  onCreate: () => void;
+  onClose: () => void;
+}
+
+const DISTANCE_STEPS = [
+  { label: '-0.5m', delta: -0.5, tone: 'neg' as const },
+  { label: '-10cm', delta: -0.1, tone: 'neg' as const },
+  { label: '+10cm', delta: 0.1, tone: 'pos' as const },
+  { label: '+0.5m', delta: 0.5, tone: 'pos' as const },
+];
+
+/**
+ * Modal de cadastro de ponto geodésico com micro-ajuste de profundidade
+ * da mira. Envolvido em KeyboardAvoidingView + ScrollView conforme
+ * diretriz de acessibilidade do AGENTS.MD §10.5.
+ */
+export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
+  visible,
+  isSaving,
+  originLabel,
+  heading,
+  pendingDistance,
+  onAdjustDistance,
+  anchorName,
+  onAnchorNameChange,
+  anchorDescription,
+  onAnchorDescriptionChange,
+  onCreate,
+  onClose,
+}) => {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={() => !isSaving && onClose()}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.modalBackdrop}>
+        <ScrollView
+          contentContainerStyle={styles.modalScrollContent}
+          keyboardShouldPersistTaps="handled">
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Marcar Ponto no Espaço</Text>
+            <Text style={styles.modalSubtitle}>
+              O ponto será registrado nas coordenadas geográficas apontadas pela mira.
+            </Text>
+
+            <View style={styles.geoInfoBox}>
+              <Text style={styles.geoInfoRow}>📍 Origem: {originLabel}</Text>
+              <Text style={styles.geoInfoRow}>🧭 Bússola: {heading}° (Norte Verdadeiro)</Text>
+            </View>
+
+            <View style={styles.distanceAdjustPanel}>
+              <View style={styles.distanceHeaderRow}>
+                <Text style={styles.distanceLabel}>Distância da Mira:</Text>
+                <Text style={styles.distanceValue}>{pendingDistance.toFixed(2)} m</Text>
+              </View>
+              <View style={styles.distanceButtonsRow}>
+                {DISTANCE_STEPS.map((step) => (
+                  <TouchableOpacity
+                    key={`dist-step-${step.label}`}
+                    onPress={() => onAdjustDistance(step.delta)}
+                    disabled={isSaving}
+                    style={styles.distanceStepButton}>
+                    <Text style={step.tone === 'neg' ? styles.distanceStepTextNeg : styles.distanceStepTextPos}>
+                      {step.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <Text style={styles.inputLabel}>Nome do Local *</Text>
+            <TextInput
+              value={anchorName}
+              onChangeText={onAnchorNameChange}
+              placeholder="Ex: Bloco C, Entrada Biblioteca, Sala 102"
+              placeholderTextColor="#64748B"
+              style={styles.textInput}
+              autoFocus
+            />
+
+            <Text style={styles.inputLabel}>Descrição (opcional)</Text>
+            <TextInput
+              value={anchorDescription}
+              onChangeText={onAnchorDescriptionChange}
+              placeholder="Ex: Prédio de TI e Computação"
+              placeholderTextColor="#64748B"
+              style={[styles.textInput, styles.textInputLast]}
+            />
+
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity onPress={onClose} disabled={isSaving} style={styles.cancelButton}>
+                <Text style={styles.cancelButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onCreate} disabled={isSaving} style={styles.saveButton}>
+                {isSaving ? <ActivityIndicator size="small" color="#FFFFFF" /> : null}
+                <Text style={styles.saveButtonText}>
+                  {isSaving ? 'Salvando...' : 'Salvar Ponto'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+};
+
+const styles = StyleSheet.create({
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+  },
+  modalScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#0F172A',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    padding: 22,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 25,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#F8FAFC',
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#94A3B8',
+    marginBottom: 16,
+    lineHeight: 17,
+  },
+  geoInfoBox: {
+    backgroundColor: '#1E293B',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+    gap: 4,
+  },
+  geoInfoRow: {
+    color: '#38BDF8',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  distanceAdjustPanel: {
+    backgroundColor: '#1E293B',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  distanceHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  distanceLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#94A3B8',
+  },
+  distanceValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#38BDF8',
+  },
+  distanceButtonsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  distanceStepButton: {
+    flex: 1,
+    backgroundColor: '#0F172A',
+    paddingVertical: 7,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  distanceStepTextNeg: {
+    color: '#F87171',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  distanceStepTextPos: {
+    color: '#4ADE80',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#CBD5E1',
+    marginBottom: 6,
+  },
+  textInput: {
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: '#F8FAFC',
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  textInputLast: {
+    marginBottom: 18,
+  },
+  modalActionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    backgroundColor: '#1E293B',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  cancelButtonText: {
+    color: '#94A3B8',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  saveButton: {
+    flex: 1.5,
+    backgroundColor: '#2563EB',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#60A5FA',
+  },
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+});
