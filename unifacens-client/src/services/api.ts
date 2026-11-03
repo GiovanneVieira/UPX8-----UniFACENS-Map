@@ -1,7 +1,10 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
-import type { Anchor, CreateAnchorDto } from 'shared';
+import { anchorSchema, z, type Anchor, type CreateAnchorDto } from 'shared';
 import { getTeamAuthorization } from './team-authorization';
+
+/** Timeout padrão das chamadas à API (ms) — evita fetch pendurado eternamente. */
+const API_TIMEOUT_MS = 8000;
 
 export function getApiBaseUrl(): string {
   if (process.env.EXPO_PUBLIC_API_URL) {
@@ -30,50 +33,68 @@ export function getApiBaseUrl(): string {
   return 'http://localhost:8000';
 }
 
-/**
- * Busca todas as âncoras na nuvem (Google ARCore Cloud Anchors) cadastradas.
- */
-export async function fetchAnchors(): Promise<Anchor[]> {
-  const url = `${getApiBaseUrl()}/anchors`;
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-    },
-  });
+const deleteResultSchema = z.object({ success: z.boolean() });
 
-  if (!res.ok) {
-    throw new Error(`Erro ao buscar âncoras (${res.status}): ${await res.text()}`);
+function friendlyStatusError(status: number): string {
+  if (status === 400) return 'Dados inválidos. Revise as informações enviadas.';
+  if (status === 401) return 'Acesso não autorizado. Valide o acesso da equipe.';
+  if (status === 404) return 'Recurso não encontrado.';
+  if (status >= 500) return 'Erro interno do servidor. Tente novamente em instantes.';
+  return 'Não foi possível concluir a operação.';
+}
+
+/**
+ * Fetch com timeout + validação Zod da resposta (Single Source of Truth em `shared`).
+ * Erros são sempre amigáveis ao usuário; detalhes técnicos ficam no console.
+ */
+async function request<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    console.warn(`[api] Falha de rede em ${url}:`, err);
+    throw new Error('Não foi possível falar com o servidor. Confira a conexão e tente novamente.');
+  } finally {
+    clearTimeout(timer);
   }
 
-  return res.json();
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    console.warn(`[api] HTTP ${response.status} em ${url}: ${detail}`);
+    throw new Error(friendlyStatusError(response.status));
+  }
+
+  return schema.parse(await response.json());
+}
+
+/**
+ * Busca todas as âncoras geodésicas cadastradas.
+ */
+export async function fetchAnchors(): Promise<Anchor[]> {
+  return request(`${getApiBaseUrl()}/anchors`, z.array(anchorSchema), {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
 }
 
 /**
  * Busca uma âncora específica por ID.
  */
 export async function fetchAnchorById(id: string): Promise<Anchor> {
-  const url = `${getApiBaseUrl()}/anchors/${id}`;
-  const res = await fetch(url, {
+  return request(`${getApiBaseUrl()}/anchors/${id}`, anchorSchema, {
     method: 'GET',
-    headers: {
-      Accept: 'application/json',
-    },
+    headers: { Accept: 'application/json' },
   });
-
-  if (!res.ok) {
-    throw new Error(`Erro ao buscar âncora (${res.status}): ${await res.text()}`);
-  }
-
-  return res.json();
 }
 
 /**
- * Cria uma nova âncora vinculada a um Cloud Anchor ID gerado pelo Google ARCore.
+ * Cria uma nova âncora geodésica (coordenada real projetada no espaço AR).
  */
 export async function createAnchor(data: CreateAnchorDto): Promise<Anchor> {
-  const url = `${getApiBaseUrl()}/anchors`;
-  const res = await fetch(url, {
+  return request(`${getApiBaseUrl()}/anchors`, anchorSchema, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -82,30 +103,17 @@ export async function createAnchor(data: CreateAnchorDto): Promise<Anchor> {
     },
     body: JSON.stringify(data),
   });
-
-  if (!res.ok) {
-    throw new Error(`Erro ao criar âncora (${res.status}): ${await res.text()}`);
-  }
-
-  return res.json();
 }
 
 /**
  * Exclui uma âncora do catálogo por ID.
  */
 export async function deleteAnchor(id: string): Promise<{ success: boolean }> {
-  const url = `${getApiBaseUrl()}/anchors/${id}`;
-  const res = await fetch(url, {
+  return request(`${getApiBaseUrl()}/anchors/${id}`, deleteResultSchema, {
     method: 'DELETE',
     headers: {
-      Accept: 'application/json',
       ...getTeamAuthorization(),
+      Accept: 'application/json',
     },
   });
-
-  if (!res.ok) {
-    throw new Error(`Erro ao excluir âncora (${res.status}): ${await res.text()}`);
-  }
-
-  return res.json();
 }

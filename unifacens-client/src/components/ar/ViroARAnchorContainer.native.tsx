@@ -32,8 +32,14 @@ import {
   CircularLowPassFilter,
   SOROCABA_MAGNETIC_DECLINATION,
 } from 'shared';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  useAnchorsQuery,
+  useCreateAnchorMutation,
+  useDeleteAnchorMutation,
+  anchorKeys,
+} from '@/features/anchors/queries/use-anchors-query';
 import { ViroARAnchorScene } from './ViroARAnchorScene';
-import { fetchAnchors, createAnchor, deleteAnchor } from '@/services/api';
 
 const HIT_TEST_PRIORITY = [
   'DepthPoint',
@@ -104,11 +110,18 @@ export const ViroARAnchorContainer: FC = () => {
   const navigatorRef = useRef<any>(null);
   const arSceneRef = useRef<any>(null);
 
-  // Lista de âncoras brutas obtidas da API
+  // Server State (TanStack Query v5): cache, retry e invalidação automáticos (AGENTS.MD §8)
+  const queryClient = useQueryClient();
+  const anchorsQuery = useAnchorsQuery();
+  const createAnchorMutation = useCreateAnchorMutation();
+  const deleteAnchorMutation = useDeleteAnchorMutation();
+
+  // Espelho local das âncoras brutas para o motor de projeção geodésica
   const rawAnchorsRef = useRef<Anchor[]>([]);
   const [anchors, setAnchors] = useState<Anchor[]>([]);
-  const [isFetching, setIsFetching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  // Override de status do HUD durante mutações (null = status derivado do query)
+  const [mutationStatus, setMutationStatus] = useState<string | null>(null);
 
   // Filtro de Raio (0: Todos, 100: <100m, 50: <50m)
   const [radiusFilter, setRadiusFilter] = useState<number>(0);
@@ -212,7 +225,6 @@ export const ViroARAnchorContainer: FC = () => {
 
   // Estado de Rastreamento SLAM (1: Indisponível, 2: Mapeando, 3: Estável)
   const [trackingState, setTrackingState] = useState<number>(2);
-  const [cloudStatus, setCloudStatus] = useState<string>('Iniciando AR...');
 
   // Pose instantânea da câmera no espaço AR
   const cameraPosRef = useRef<[number, number, number]>([0, 0, 0]);
@@ -405,34 +417,28 @@ export const ViroARAnchorContainer: FC = () => {
     };
   }, [updateProjectedAnchors]);
 
-  // Carregamento de Âncoras da API
-  const loadAnchors = useCallback(async () => {
-    try {
-      setIsFetching(true);
-      setCloudStatus('Carregando pontos...');
-      const list = await fetchAnchors();
-
-      rawAnchorsRef.current = list;
-      const headingToUse = referenceHeadingRef.current ?? userTrueHeadingRef.current;
-      updateProjectedAnchors(
-        list,
-        userCoordsRef.current,
-        headingToUse,
-        calibratedLandmarkRef.current,
-      );
-
-      setCloudStatus(`${list.length} ponto(s)`);
-      setIsFetching(false);
-    } catch (err: any) {
-      console.warn('Erro ao carregar âncoras:', err);
-      setCloudStatus('Erro de conexão');
-      setIsFetching(false);
-    }
-  }, [updateProjectedAnchors]);
-
+  // Sincroniza o server state (TanStack Query) com o motor de projeção geodésica.
+  // Efeito legítimo (AGENTS.MD §7): sincronização com fonte externa — roda só quando `data` muda.
+  const anchorsData = anchorsQuery.data;
   useEffect(() => {
-    loadAnchors();
-  }, [loadAnchors]);
+    if (!anchorsData) return;
+    rawAnchorsRef.current = anchorsData;
+    const headingToUse = referenceHeadingRef.current ?? userTrueHeadingRef.current;
+    updateProjectedAnchors(
+      anchorsData,
+      userCoordsRef.current,
+      headingToUse,
+      calibratedLandmarkRef.current,
+    );
+  }, [anchorsData, updateProjectedAnchors]);
+
+  // Status do HUD derivado do estado do query — sem estado espelho (§7/§8)
+  const cloudStatusDerived = useMemo(() => {
+    if (anchorsQuery.isPending) return 'Carregando pontos...';
+    if (anchorsQuery.isError) return 'Erro de conexão';
+    return `${anchorsQuery.data?.length ?? 0} ponto(s)`;
+  }, [anchorsQuery.isPending, anchorsQuery.isError, anchorsQuery.data]);
+  const cloudStatus = mutationStatus ?? cloudStatusDerived;
 
   const handleCameraUpdate = useCallback(
     (pos: [number, number, number], fwd: [number, number, number]) => {
@@ -573,7 +579,7 @@ export const ViroARAnchorContainer: FC = () => {
 
     try {
       setIsSaving(true);
-      setCloudStatus('Gravando ponto...');
+      setMutationStatus('Gravando ponto...');
 
       const activeLat = calibratedLandmark
         ? calibratedLandmark.latitude
@@ -598,7 +604,7 @@ export const ViroARAnchorContainer: FC = () => {
       const targetLon = Number((activeLon + lonOffset).toFixed(7));
       const targetAlt = Number((activeAlt + (pendingCoords[1] || 0)).toFixed(1));
 
-      const cloudAnchorId = `coord-${Date.now()}`;
+      const cloudAnchorId = `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       const targetArPosition: [number, number, number] = [
         pendingCoords[0],
@@ -606,7 +612,7 @@ export const ViroARAnchorContainer: FC = () => {
         pendingCoords[2],
       ];
 
-      const saved = await createAnchor({
+      const saved = await createAnchorMutation.mutateAsync({
         name: anchorName.trim(),
         cloudAnchorId,
         description: anchorDescription.trim() || undefined,
@@ -620,21 +626,14 @@ export const ViroARAnchorContainer: FC = () => {
       // 1. Trava rigidamente a posição na sessão atual (ARCore SLAM fixa no espaço 3D real sem deriva)
       sessionLockedPositionsRef.current.set(saved.id, targetArPosition);
 
-      // 2. Atualiza a lista bruta
-      const updatedRawList = [saved, ...rawAnchorsRef.current];
-      rawAnchorsRef.current = updatedRawList;
+      // 2. Atualização otimista do cache do TanStack Query: exibição imediata +
+      //    reconciliação automática via invalidação do mutation hook
+      queryClient.setQueryData<Anchor[]>(anchorKeys.lists(), (old) =>
+        old ? [saved, ...old] : [saved],
+      );
+      rawAnchorsRef.current = [saved, ...rawAnchorsRef.current];
 
-      // 3. Adiciona imediatamente à cena com a posição SLAM exata onde o usuário mirou
-      setAnchors((prev) => [
-        {
-          ...saved,
-          arPosition: targetArPosition,
-          distanceMeters: pendingDistance,
-        },
-        ...prev,
-      ]);
-
-      setCloudStatus(`${updatedRawList.length} ponto(s)`);
+      setMutationStatus(null);
       setAnchorName('');
       setAnchorDescription('');
       setModalVisible(false);
@@ -644,8 +643,12 @@ export const ViroARAnchorContainer: FC = () => {
         `Nome: ${saved.name}\nCoordenadas: [${targetLat}, ${targetLon}]\nDistância: ${pendingDistance.toFixed(1)}m\n\nO ponto foi registrado geograficamente e está projetado no espaço AR.`,
       );
     } catch (err: any) {
-      Alert.alert('Erro ao Salvar', err.message);
-      setCloudStatus('Falha na gravação');
+      console.warn('[AR] Erro ao salvar âncora:', err);
+      Alert.alert(
+        'Erro ao Salvar',
+        err instanceof Error ? err.message : 'Não foi possível salvar o ponto.',
+      );
+      setMutationStatus('Falha na gravação');
     } finally {
       setIsSaving(false);
     }
@@ -674,7 +677,7 @@ export const ViroARAnchorContainer: FC = () => {
           onPress: async () => {
             try {
               setIsSaving(true);
-              await deleteAnchor(anchor.id);
+              await deleteAnchorMutation.mutateAsync(anchor.id);
               sessionLockedPositionsRef.current.delete(anchor.id);
               const remaining = rawAnchorsRef.current.filter((a) => a.id !== anchor.id);
               rawAnchorsRef.current = remaining;
@@ -686,7 +689,11 @@ export const ViroARAnchorContainer: FC = () => {
               );
               Alert.alert('Sucesso', 'Ponto excluído.');
             } catch (err: any) {
-              Alert.alert('Erro ao excluir', err.message);
+              console.warn('[AR] Erro ao excluir âncora:', err);
+              Alert.alert(
+                'Erro ao excluir',
+                err instanceof Error ? err.message : 'Não foi possível excluir o ponto.',
+              );
             } finally {
               setIsSaving(false);
             }
@@ -841,11 +848,11 @@ export const ViroARAnchorContainer: FC = () => {
             <Text style={styles.hudIconBtnText}>📍</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={loadAnchors}
-            disabled={isFetching}
+            onPress={() => anchorsQuery.refetch()}
+            disabled={anchorsQuery.isFetching}
             activeOpacity={0.75}
             style={styles.hudIconBtn}>
-            {isFetching ? (
+            {anchorsQuery.isFetching ? (
               <ActivityIndicator size="small" color="#60A5FA" />
             ) : (
               <Text style={styles.hudIconBtnText}>🔄</Text>
