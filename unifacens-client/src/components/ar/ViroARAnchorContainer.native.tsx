@@ -7,15 +7,20 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
-  PanResponder,
   StyleSheet,
   useWindowDimensions,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Animated,
-  Easing,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  Easing as ReEasing,
+  runOnJS,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ViroARSceneNavigator } from '@reactvision/react-viro';
 import * as Location from 'expo-location';
@@ -151,37 +156,59 @@ export const ViroARAnchorContainer: FC = () => {
   const rayOriginRef = useRef<[number, number, number]>([0, 0, 0]);
   const rayDirectionRef = useRef<[number, number, number]>([0, 0, -1]);
 
-  // Zoom da Câmera AR (1.0x a 5.0x) com Pinch-to-Zoom e botões rápidos
+  // Zoom da Câmera AR (1.0x a 5.0x) com Pinch-to-Zoom e botões rápidos.
+  // F1: gesto 100% na UI thread nativa (RNGH + Reanimated) — zero eventos JS durante o pinch.
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const zoomLevelRef = useRef<number>(1.0);
-  zoomLevelRef.current = zoomLevel;
 
-  // Valor animado nativo permanente para evitar qualquer destruição/recriação do GLSurfaceView
-  const zoomAnim = useRef(new Animated.Value(1.0)).current;
-  const initialPinchDistanceRef = useRef<number | null>(null);
-  const initialPinchZoomRef = useRef<number>(1.0);
-  const lastPinchStateUpdateRef = useRef<number>(0);
+  // Shared value permanente desde a montagem: o transform de escala nunca alterna
+  // entre null/valor, preservando o buffer da GLSurfaceView (invariante do AGENTS.MD §12).
+  const zoom = useSharedValue(1.0);
+  const pinchStartZoom = useSharedValue(1.0);
 
-  // Aplicação de zoom suave através do RenderNode nativo do Android
   const applyZoom = useCallback(
     (targetZoom: number, animate = true) => {
       const clamped = Math.min(5.0, Math.max(1.0, Number(targetZoom.toFixed(1))));
       zoomLevelRef.current = clamped;
       setZoomLevel(clamped);
-
-      if (animate) {
-        Animated.timing(zoomAnim, {
-          toValue: clamped,
-          duration: 180,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }).start();
-      } else {
-        zoomAnim.setValue(clamped);
-      }
+      zoom.value = animate
+        ? withTiming(clamped, { duration: 180, easing: ReEasing.out(ReEasing.quad) })
+        : clamped;
     },
-    [zoomAnim],
+    [zoom],
   );
+
+  // Commite único do estado React ao FINALIZAR o gesto (badge/botões atualizam 1x,
+  // sem re-renders concorrendo com os toques durante o pinch).
+  const commitPinchZoom = useCallback((finalZoom: number) => {
+    const clamped = Math.min(5.0, Math.max(1.0, Number(finalZoom.toFixed(1))));
+    zoomLevelRef.current = clamped;
+    setZoomLevel(clamped);
+  }, []);
+
+  const pinchGesture = useMemo(
+    () =>
+      Gesture.Pinch()
+        .onBegin(() => {
+          'worklet';
+          pinchStartZoom.value = zoom.value;
+        })
+        .onUpdate((event) => {
+          'worklet';
+          const calculated = pinchStartZoom.value * event.scale;
+          zoom.value = Math.min(5.0, Math.max(1.0, calculated));
+        })
+        .onEnd(() => {
+          'worklet';
+          runOnJS(commitPinchZoom)(zoom.value);
+        }),
+    [zoom, pinchStartZoom, commitPinchZoom],
+  );
+
+  // Transform permanente aplicado na UI thread nativa em sincronia com os frames.
+  const arZoomAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: zoom.value }],
+  }));
 
   // Estado de Rastreamento SLAM (1: Indisponível, 2: Mapeando, 3: Estável)
   const [trackingState, setTrackingState] = useState<number>(2);
@@ -269,61 +296,6 @@ export const ViroARAnchorContainer: FC = () => {
       setAnchors(projected);
     },
     [],
-  );
-
-  // Gesto nativo de pinça (Pinch-to-Zoom)
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponderCapture: (evt) => evt.nativeEvent.touches.length >= 2,
-        onMoveShouldSetPanResponderCapture: (evt) => evt.nativeEvent.touches.length >= 2,
-        onStartShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length >= 2,
-        onMoveShouldSetPanResponder: (evt) => evt.nativeEvent.touches.length >= 2,
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: (evt) => {
-          const touches = evt.nativeEvent.touches;
-          if (touches.length >= 2) {
-            const dx = touches[0].pageX - touches[1].pageX;
-            const dy = touches[0].pageY - touches[1].pageY;
-            initialPinchDistanceRef.current = Math.hypot(dx, dy);
-            initialPinchZoomRef.current = zoomLevelRef.current;
-          }
-        },
-        onPanResponderMove: (evt) => {
-          const touches = evt.nativeEvent.touches;
-          if (touches.length >= 2) {
-            const dx = touches[0].pageX - touches[1].pageX;
-            const dy = touches[0].pageY - touches[1].pageY;
-            const currentDistance = Math.hypot(dx, dy);
-            if (!initialPinchDistanceRef.current || initialPinchDistanceRef.current < 10) {
-              initialPinchDistanceRef.current = currentDistance;
-              initialPinchZoomRef.current = zoomLevelRef.current;
-              return;
-            }
-            const scaleFactor = currentDistance / initialPinchDistanceRef.current;
-            const calculated = initialPinchZoomRef.current * scaleFactor;
-            const clamped = Math.min(5.0, Math.max(1.0, Number(calculated.toFixed(2))));
-
-            zoomAnim.setValue(clamped);
-            zoomLevelRef.current = clamped;
-
-            const now = Date.now();
-            if (now - lastPinchStateUpdateRef.current > 120) {
-              lastPinchStateUpdateRef.current = now;
-              setZoomLevel(Number(clamped.toFixed(1)));
-            }
-          }
-        },
-        onPanResponderRelease: () => {
-          initialPinchDistanceRef.current = null;
-          setZoomLevel(Number(zoomLevelRef.current.toFixed(1)));
-        },
-        onPanResponderTerminate: () => {
-          initialPinchDistanceRef.current = null;
-          setZoomLevel(Number(zoomLevelRef.current.toFixed(1)));
-        },
-      }),
-    [zoomAnim],
   );
 
   // Subscrições contínuas a GPS e Bússola com compensação de declinação (-21.3°)
@@ -760,24 +732,24 @@ export const ViroARAnchorContainer: FC = () => {
     trackingState === 3 ? '#34D399' : trackingState === 2 ? '#FBBF24' : '#EF4444';
 
   return (
-    <View style={styles.rootContainer} {...panResponder.panHandlers}>
-      {/* Viewport AR com suporte a Zoom Visual Contínuo via Animated.View */}
-      <View style={styles.arViewportClip}>
-        <Animated.View
-          style={[
-            styles.arZoomWrapper,
-            { transform: [{ scale: zoomAnim }] },
-          ]}>
-          <ViroARSceneNavigator
-            ref={navigatorRef}
-            provider="arcore"
-            autofocus={true}
-            initialScene={INITIAL_AR_SCENE}
-            viroAppProps={viroAppProps}
-            style={styles.arNavigator}
-          />
-        </Animated.View>
-      </View>
+    <View style={styles.rootContainer}>
+      {/* Viewport AR com Zoom Visual Contínuo processado 100% na UI thread nativa.
+          O GestureDetector cobre apenas o viewport: toques simples seguem para o
+          Viro (onPlaneTapped/onSelectAnchor) e apenas o gesto de 2 dedos ativa o zoom. */}
+      <GestureDetector gesture={pinchGesture}>
+        <View style={styles.arViewportClip}>
+          <Animated.View style={[styles.arZoomWrapper, arZoomAnimatedStyle]}>
+            <ViroARSceneNavigator
+              ref={navigatorRef}
+              provider="arcore"
+              autofocus={true}
+              initialScene={INITIAL_AR_SCENE}
+              viroAppProps={viroAppProps}
+              style={styles.arNavigator}
+            />
+          </Animated.View>
+        </View>
+      </GestureDetector>
 
       {/* Indicador de Zoom Ativo */}
       {zoomLevel > 1.05 ? (
