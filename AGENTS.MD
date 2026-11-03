@@ -285,3 +285,17 @@ No Android (`android.hardware.camera2`), **apenas um cliente pode acessar o sens
    - O `@expo/cli` é executado na raiz do monorepo (`node_modules/@expo/cli`). Durante a inicialização do dev server ou compilação nativa com `typedRoutes: true`, ele carrega o `@expo/router-server`, que exige a resolução de `expo-router` e `@expo/metro-runtime`.
    - Se o NPM mantiver o `expo-router` isolado dentro de `unifacens-client/node_modules/`, o Node não consegue encontrá-lo a partir do `@expo/cli` raiz, lançando `MODULE_NOT_FOUND`.
    - **SOLUÇÃO OBRIGATÓRIA**: Declarar `"expo-router"` e `"@expo/metro-runtime"` no `devDependencies` do `package.json` raiz e garantir o script `postinstall` para criar os links simbólicos necessários.
+5. **IP Fixo Obsoleto no `.env` => "Carregando pontos..." Infinito**:
+   - Variáveis `EXPO_PUBLIC_*` são **embutidas no bundle JS pelo Metro** em tempo de serviço. Um `EXPO_PUBLIC_API_URL` com IP de rede antiga (ex.: troca do Wi-Fi da faculdade para casa) faz o app apontar para um IP fantasma.
+   - Pacotes descartados por rota inexistente **não geram `ECONNREFUSED`**: sem timeout no `fetch`, a promise nunca resolve nem rejeita => o `catch` de "Erro de conexão" jamais executa e o spinner fica eterno.
+   - **SOLUÇÃO PADRÃO (Modo Resiliente)**: não fixar `REACT_NATIVE_PACKAGER_HOSTNAME` nem `EXPO_PUBLIC_API_URL` no `.env` (ver `unifacens-client/.env.example`). Via USB, `npm run android:connect` mantém o fallback `http://localhost:8000` funcional à prova de troca de rede.
+   - Após alterar o `.env`, reinicie o Metro com `--clear` (re-transforma os inline constants) e recarregue o app.
+   - *Hardening recomendado*: `AbortSignal.timeout()` nas funções de `src/services/api.ts` e uso do `use-anchors-query` (TanStack Query) no lugar de fetch manual em `useEffect` no `ViroARAnchorContainer`.
+6. **Dispositivos Xiaomi/HyperOS (ex.: POCO X7 Pro): Permissão de Injeção de Input**:
+   - Erro `Injecting input events requires the caller ... INJECT_EVENTS permission` ao usar **mobile-mcp**, **scrcpy** (controle) ou `adb shell input` indica que a opção **"Depuração USB (Configurações de segurança)"** está desativada — a "Depuração USB" comum não basta.
+   - Ativar em *Configurações > Configurações adicionais > Opções do desenvolvedor* (exige aparelho desbloqueado; em alguns casos, SIM inserido + conta Xiaomi logada).
+7. **Kit de Depuração para Features AR (Dev Build Obrigatória)**:
+   - **Rebuild nativo (`npx expo run:android`) somente quando código nativo/dependências mudarem** — toda iteração de JS flui via Metro (Fast Refresh ou `r`).
+   - `j` no terminal do Metro abre o **React Native DevTools** (console, breakpoints, inspeção de componentes). *A aba Network não captura `fetch` nativo.*
+   - `adb logcat -s ReactNativeJS:V` expõe `console.log/warn/error` do JS rodando no dispositivo.
+   - **scrcpy** (espelho + controle do aparelho) e **mobile-mcp** (hierarquia de elementos, toques, logs, crashes) operam em paralelo com o Metro via ADB.
