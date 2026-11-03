@@ -27,6 +27,14 @@ const databaseUrl = optionalValue.pipe(
     .optional(),
 );
 
+const httpUrl = z
+  .string()
+  .url()
+  .refine(
+    (value) => new URL(value).protocol.startsWith('http'),
+    'Informe uma URL HTTP(S) válida',
+  );
+
 export const apiEnvironmentSchema = z
   .object({
     NODE_ENV: z
@@ -37,6 +45,23 @@ export const apiEnvironmentSchema = z
     DATABASE_MIGRATION_URL: databaseUrl,
     TEAM_ACCESS_TOKEN: optionalValue.pipe(
       z.string().min(32).max(512).regex(/^\S+$/).optional(),
+    ),
+    BETTER_AUTH_URL: httpUrl.default("http://127.0.0.1:8000"),
+    BETTER_AUTH_SECRET: optionalValue.pipe(
+      z
+        .string()
+        .min(32, "O secret deve ter ao menos 32 caracteres")
+        .max(512)
+        .optional(),
+    ),
+    ADMIN_EMAIL: optionalValue.pipe(
+      z
+        .string()
+        .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Informe um e-mail válido")
+        .optional(),
+    ),
+    ADMIN_PASSWORD: optionalValue.pipe(
+      z.string().min(8).max(128).optional(),
     ),
     CORS_ORIGINS: z
       .string()
@@ -69,7 +94,7 @@ export const apiEnvironmentSchema = z
   })
   .superRefine((environment, context) => {
     if (environment.NODE_ENV !== "production") return;
-    for (const key of ["DATABASE_URL", "TEAM_ACCESS_TOKEN"] as const) {
+    for (const key of ["DATABASE_URL", "BETTER_AUTH_SECRET"] as const) {
       if (!environment[key])
         context.addIssue({
           code: "custom",
@@ -79,3 +104,34 @@ export const apiEnvironmentSchema = z
     }
   });
 export type ApiEnvironment = z.infer<typeof apiEnvironmentSchema>;
+
+/**
+ * Credenciais de autenticação (better-auth e-mail + senha).
+ */
+export const signInSchema = z.strictObject({
+  email: z
+    .string()
+    .trim()
+    .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Informe um e-mail válido"),
+  password: z.string().min(8, "A senha deve ter ao menos 8 caracteres").max(128),
+});
+export type SignInDto = z.infer<typeof signInSchema>;
+
+export const signUpSchema = signInSchema.extend({
+  name: z.string().trim().min(2, "Informe seu nome").max(120),
+});
+export type SignUpDto = z.infer<typeof signUpSchema>;
+
+export const authUserSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string(),
+  role: z.string(),
+});
+export type AuthUser = z.infer<typeof authUserSchema>;
+
+export const adminSessionSchema = z.object({
+  canEdit: z.literal(true),
+  user: authUserSchema,
+});
+export type AdminSession = z.infer<typeof adminSessionSchema>;

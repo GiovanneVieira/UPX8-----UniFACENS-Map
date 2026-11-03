@@ -1,3 +1,4 @@
+import { toNodeHandler } from 'better-auth/node';
 import { NestFactory } from '@nestjs/core';
 import {
   ExpressAdapter,
@@ -5,10 +6,12 @@ import {
 } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
+import express from 'express';
 import { AppModule, ObserveInstrument } from './app.module.js';
 import { API_CONFIG } from './config/runtime-config.js';
 import type { ApiEnvironment } from 'shared';
 import { configureHttp } from './config/configure-http.js';
+import { BETTER_AUTH, type BetterAuthInstance } from './common/auth/better-auth.js';
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
@@ -21,11 +24,21 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule,
     new ExpressAdapter(),
-    hasObserveKeys ? { instrument: ObserveInstrument } : {},
+    hasObserveKeys
+      ? { instrument: ObserveInstrument, bodyParser: false }
+      : { bodyParser: false },
   );
   app.enableShutdownHooks();
   const config = app.get<ApiEnvironment>(API_CONFIG);
+  const auth = app.get<BetterAuthInstance>(BETTER_AUTH);
   configureHttp(app, config);
+
+  // Better Auth: o handler exige o corpo bruto da requisição — por isso o
+  // body-parser do Nest é desativado e o parsing JSON é restaurado APENAS
+  // para as rotas fora de /auth, montadas depois do handler.
+  const expressInstance = app.getHttpAdapter().getInstance();
+  expressInstance.use('/auth', toNodeHandler(auth));
+  expressInstance.use(express.json({ limit: '1mb' }));
 
   // Configuração OpenAPI / Swagger
   const swaggerConfig = new DocumentBuilder()
