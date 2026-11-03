@@ -10,11 +10,13 @@ import AppTabs from '@/components/app-tabs';
 
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+// Supressões REMANESCENTES de ruído interno do Viro/third-party apenas.
+// Os ignores de "Cannot update a component" (setState aninhado — corrigido)
+// e "Couldn't find a navigation context" (className na rota AR — corrigido)
+// foram REMOVIDOS: sintomas reais de bug não devem ficar silenciados.
 LogBox.ignoreLogs([
   'Failed to create anchored node',
-  'Cannot update a component',
   "Property 'loading' doesn't exist",
-  "Couldn't find a navigation context",
 ]);
 
 export default function TabLayout() {

@@ -85,6 +85,7 @@ O repositório adota **NPM Workspaces**:
 - **`.env.api`**: Segredos do backend e credenciais do PostgreSQL (`DATABASE_URL`, `POSTGRES_USER`, etc.). Mapeado no compose via `env_file: .env.api`.
 - **`.env.client`**: Variáveis públicas do Expo (`EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_GOOGLE_AR_API_KEY`).
 - **Segredos Nativos**: Injetados no build Android dinamicamente via `manifestPlaceholders = [ googleArApiKey: googleArApiKey ]` em `build.gradle`. Zero hardcoding no `AndroidManifest.xml` ou `app.json`.
+- **Segurança do Token de Equipe (Bearer sobre HTTP)**: o client mantém o token de equipe apenas em memória (Zustand sem persistência — nunca em storage nem em `EXPO_PUBLIC_*`), porém em desenvolvimento ele trafega via `http://` na rede local e é interceptável por sniffing. **Produção exige HTTPS** (reverse proxy com TLS na frente da API); URLs `http://` são restritas a ambientes de desenvolvimento.
 
 ---
 
