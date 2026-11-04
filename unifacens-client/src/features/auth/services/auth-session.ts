@@ -47,6 +47,7 @@ export async function hydrateAuth(): Promise<void> {
   }
   await clearJwt();
   useAuthStore.getState().clearSession();
+  useAuthStore.getState().setHydrated(true);
 }
 
 export async function signInWithEmail(email: string, password: string): Promise<AuthUser> {

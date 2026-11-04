@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FormInputField } from '@/components/ui/form-field';
 import { useSignInForm } from '../hooks/use-sign-in-form';
 import { useSignUpForm } from '../hooks/use-sign-up-form';
@@ -23,31 +23,20 @@ function fieldErrors(errors: Array<unknown>): string[] {
 function ActionButtons({
   submitting,
   onSubmit,
-  onClose,
   confirmLabel,
 }: {
   submitting: boolean;
   onSubmit: () => void;
-  onClose: () => void;
   confirmLabel: string;
 }) {
   return (
-    <View className="flex-row flex-wrap justify-end gap-3">
-      <Pressable
-        accessibilityRole="button"
-        disabled={submitting}
-        accessibilityState={{ disabled: submitting }}
-        onPress={onClose}
-        className="min-h-[44px] justify-center rounded-xl bg-slate-800 px-4 active:opacity-80"
-      >
-        <Text className="font-semibold text-white">Cancelar</Text>
-      </Pressable>
+    <View className="flex-row justify-end gap-3">
       <Pressable
         accessibilityRole="button"
         disabled={submitting}
         accessibilityState={{ disabled: submitting, busy: submitting }}
         onPress={onSubmit}
-        className="min-h-[44px] justify-center rounded-xl bg-blue-700 px-4 active:opacity-80"
+        className="min-h-[48px] flex-1 items-center justify-center rounded-xl bg-blue-700 px-4 active:opacity-80"
       >
         <Text className="font-semibold text-white">
           {submitting ? 'Aguarde…' : confirmLabel}
@@ -66,8 +55,8 @@ function ErrorNotice({ message }: { message?: string }) {
   );
 }
 
-function SignInBody({ onClose }: { onClose: () => void }) {
-  const { form, mutation } = useSignInForm(onClose);
+function SignInBody() {
+  const { form, mutation } = useSignInForm(() => undefined);
   return (
     <View className="gap-3">
       <form.Field name="email">
@@ -108,7 +97,6 @@ function SignInBody({ onClose }: { onClose: () => void }) {
           <ActionButtons
             submitting={submitting}
             onSubmit={() => void form.handleSubmit()}
-            onClose={onClose}
             confirmLabel="Entrar"
           />
         )}
@@ -117,8 +105,8 @@ function SignInBody({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SignUpBody({ onClose }: { onClose: () => void }) {
-  const { form, mutation } = useSignUpForm(onClose);
+function SignUpBody() {
+  const { form, mutation } = useSignUpForm(() => undefined);
   return (
     <View className="gap-3">
       <form.Field name="name">
@@ -172,7 +160,6 @@ function SignUpBody({ onClose }: { onClose: () => void }) {
           <ActionButtons
             submitting={submitting}
             onSubmit={() => void form.handleSubmit()}
-            onClose={onClose}
             confirmLabel="Criar conta"
           />
         )}
@@ -182,71 +169,56 @@ function SignUpBody({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * Modal de autenticação com e-mail/senha (better-auth).
- * Login aberto a todos (D4); edição do catálogo exclusiva de admins.
+ * Tela de entrada do app (AuthGate): login obrigatório com e-mail/senha.
+ * Login aberto a todos; a edição do catálogo é exclusiva de administradores.
  */
-export function AuthModal({ onClose }: { onClose: () => void }) {
+export function LoginScreen() {
   const [mode, setMode] = useState<AuthMode>('sign-in');
-  const submitting = false; // corpos isolados controlam o próprio estado de submit
+  const insets = useSafeAreaInsets();
 
   return (
-    <Modal
-      visible
-      transparent
-      animationType="slide"
-      onRequestClose={() => {
-        if (!submitting) onClose();
-      }}
-    >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        className="flex-1 justify-center bg-black/70 p-4"
-      >
-        <View
-          accessibilityViewIsModal
-          className="max-h-[90%] w-full max-w-xl self-center rounded-3xl border border-slate-700 bg-slate-950"
-        >
-          <ScrollView keyboardShouldPersistTaps="handled">
-            <View className="gap-3 p-5">
-              <Text accessibilityRole="header" className="text-2xl font-bold text-white">
-                {mode === 'sign-in' ? 'Entrar' : 'Criar conta'}
-              </Text>
-              <Text className="text-sm text-slate-300">
-                {mode === 'sign-in'
-                  ? 'Use e-mail e senha. A edição do catálogo é exclusiva de contas de administrador.'
-                  : 'Qualquer pessoa pode criar uma conta para consultar e contribuir. A edição é reservada à equipe.'}
-              </Text>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      className="flex-1 bg-slate-950">
+      <ScrollView
+        contentContainerStyle={{ paddingTop: insets.top + 48, paddingBottom: insets.bottom + 32 }}
+        keyboardShouldPersistTaps="handled">
+        <View className="w-full max-w-md self-center gap-5 px-5">
+          <View className="items-center gap-2">
+            <Text className="text-4xl font-bold text-white">UniFACENS</Text>
+            <Text className="text-lg font-semibold text-sky-300">Map</Text>
+            <Text className="mt-2 text-center text-sm text-slate-300">
+              Navegação pelo campus e realidade aumentada. Entre para começar.
+            </Text>
+          </View>
 
-              <View className="flex-row rounded-xl bg-slate-900 p-1">
-                {(
-                  [
-                    ['sign-in', 'Entrar'],
-                    ['sign-up', 'Criar conta'],
-                  ] as const
-                ).map(([value, label]) => (
-                  <Pressable
-                    key={value}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: mode === value }}
-                    onPress={() => setMode(value)}
-                    className={`min-h-[40px] flex-1 items-center justify-center rounded-lg px-3 ${
-                      mode === value ? 'bg-blue-700' : ''
-                    }`}
-                  >
-                    <Text className="font-semibold text-white">{label}</Text>
-                  </Pressable>
-                ))}
-              </View>
+          <View className="flex-row rounded-xl bg-slate-900 p-1">
+            {(
+              [
+                ['sign-in', 'Entrar'],
+                ['sign-up', 'Criar conta'],
+              ] as const
+            ).map(([value, label]) => (
+              <Pressable
+                key={value}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: mode === value }}
+                onPress={() => setMode(value)}
+                className={`min-h-[44px] flex-1 items-center justify-center rounded-lg px-3 ${
+                  mode === value ? 'bg-blue-700' : ''
+                }`}>
+                <Text className="font-semibold text-white">{label}</Text>
+              </Pressable>
+            ))}
+          </View>
 
-              {mode === 'sign-in' ? (
-                <SignInBody onClose={onClose} />
-              ) : (
-                <SignUpBody onClose={onClose} />
-              )}
-            </View>
-          </ScrollView>
+          {mode === 'sign-in' ? <SignInBody /> : <SignUpBody />}
+
+          <Text className="text-center text-xs text-slate-500">
+            A criação de pontos e locais é exclusiva da equipe (administradores).
+          </Text>
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }

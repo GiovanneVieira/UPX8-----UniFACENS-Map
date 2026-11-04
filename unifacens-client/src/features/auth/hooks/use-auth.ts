@@ -1,37 +1,30 @@
-import { useQuery } from '@tanstack/react-query';
 import { useShallow } from 'zustand/react/shallow';
 import { useAuthStore } from '@/stores/use-auth-store';
-import { fetchAccessPolicy } from '../services/auth-api';
 import { signOutEverywhere } from '../services/auth-session';
-
-export const accessKeys = { policy: ['access', 'policy'] as const };
 
 /**
  * Estado de autenticação consumido pela UI.
  *
- * `canEdit` só é true para role `admin` — o login é aberto a todos (D4),
- * porém mutations continuam exclusivas da equipe.
+ * Modelo "identidade primeiro": o app exige login para qualquer tela
+ * (AuthGate no _layout). Capacidades por role:
+ * - `user` (comum): consulta ao campus e AR read-only;
+ * - `admin`: additionally cadastra/edita/exclui places e âncoras AR.
  */
 export function useAuth() {
-  const policy = useQuery({
-    queryKey: accessKeys.policy,
-    queryFn: ({ signal }) => fetchAccessPolicy(signal),
-  });
-  const { authenticated, isAdmin, user } = useAuthStore(
+  const { authenticated, hydrated, isAdmin, user } = useAuthStore(
     useShallow((state) => ({
       authenticated: state.jwt !== null,
+      hydrated: state.hydrated,
       isAdmin: state.user?.role === 'admin',
       user: state.user,
     })),
   );
-  const requiresTeamAccess = policy.data?.requiresTeamAccess ?? true;
   return {
-    policy,
     authenticated,
+    hydrated,
     isAdmin,
     user,
-    requiresTeamAccess,
-    canEdit: isAdmin || !requiresTeamAccess,
+    canEdit: isAdmin,
     signOut: signOutEverywhere,
   };
 }

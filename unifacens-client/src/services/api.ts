@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { anchorSchema, z, type Anchor, type CreateAnchorDto } from 'shared';
 import { getTeamAuthorization } from './team-authorization';
+import { useAuthStore } from '@/stores/use-auth-store';
 
 /** Timeout padrão das chamadas à API (ms) — evita fetch pendurado eternamente. */
 const API_TIMEOUT_MS = 8000;
@@ -44,7 +45,8 @@ function friendlyStatusError(status: number): string {
 }
 
 /**
- * Fetch com timeout + validação Zod da resposta (Single Source of Truth em `shared`).
+ * Fetch com timeout, Bearer JWT (todas as rotas exigem autenticação) e
+ * validação Zod da resposta (Single Source of Truth em `shared`).
  * Erros são sempre amigáveis ao usuário; detalhes técnicos ficam no console.
  */
 async function request<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
@@ -53,12 +55,26 @@ async function request<T>(url: string, schema: z.ZodType<T>, init: RequestInit =
 
   let response: Response;
   try {
-    response = await fetch(url, { ...init, signal: controller.signal });
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        ...getTeamAuthorization(),
+        ...init.headers,
+      },
+      signal: controller.signal,
+    });
   } catch (err) {
     console.warn(`[api] Falha de rede em ${url}:`, err);
     throw new Error('Não foi possível falar com o servidor. Confira a conexão e tente novamente.');
   } finally {
     clearTimeout(timer);
+  }
+
+  if (response.status === 401) {
+    // Sessão inválida/expirada: o AuthGate retorna à tela de login.
+    useAuthStore.getState().clearSession();
+    throw new Error('Sessão expirada. Faça login novamente.');
   }
 
   if (!response.ok) {

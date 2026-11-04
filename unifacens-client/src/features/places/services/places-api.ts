@@ -18,7 +18,14 @@ export interface PlaceFilters {
 }
 
 export async function fetchPlace(id: string, signal: AbortSignal) {
-  const response = await fetch(`${getApiBaseUrl()}/places/${id}`, { signal });
+  const response = await fetch(`${getApiBaseUrl()}/places/${id}`, {
+    headers: { ...getTeamAuthorization() },
+    signal,
+  });
+  if (response.status === 401) {
+    useAuthStore.getState().clearSession();
+    throw new Error("Sessão expirada. Faça login novamente.");
+  }
   if (!response.ok)
     throw new Error("Não foi possível carregar os detalhes do local.");
   return placeSchema.parse(await response.json());
@@ -33,8 +40,13 @@ export async function fetchPlaces(
   if (filters.search.trim()) params.set("search", filters.search.trim());
   if (filters.category) params.set("category", filters.category);
   const response = await fetch(`${getApiBaseUrl()}/places?${params}`, {
+    headers: { ...getTeamAuthorization() },
     signal,
   });
+  if (response.status === 401) {
+    useAuthStore.getState().clearSession();
+    throw new Error("Sessão expirada. Faça login novamente.");
+  }
   if (!response.ok)
     throw new Error("Não foi possível carregar os locais. Tente novamente.");
   return placesPageSchema.parse(await response.json());
@@ -43,7 +55,7 @@ export async function fetchPlaces(
 export async function createPlace(dto: CreatePlaceDto) {
   const response = await fetch(`${getApiBaseUrl()}/places`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getTeamAuthorization() },
     body: JSON.stringify(createPlaceSchema.parse(dto)),
   }).catch(() => {
     throw new Error(

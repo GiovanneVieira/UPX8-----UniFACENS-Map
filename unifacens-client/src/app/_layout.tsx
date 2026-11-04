@@ -5,8 +5,11 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useColorScheme, LogBox } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useShallow } from 'zustand/react/shallow';
 
 import AppTabs from '@/components/app-tabs';
+import { useAuthStore } from '@/stores/use-auth-store';
+import { LoginScreen } from '@/features/auth/components/login-screen';
 import { hydrateAuth } from '@/features/auth/services/auth-session';
 
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -36,10 +39,16 @@ export default function TabLayout() {
       }),
   );
 
+  const { hydrated, jwt } = useAuthStore(
+    useShallow((state) => ({ hydrated: state.hydrated, jwt: state.jwt })),
+  );
+
   useEffect(() => {
-    SplashScreen.hideAsync().catch(() => {});
-    // Restaura a sessão de autenticação (secret-storage/cookies) na abertura.
-    hydrateAuth().finally(() => undefined);
+    // Restaura a sessão (secret-storage/cookies) na abertura do app;
+    // a splash permanece visível até a hidratação concluir.
+    hydrateAuth().finally(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    });
   }, []);
 
   return (
@@ -47,7 +56,12 @@ export default function TabLayout() {
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
           <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <AppTabs />
+            {/* AuthGate: identidade primeiro — nada do app sem login */}
+            {!hydrated ? null : jwt === null ? (
+              <LoginScreen />
+            ) : (
+              <AppTabs />
+            )}
           </ThemeProvider>
         </QueryClientProvider>
       </SafeAreaProvider>

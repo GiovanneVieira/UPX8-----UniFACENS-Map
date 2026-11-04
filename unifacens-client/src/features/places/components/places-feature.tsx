@@ -12,12 +12,11 @@ import { PlaceFormModal } from "./place-form-modal";
 import { PlaceCard } from "./place-card";
 import { PlaceDetails } from "./place-details";
 import { PlacesSearch } from "./places-search";
-import { AuthPanel } from "@/features/auth/components/auth-panel";
 import { useAuth } from "@/features/auth/hooks/use-auth";
 
 export function PlacesFeature() {
   const explorer = usePlacesExplorer();
-  const access = useAuth();
+  const { isAdmin } = useAuth();
   const { query, details, places, selectedId, selectPlace, total } = explorer;
   return (
     <SafeAreaView
@@ -58,7 +57,6 @@ export function PlacesFeature() {
             </Text>
           ) : null}
           <PlacesSearch explorer={explorer} />
-          <AuthPanel />
           <View className="gap-2">
             <Text
               accessibilityRole="header"
@@ -100,7 +98,7 @@ export function PlacesFeature() {
               place={details.data}
               onClose={() => selectPlace(null)}
               onEdit={
-                access.canEdit ? () => explorer.setEditor("edit") : undefined
+                isAdmin ? () => explorer.setEditor("edit") : undefined
               }
             />
           ) : null}
