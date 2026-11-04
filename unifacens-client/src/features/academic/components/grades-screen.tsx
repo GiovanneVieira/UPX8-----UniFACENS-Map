@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,8 +7,64 @@ import { MOCK_ATTENDANCE, MOCK_GRADES } from '../mocks/data';
 
 type Mode = 'grades' | 'attendance';
 
-const PERIODS = ['2024/2', '2025/1', '2025/2', '2026/1', '2026/2'];
+const PERIODS = ['2024/01', '2024/02', '2025/01', '2025/02', '2026/01', '2026/02'];
 const GRADE_COLUMNS = ['AC1', 'AC2', 'AF', 'Sub', 'AG'] as const;
+
+/** Bottom sheet de seleção de período letivo (espelho oficial do app
+ *  UniFacens: título descritivo + grade de chips 3 colunas + Cancelar). */
+function PeriodPickerSheet({
+  visible,
+  current,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  current: string;
+  onSelect: (period: string) => void;
+  onClose: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View className="flex-1 justify-end bg-black/60">
+        <Pressable className="absolute inset-0" onPress={onClose} accessibilityLabel="Fechar seletor" />
+        <View className="gap-5 rounded-t-3xl bg-neutral-900 px-6 pb-8 pt-6">
+          <Text className="text-center text-lg font-bold text-white">
+            Selecione o período letivo
+          </Text>
+          <View className="flex-row flex-wrap gap-3">
+            {PERIODS.map((period) => {
+              const active = period === current;
+              return (
+                <Pressable
+                  key={period}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  onPress={() => {
+                    onSelect(period);
+                    onClose();
+                  }}
+                  className={`min-h-[48px] w-[30%] items-center justify-center rounded-2xl ${
+                    active ? 'bg-blue-600' : 'bg-neutral-800'
+                  } active:opacity-80`}>
+                  <Text className={`text-[15px] font-semibold ${active ? 'text-white' : 'text-neutral-300'}`}>
+                    {period}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onClose}
+            className="self-center py-2">
+            <Text className="text-sm text-neutral-400">Cancelar</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 function formatGrade(value: number | null): string {
   if (value == null) return '–';
@@ -24,6 +80,7 @@ function formatGrade(value: number | null): string {
 export function GradesScreen({ mode }: { mode: Mode }) {
   const insets = useSafeAreaInsets();
   const [periodIdx, setPeriodIdx] = useState(PERIODS.length - 1);
+  const [pickerVisible, setPickerVisible] = useState(false);
   const period = PERIODS[periodIdx];
   const isGrades = mode === 'grades';
   const grades = MOCK_GRADES[period] ?? [];
@@ -45,7 +102,8 @@ export function GradesScreen({ mode }: { mode: Mode }) {
         </View>
       </View>
 
-      {/* Seletor de período em pílula (espelho oficial) */}
+      {/* Seletor de período em pílula (clique abre o sheet com todos os
+          períodos letivos, espelho do app oficial) */}
       <View className="flex-row items-center justify-center gap-3 pb-2">
         <Pressable
           accessibilityRole="button"
@@ -59,9 +117,14 @@ export function GradesScreen({ mode }: { mode: Mode }) {
             color={periodIdx === 0 ? '#404040' : '#D4D4D4'}
           />
         </Pressable>
-        <View className="rounded-full bg-neutral-900 px-6 py-2">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Selecionar período letivo"
+          onPress={() => setPickerVisible(true)}
+          className="flex-row items-center gap-2 rounded-full bg-neutral-900 px-6 py-2 active:opacity-80">
           <Text className="text-lg font-semibold text-white">{period}</Text>
-        </View>
+          <Ionicons name="chevron-down" size={16} color="#8F8F8F" />
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Próximo período"
@@ -166,6 +229,13 @@ export function GradesScreen({ mode }: { mode: Mode }) {
           </View>
         )}
       </ScrollView>
+
+      <PeriodPickerSheet
+        visible={pickerVisible}
+        current={period}
+        onSelect={(p) => setPeriodIdx(PERIODS.indexOf(p))}
+        onClose={() => setPickerVisible(false)}
+      />
     </View>
   );
 }
