@@ -61,16 +61,22 @@ export function HomeScreen() {
 
         {/* Badge de role + carteirinha */}
         <View className="flex-row items-center gap-2">
-          <View className="rounded-full bg-neutral-800 px-3 py-1.5">
+          <View className="flex-row items-center gap-1.5 rounded-full bg-neutral-800 px-3 py-1.5">
+            <Ionicons
+              name={isAdmin ? 'shield-checkmark-outline' : 'school-outline'}
+              size={13}
+              color="#A3A3A3"
+            />
             <Text className="text-xs font-semibold text-neutral-300">
-              {isAdmin ? '👑 Administrador' : '🎓 Conta de estudante'}
+              {isAdmin ? 'Administrador' : 'Conta de estudante'}
             </Text>
           </View>
           <Pressable
             accessibilityRole="button"
             onPress={() => router.push('/carteirinha')}
-            className="rounded-full bg-neutral-800 px-3 py-1.5 active:opacity-80">
-            <Text className="text-xs font-semibold text-neutral-300">🪪 Carteirinha</Text>
+            className="flex-row items-center gap-1.5 rounded-full bg-neutral-800 px-3 py-1.5 active:opacity-80">
+            <Ionicons name="card-outline" size={13} color="#A3A3A3" />
+            <Text className="text-xs font-semibold text-neutral-300">Carteirinha</Text>
           </Pressable>
         </View>
 
@@ -123,7 +129,10 @@ export function HomeScreen() {
             accessibilityRole="button"
             onPress={() => router.navigate('/(tabs)/campus')}
             className="rounded-3xl bg-neutral-900 p-6 active:opacity-90">
-            <Text className="text-lg font-semibold text-white">🗺️ Mapa do Campus</Text>
+            <View className="flex-row items-center gap-2">
+              <Ionicons name="map-outline" size={20} color="#D8B97A" />
+              <Text className="text-lg font-semibold text-white">Mapa do Campus</Text>
+            </View>
             <Text className="mt-1 text-sm text-neutral-400">
               Busque salas, prédios e serviços da UniFACENS.
             </Text>
@@ -135,7 +144,10 @@ export function HomeScreen() {
             accessibilityRole="button"
             onPress={() => router.navigate('/(tabs)/ar')}
             className="rounded-3xl bg-neutral-900 p-6 active:opacity-90">
-            <Text className="text-lg font-semibold text-white">📱 Realidade Aumentada</Text>
+            <View className="flex-row items-center gap-2">
+              <Ionicons name="cube-outline" size={20} color="#D8B97A" />
+              <Text className="text-lg font-semibold text-white">Realidade Aumentada</Text>
+            </View>
             <Text className="mt-1 text-sm text-neutral-400">
               {isAdmin
                 ? 'Navegue pelos pontos AR e cadastre novos locais.'
