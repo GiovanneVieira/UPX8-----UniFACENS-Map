@@ -7,6 +7,7 @@ import { useColorScheme, LogBox } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import AppTabs from '@/components/app-tabs';
+import { hydrateAuth } from '@/features/auth/services/auth-session';
 
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -37,6 +38,8 @@ export default function TabLayout() {
 
   useEffect(() => {
     SplashScreen.hideAsync().catch(() => {});
+    // Restaura a sessão de autenticação (secret-storage/cookies) na abertura.
+    hydrateAuth().finally(() => undefined);
   }, []);
 
   return (

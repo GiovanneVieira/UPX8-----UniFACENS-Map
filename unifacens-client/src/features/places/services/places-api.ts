@@ -10,7 +10,7 @@ import {
 } from "shared";
 import { getApiBaseUrl } from "@/services/api";
 import { getTeamAuthorization } from "@/services/team-authorization";
-import { useTeamAccessStore } from "@/stores/use-team-access-store";
+import { useAuthStore } from "@/stores/use-auth-store";
 
 export interface PlaceFilters {
   search: string;
@@ -68,9 +68,9 @@ export async function updatePlace(id: string, dto: UpdatePlaceDto) {
     );
   });
   if (response.status === 401) {
-    useTeamAccessStore.getState().signOut();
+    useAuthStore.getState().clearSession();
     throw new Error(
-      "Acesso da equipe expirado ou inválido. Entre novamente para editar.",
+      "Sessão expirada ou inválida. Entre novamente para editar.",
     );
   }
   if (!response.ok)

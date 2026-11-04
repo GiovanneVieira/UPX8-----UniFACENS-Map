@@ -12,12 +12,12 @@ import { PlaceFormModal } from "./place-form-modal";
 import { PlaceCard } from "./place-card";
 import { PlaceDetails } from "./place-details";
 import { PlacesSearch } from "./places-search";
-import { TeamAccessPanel } from "@/features/access/components/team-access-panel";
-import { useTeamAccess } from "@/features/access/hooks/use-team-access";
+import { AuthPanel } from "@/features/auth/components/auth-panel";
+import { useAuth } from "@/features/auth/hooks/use-auth";
 
 export function PlacesFeature() {
   const explorer = usePlacesExplorer();
-  const access = useTeamAccess();
+  const access = useAuth();
   const { query, details, places, selectedId, selectPlace, total } = explorer;
   return (
     <SafeAreaView
@@ -58,7 +58,7 @@ export function PlacesFeature() {
             </Text>
           ) : null}
           <PlacesSearch explorer={explorer} />
-          <TeamAccessPanel />
+          <AuthPanel />
           <View className="gap-2">
             <Text
               accessibilityRole="header"

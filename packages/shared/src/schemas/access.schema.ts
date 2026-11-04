@@ -1,15 +1,6 @@
 import { z } from "zod";
 
-export const teamAccessFormSchema = z.strictObject({
-  token: z
-    .string()
-    .trim()
-    .min(32, "Informe o código de acesso da equipe")
-    .max(512)
-    .regex(/^\S+$/, "O código não deve conter espaços"),
-});
 export const accessPolicySchema = z.object({ requiresTeamAccess: z.boolean() });
-export const teamAccessResultSchema = z.object({ canEdit: z.literal(true) });
 
 const optionalValue = z
   .string()
