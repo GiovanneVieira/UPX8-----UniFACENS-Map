@@ -29,7 +29,7 @@ export default function AppTabs() {
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="ar">
-        <NativeTabs.Trigger.Label>Realidade aumentada</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label>AR</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           src={require('@/assets/images/tabIcons/explore.png')}
           renderingMode="template"

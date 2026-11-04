@@ -44,10 +44,13 @@ export async function hydrateAuth(): Promise<void> {
     }
   } catch (err) {
     console.warn('[auth] Falha ao hidratar sessão:', err);
+  } finally {
+    // CRÍTICO: o gate do _layout depende de `hydrated` em TODOS os caminhos —
+    // sem isto, uma sessão válida deixa o app preso na splash (tela vazia).
+    useAuthStore.getState().setHydrated(true);
   }
   await clearJwt();
   useAuthStore.getState().clearSession();
-  useAuthStore.getState().setHydrated(true);
 }
 
 export async function signInWithEmail(email: string, password: string): Promise<AuthUser> {

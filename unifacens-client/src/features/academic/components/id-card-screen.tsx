@@ -18,20 +18,20 @@ export function IdCardScreen() {
   ];
 
   return (
-    <View className="flex-1 bg-slate-950" style={{ paddingTop: insets.top }}>
+    <View className="flex-1 bg-neutral-950" style={{ paddingTop: insets.top }}>
       <View className="flex-row items-center gap-3 px-4 pb-4">
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Voltar"
           onPress={() => router.back()}
-          className="min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-slate-900 active:opacity-80">
+          className="min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-neutral-900 active:opacity-80">
           <Text className="text-xl text-white">‹</Text>
         </Pressable>
         <Text className="text-2xl font-bold text-white">Carteirinha</Text>
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
-        <View className="gap-4 rounded-3xl border border-sky-800 bg-gradient-to-br from-sky-950 via-slate-900 to-slate-950 p-6">
+        <View className="gap-4 rounded-3xl border border-sky-800 bg-gradient-to-br from-sky-950 via-neutral-900 to-neutral-950 p-6">
           <View className="flex-row items-center justify-between">
             <Text className="text-2xl font-black tracking-wide text-white">UniFACENS</Text>
             <View className="rounded-full bg-sky-900/80 px-3 py-1">
@@ -43,21 +43,21 @@ export function IdCardScreen() {
             <Text className="text-xl font-bold text-white">{user?.name ?? '—'}</Text>
             {rows.map((row) => (
               <View key={row.label} className="gap-0.5">
-                <Text className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <Text className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
                   {row.label}
                 </Text>
-                <Text className="text-base font-semibold text-slate-100">{row.value}</Text>
+                <Text className="text-base font-semibold text-neutral-100">{row.value}</Text>
               </View>
             ))}
             <View className="gap-0.5">
-              <Text className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <Text className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
                 E-mail
               </Text>
-              <Text className="text-sm font-semibold text-slate-100">{user?.email ?? '—'}</Text>
+              <Text className="text-sm font-semibold text-neutral-100">{user?.email ?? '—'}</Text>
             </View>
           </View>
         </View>
-        <Text className="mt-4 text-center text-xs text-slate-500">
+        <Text className="mt-4 text-center text-xs text-neutral-500">
           Dados de demonstração — carteirinha oficial disponível no app UniFacens.
         </Text>
       </ScrollView>

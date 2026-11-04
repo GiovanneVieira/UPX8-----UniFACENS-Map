@@ -18,13 +18,13 @@ export function ServicesScreen() {
   const insets = useSafeAreaInsets();
 
   return (
-    <View className="flex-1 bg-slate-950" style={{ paddingTop: insets.top }}>
+    <View className="flex-1 bg-neutral-950" style={{ paddingTop: insets.top }}>
       <View className="flex-row items-center gap-3 px-4 pb-3">
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Voltar"
           onPress={() => router.back()}
-          className="min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-slate-900 active:opacity-80">
+          className="min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-neutral-900 active:opacity-80">
           <Text className="text-xl text-white">‹</Text>
         </Pressable>
         <Text className="text-2xl font-bold text-white">Serviços</Text>
@@ -39,9 +39,9 @@ export function ServicesScreen() {
               onPress={() => {
                 if (service.id === 'carteirinha') router.push('/carteirinha');
               }}
-              className="flex-1 items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/60 px-2 py-4 active:opacity-80">
+              className="flex-1 items-center gap-2 rounded-2xl border border-neutral-800 bg-neutral-900/60 px-2 py-4 active:opacity-80">
               <Text className="text-2xl">{QUICK_ICONS[service.id] ?? '🔗'}</Text>
-              <Text className="text-center text-xs font-semibold text-slate-200">
+              <Text className="text-center text-xs font-semibold text-neutral-200">
                 {service.title}
               </Text>
             </Pressable>
@@ -53,16 +53,16 @@ export function ServicesScreen() {
           {MOCK_ACCESS_SERVICES.map((service) => (
             <View
               key={service.id}
-              className="flex-row items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              className="flex-row items-center justify-between rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
               <View className="flex-1 gap-0.5">
                 <Text className="text-base font-bold text-white">{service.title}</Text>
-                <Text className="text-sm text-slate-400">{service.subtitle}</Text>
+                <Text className="text-sm text-neutral-400">{service.subtitle}</Text>
               </View>
-              <Text className="text-2xl text-slate-600">›</Text>
+              <Text className="text-2xl text-neutral-600">›</Text>
             </View>
           ))}
         </View>
-        <Text className="mt-4 text-center text-xs text-slate-500">
+        <Text className="mt-4 text-center text-xs text-neutral-500">
           Serviços institucionais disponíveis no app oficial UniFacens.
         </Text>
       </ScrollView>

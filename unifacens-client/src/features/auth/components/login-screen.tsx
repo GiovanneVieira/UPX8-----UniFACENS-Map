@@ -179,7 +179,7 @@ export function LoginScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      className="flex-1 bg-slate-950">
+      className="flex-1 bg-neutral-950">
       <ScrollView
         contentContainerStyle={{ paddingTop: insets.top + 48, paddingBottom: insets.bottom + 32 }}
         keyboardShouldPersistTaps="handled">
@@ -187,12 +187,12 @@ export function LoginScreen() {
           <View className="items-center gap-2">
             <Text className="text-4xl font-bold text-white">UniFACENS</Text>
             <Text className="text-lg font-semibold text-sky-300">Map</Text>
-            <Text className="mt-2 text-center text-sm text-slate-300">
+            <Text className="mt-2 text-center text-sm text-neutral-300">
               Navegação pelo campus e realidade aumentada. Entre para começar.
             </Text>
           </View>
 
-          <View className="flex-row rounded-xl bg-slate-900 p-1">
+          <View className="flex-row rounded-xl bg-neutral-900 p-1">
             {(
               [
                 ['sign-in', 'Entrar'],
@@ -214,7 +214,7 @@ export function LoginScreen() {
 
           {mode === 'sign-in' ? <SignInBody /> : <SignUpBody />}
 
-          <Text className="text-center text-xs text-slate-500">
+          <Text className="text-center text-xs text-neutral-500">
             A criação de pontos e locais é exclusiva da equipe (administradores).
           </Text>
         </View>
