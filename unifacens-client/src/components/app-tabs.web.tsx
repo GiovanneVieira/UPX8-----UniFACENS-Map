@@ -21,10 +21,13 @@ export default function AppTabs() {
           accessibilityLabel="Navegação principal"
           className="absolute bottom-3 w-11/12 max-w-lg self-center flex-row justify-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 p-2"
         >
-          <TabTrigger name="home" href="/" asChild>
+          <TabTrigger name="index" href="/(tabs)/index" asChild>
+            <TabButton>Início</TabButton>
+          </TabTrigger>
+          <TabTrigger name="campus" href="/(tabs)/campus" asChild>
             <TabButton>Campus</TabButton>
           </TabTrigger>
-          <TabTrigger name="ar" href="/ar" asChild>
+          <TabTrigger name="ar" href="/(tabs)/ar" asChild>
             <TabButton>Realidade aumentada</TabButton>
           </TabTrigger>
         </View>

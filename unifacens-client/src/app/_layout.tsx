@@ -7,10 +7,10 @@ import { useColorScheme, LogBox } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useShallow } from 'zustand/react/shallow';
 
-import AppTabs from '@/components/app-tabs';
 import { useAuthStore } from '@/stores/use-auth-store';
 import { LoginScreen } from '@/features/auth/components/login-screen';
 import { hydrateAuth } from '@/features/auth/services/auth-session';
+import { Stack } from 'expo-router';
 
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -56,11 +56,13 @@ export default function TabLayout() {
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
           <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            {/* AuthGate: identidade primeiro — nada do app sem login */}
+            {/* AuthGate: identidade primeiro — nada do app sem login.
+                O Stack raiz permite empilhar /aulas, /notas, /faltas,
+                /carteirinha e /servicos sobre o grupo de abas (tabs). */}
             {!hydrated ? null : jwt === null ? (
               <LoginScreen />
             ) : (
-              <AppTabs />
+              <Stack screenOptions={{ headerShown: false }} />
             )}
           </ThemeProvider>
         </QueryClientProvider>
