@@ -18,7 +18,9 @@ export const ARReticle: React.FC<ARReticleProps> = ({ zoomLevel }) => {
       {isZoomed ? (
         <View style={styles.telescopicContainer}>
           <View style={styles.telescopicTag}>
-            <Text style={styles.telescopicTagText}>🎯 {zoomLevel.toFixed(1)}x MIRA DE PRECISÃO</Text>
+            <Text style={styles.telescopicTagText}>
+              {zoomLevel.toFixed(1)}x MIRA DE PRECISÃO
+            </Text>
           </View>
 
           <View style={styles.telescopicOuterRing}>

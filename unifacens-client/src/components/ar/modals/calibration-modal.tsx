@@ -1,5 +1,6 @@
 import React from 'react';
 import { Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { calculateDistance } from 'shared';
 import {
   type CampusLandmark,
@@ -46,7 +47,7 @@ export const CalibrationModal: React.FC<CalibrationModalProps> = ({
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
         <View style={styles.calibrationSheet}>
-          <Text style={styles.modalTitle}>📍 Calibração de Localização</Text>
+          <Text style={styles.modalTitle}>Calibração de Localização</Text>
           <Text style={styles.modalSubtitle}>
             Selecione sua entrada ou marco de referência para zerar desvios de GPS. O SLAM manterá
             a precisão máxima.
@@ -54,9 +55,12 @@ export const CalibrationModal: React.FC<CalibrationModalProps> = ({
 
           {calibratedLandmark ? (
             <View style={styles.activeCalibrationBox}>
-              <Text style={styles.activeCalibrationTitle}>
-                ✅ Calibrado em: {calibratedLandmark.name}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                <Ionicons name="checkmark-circle" size={14} color="#34D399" />
+                <Text style={styles.activeCalibrationTitle}>
+                  Calibrado em: {calibratedLandmark.name}
+                </Text>
+              </View>
               <TouchableOpacity onPress={handleReset} style={styles.resetCalibrationBtn}>
                 <Text style={styles.resetCalibrationBtnText}>Restaurar Sinal GPS</Text>
               </TouchableOpacity>

@@ -1,13 +1,14 @@
 import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MOCK_ACCESS_SERVICES, MOCK_QUICK_SERVICES } from '../mocks/data';
 
-const QUICK_ICONS: Record<string, string> = {
-  carteirinha: '🪪',
-  horas: '⏱️',
-  eventos: '📣',
-  noticias: '📰',
+const QUICK_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  carteirinha: 'card-outline',
+  horas: 'timer-outline',
+  eventos: 'megaphone-outline',
+  noticias: 'newspaper-outline',
 };
 
 /**
@@ -40,7 +41,11 @@ export function ServicesScreen() {
                 if (service.id === 'carteirinha') router.push('/carteirinha');
               }}
               className="flex-1 items-center gap-2 rounded-2xl border border-neutral-800 bg-neutral-900/60 px-2 py-4 active:opacity-80">
-              <Text className="text-2xl">{QUICK_ICONS[service.id] ?? '🔗'}</Text>
+              <Ionicons
+                name={QUICK_ICONS[service.id] ?? 'link-outline'}
+                size={26}
+                color="#D4D4D4"
+              />
               <Text className="text-center text-xs font-semibold text-neutral-200">
                 {service.title}
               </Text>

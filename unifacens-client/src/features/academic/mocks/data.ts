@@ -36,47 +36,40 @@ export const MOCK_SCHEDULE: ClassSlot[] = [
 export interface GradeSubject {
   id: string;
   discipline: string;
-  grades: Array<{ label: string; value: number | null }>;
-  average: number | null;
+  /** Avaliações do período letivo (AC1/AC2/AF/Sub/AG) — null = não lançada. */
+  ac1: number | null;
+  ac2: number | null;
+  af: number | null;
+  sub: number | null;
+  ag: number | null;
+  /** Média final — null enquanto incompleta. */
+  media: number | null;
 }
 
+/** Estrutura idêntica à tela de Notas do app oficial (colunas segmentadas). */
 export const MOCK_GRADES: Record<string, GradeSubject[]> = {
   '2026/2': [
-    {
-      id: 'g1',
-      discipline: 'Eletrônica Analógica',
-      grades: [
-        { label: 'P1', value: 7.5 },
-        { label: 'P2', value: 8.0 },
-        { label: 'Trabalho', value: 9.0 },
-      ],
-      average: 8.2,
-    },
-    {
-      id: 'g2',
-      discipline: 'Arquitetura de Computadores',
-      grades: [
-        { label: 'P1', value: 6.0 },
-        { label: 'P2', value: null },
-        { label: 'Trabalho', value: 7.5 },
-      ],
-      average: null,
-    },
+    { id: 'g1', discipline: 'Eletrônica Analógica', ac1: 7.75, ac2: null, af: null, sub: null, ag: null, media: null },
+    { id: 'g2', discipline: 'DevOps e QA', ac1: 10, ac2: null, af: null, sub: null, ag: null, media: null },
+    { id: 'g3', discipline: 'Reconhecimento de Padrões', ac1: 10, ac2: null, af: null, sub: null, ag: null, media: null },
+    { id: 'g4', discipline: 'UPX – Realidade Aumentada', ac1: 8.06, ac2: null, af: null, sub: null, ag: null, media: null },
   ],
 };
 
 export interface AttendanceSubject {
   id: string;
   discipline: string;
+  /** Faltas acumuladas sobre o total de aulas lançadas (barra azul da tela oficial). */
   absences: number;
-  limit: number;
+  total: number;
 }
 
 export const MOCK_ATTENDANCE: Record<string, AttendanceSubject[]> = {
   '2026/2': [
-    { id: 'a1', discipline: 'Eletrônica Analógica', absences: 2, limit: 12 },
-    { id: 'a2', discipline: 'Arquitetura de Computadores', absences: 0, limit: 10 },
-    { id: 'a3', discipline: 'Cálculo Numérico', absences: 4, limit: 12 },
+    { id: 'a1', discipline: 'Eletrônica Analógica', absences: 4, total: 20 },
+    { id: 'a2', discipline: 'DevOps e QA', absences: 4, total: 18 },
+    { id: 'a3', discipline: 'Reconhecimento de Padrões', absences: 0, total: 18 },
+    { id: 'a4', discipline: 'UPX – Realidade Aumentada', absences: 8, total: 28 },
   ],
 };
 

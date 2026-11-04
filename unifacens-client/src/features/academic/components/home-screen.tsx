@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/hooks/use-auth';
-import { nextClassOfToday } from '../mocks/data';
+import { MOCK_SCHEDULE, type ClassSlot, type WeekDay } from '../mocks/data';
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -20,6 +20,49 @@ function formattedDate(): string {
   }).format(new Date());
 }
 
+function todayClasses(): ClassSlot[] {
+  const map: Record<number, WeekDay> = { 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sab' };
+  const today = map[new Date().getDay()];
+  const slots = today ? MOCK_SCHEDULE.filter((c) => c.day === today) : [];
+  return slots.length > 0 ? slots : MOCK_SCHEDULE.slice(0, 2);
+}
+
+/** Card de aula do carrossel — layout do app oficial: título+chevron,
+ *  professor e sala com ícones, horário no canto inferior direito. */
+function ClassCarouselCard({ slot }: { slot: ClassSlot }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={() => router.push('/aulas')}
+      className="h-[190px] w-[79%] justify-between rounded-3xl bg-neutral-900 p-5 active:opacity-90">
+      <View>
+        <View className="flex-row items-center justify-between">
+          <Text className="flex-1 text-[22px] font-semibold text-neutral-200">
+            {slot.discipline}
+          </Text>
+          <Ionicons name="chevron-forward" size={22} color="#525252" />
+        </View>
+        <View className="mt-2 gap-1.5">
+          <View className="flex-row items-center gap-2">
+            <Ionicons name="person-outline" size={15} color="#8F8F8F" />
+            <Text className="text-[15px] text-neutral-400">{slot.teacher}</Text>
+          </View>
+          <View className="flex-row items-center gap-2">
+            <Ionicons name="location-outline" size={15} color="#8F8F8F" />
+            <Text className="flex-1 text-[15px] text-neutral-400" numberOfLines={1}>
+              {slot.room}
+            </Text>
+          </View>
+        </View>
+      </View>
+      <View className="flex-row items-center justify-end gap-1.5">
+        <Ionicons name="time-outline" size={14} color="#8F8F8F" />
+        <Text className="text-sm text-neutral-400">{slot.start}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 /**
  * Tela inicial — fidelidade visual ao app oficial UniFacens (dark neutro,
  * elevação por contraste tonal sem bordas, atalhos circulares, acento azul
@@ -28,7 +71,6 @@ function formattedDate(): string {
 export function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { user, isAdmin, signOut } = useAuth();
-  const nextClass = nextClassOfToday();
   const firstName = user?.name?.split(' ')[0] ?? 'estudante';
 
   const shortcuts = [
@@ -80,32 +122,22 @@ export function HomeScreen() {
           </Pressable>
         </View>
 
-        {/* Próxima aula — card destaque (carrossel no app oficial; v1 card único com peek visual) */}
-        {nextClass ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push('/aulas')}
-            className="rounded-3xl bg-neutral-900 p-6 active:opacity-90">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-[13px] font-medium uppercase tracking-wider text-blue-400">
-                Próxima aula · {nextClass.day}
-              </Text>
-              <Text className="text-xl text-neutral-500">›</Text>
-            </View>
-            <Text className="mt-2 text-[22px] font-semibold text-neutral-200">
-              {nextClass.discipline}
-            </Text>
-            <View className="mt-2 gap-1">
-              <Text className="text-base text-neutral-400">👤 {nextClass.teacher}</Text>
-              <Text className="text-base text-neutral-400">📍 {nextClass.room}</Text>
-              <Text className="text-base text-neutral-400">🕐 {nextClass.start} – {nextClass.end}</Text>
-            </View>
-            <View className="mt-4 flex-row justify-center gap-2">
-              <View className="h-1.5 w-1.5 rounded-full bg-blue-500" />
-              <View className="h-1.5 w-1.5 rounded-full bg-neutral-700" />
-            </View>
-          </Pressable>
-        ) : null}
+        {/* Carrossel free-scroll das aulas do dia (espelho oficial: peek do
+            próximo card, horário no canto inferior direito, sem dots) */}
+        <View className="gap-3">
+          <Text className="text-[13px] font-medium uppercase tracking-wider text-blue-400">
+            Aulas de hoje
+          </Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 12, paddingRight: 20 }}
+            className="-mx-5 px-5">
+            {todayClasses().map((slot) => (
+              <ClassCarouselCard key={slot.id} slot={slot} />
+            ))}
+          </ScrollView>
+        </View>
 
         {/* Atalhos circulares (espelho UniFacens) */}
         <View className="flex-row justify-between px-2">

@@ -208,7 +208,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         // scaleFactor = clamp(1.0, 6.0, sqrt(dist) * 0.45)
         const scaleFactor = Math.max(1.0, Math.min(6.0, Math.sqrt(Math.max(1, dist)) * 0.45));
         const distLabel = Math.round(dist);
-        const labelText = `${anchor.name}\n📍 ${distLabel} m`;
+        const labelText = `${anchor.name}\n${distLabel} m`;
 
         return (
           <ViroNode

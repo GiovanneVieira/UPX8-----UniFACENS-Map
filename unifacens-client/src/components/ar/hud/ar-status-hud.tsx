@@ -1,5 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface ARStatusHudProps {
@@ -46,15 +47,20 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           onPress={onOpenCalibration}
           activeOpacity={0.8}
           style={[styles.hudPill, calibratedLabel ? styles.hudPillEmerald : styles.hudPillCyan]}>
+          {calibratedLabel ? (
+            <Ionicons name="location" size={13} color="#34D399" />
+          ) : (
+            <Ionicons name="navigate-outline" size={13} color="#67E8F9" />
+          )}
           <Text style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}>
-            {calibratedLabel ?? `📡 GPS ±${Math.round(gpsAccuracyMeters)}m`}
+            {calibratedLabel ?? `GPS ±${Math.round(gpsAccuracyMeters)}m`}
           </Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.hudActionsRow}>
         <TouchableOpacity onPress={onOpenCalibration} activeOpacity={0.75} style={styles.hudIconBtn}>
-          <Text style={styles.hudIconBtnText}>📍</Text>
+          <Ionicons name="location-outline" size={18} color="#67E8F9" />
         </TouchableOpacity>
         <TouchableOpacity
           onPress={onRefresh}
@@ -64,7 +70,7 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           {isFetching ? (
             <ActivityIndicator size="small" color="#60A5FA" />
           ) : (
-            <Text style={styles.hudIconBtnText}>🔄</Text>
+            <Ionicons name="refresh" size={18} color="#67E8F9" />
           )}
         </TouchableOpacity>
       </View>

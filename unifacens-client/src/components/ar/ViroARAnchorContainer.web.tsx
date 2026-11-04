@@ -85,7 +85,7 @@ export const ViroARAnchorContainer: FC = () => {
                 }}>
                 <View style={{ flex: 1, marginRight: 12 }}>
                   <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>
-                    ☁️ {item.name}
+                    {item.name}
                   </Text>
                   {item.description ? (
                     <Text style={{ color: '#94a3b8', fontSize: 12, marginTop: 2 }}>

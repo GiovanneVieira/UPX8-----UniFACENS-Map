@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const RADIUS_OPTIONS = [
@@ -28,8 +29,9 @@ export const ARCompassRadiusBar: React.FC<ARCompassRadiusBarProps> = ({
     <View
       style={[styles.subHudBar, { top: Math.max(insets.top + 52, 92) }]}
       pointerEvents="box-none">
-      <View style={styles.compassBadge}>
-        <Text style={styles.compassBadgeText}>🧭 {heading}° N</Text>
+      <View style={[styles.compassBadge, { flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
+        <Ionicons name="compass-outline" size={13} color="#38BDF8" />
+        <Text style={styles.compassBadgeText}>{heading}° N</Text>
       </View>
 
       <View style={styles.radiusSelector}>

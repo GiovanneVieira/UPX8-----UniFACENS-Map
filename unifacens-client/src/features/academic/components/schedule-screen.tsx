@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MOCK_SCHEDULE, WEEK_DAYS, type ClassSlot, type WeekDay } from '../mocks/data';
@@ -11,24 +12,34 @@ function TimelineCard({ slot }: { slot: ClassSlot }) {
         <Text className="flex-1 text-lg font-semibold text-neutral-200">
           {slot.discipline}
         </Text>
-        <Text className="text-xl text-neutral-600">›</Text>
+        <Ionicons name="chevron-forward" size={20} color="#404040" />
       </View>
-      <View className="mt-2 gap-1">
-        <Text className="text-sm text-neutral-400">👤 {slot.teacher}</Text>
-        <Text className="text-sm text-neutral-400">📍 {slot.room}</Text>
+      <View className="mt-2 gap-1.5">
+        <View className="flex-row items-center gap-2">
+          <Ionicons name="person-outline" size={14} color="#8F8F8F" />
+          <Text className="text-sm text-neutral-400">{slot.teacher}</Text>
+        </View>
+        <View className="flex-row items-center gap-2">
+          <Ionicons name="location-outline" size={14} color="#8F8F8F" />
+          <Text className="flex-1 text-sm text-neutral-400" numberOfLines={1}>
+            {slot.room}
+          </Text>
+        </View>
       </View>
       <View className="mt-4 flex-row gap-2">
         <Pressable
           accessibilityRole="button"
           onPress={() => router.navigate('/(tabs)/campus')}
-          className="min-h-[40px] flex-1 items-center justify-center rounded-full bg-blue-600 px-3 active:opacity-80">
-          <Text className="text-xs font-semibold text-white">🗺️ Ver no campus</Text>
+          className="min-h-[40px] flex-1 flex-row items-center justify-center gap-1.5 rounded-full bg-blue-600 px-3 active:opacity-80">
+          <Ionicons name="map-outline" size={13} color="#FFFFFF" />
+          <Text className="text-xs font-semibold text-white">Ver no campus</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
           onPress={() => router.navigate('/(tabs)/ar')}
-          className="min-h-[40px] flex-1 items-center justify-center rounded-full border border-blue-500/60 px-3 active:opacity-80">
-          <Text className="text-xs font-semibold text-blue-400">📱 Navegar em AR</Text>
+          className="min-h-[40px] flex-1 flex-row items-center justify-center gap-1.5 rounded-full border border-blue-500/60 px-3 active:opacity-80">
+          <Ionicons name="cube-outline" size={13} color="#60A5FA" />
+          <Text className="text-xs font-semibold text-blue-400">Navegar em AR</Text>
         </Pressable>
       </View>
     </View>
@@ -94,9 +105,10 @@ export function ScheduleScreen() {
           Última sincronização às 14:14 · dados de demonstração
         </Text>
         {slots.length === 0 ? (
-          <Text className="py-12 text-center text-sm text-neutral-500">
-            Sem aulas neste dia 🎉
-          </Text>
+          <View className="items-center gap-2 py-12">
+            <Ionicons name="happy-outline" size={32} color="#525252" />
+            <Text className="text-sm text-neutral-500">Sem aulas neste dia</Text>
+          </View>
         ) : (
           <View className="gap-6">
             {slots.map((slot, index) => (
@@ -104,7 +116,7 @@ export function ScheduleScreen() {
                 {/* Gutter da timeline: badge circular + horário + linha conectando */}
                 <View className="items-center">
                   <View className="h-11 w-11 items-center justify-center rounded-full bg-neutral-800">
-                    <Text className="text-sm">🕐</Text>
+                    <Ionicons name="time-outline" size={18} color="#8F8F8F" />
                   </View>
                   <Text className="mt-1 text-xs text-neutral-500">{slot.start}</Text>
                   {index < slots.length - 1 ? (

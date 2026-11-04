@@ -1,5 +1,6 @@
 import React, { FC, useState, useRef, useCallback, useMemo } from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -383,7 +384,7 @@ export const ViroARAnchorContainer: FC = () => {
   );
 
   const calibratedLabel = projection.calibratedLandmark
-    ? `📍 ${projection.calibratedLandmark.name.split(' ')[0]}`
+    ? projection.calibratedLandmark.name.split(' ')[0]
     : null;
 
   const originLabel = projection.calibratedLandmark
@@ -412,8 +413,9 @@ export const ViroARAnchorContainer: FC = () => {
 
       {/* Indicador de Zoom Ativo */}
       {zoomLevel > 1.05 ? (
-        <View style={[styles.zoomBadge, { top: Math.max(insets.top + 98, 138) }]} pointerEvents="none">
-          <Text style={styles.zoomBadgeText}>🔍 Zoom: {zoomLevel.toFixed(1)}x</Text>
+        <View style={[styles.zoomBadge, { top: Math.max(insets.top + 98, 138), flexDirection: 'row', alignItems: 'center', gap: 5 }]} pointerEvents="none">
+          <Ionicons name="search" size={12} color="#FFFFFF" />
+          <Text style={styles.zoomBadgeText}>Zoom: {zoomLevel.toFixed(1)}x</Text>
         </View>
       ) : null}
 
@@ -446,16 +448,18 @@ export const ViroARAnchorContainer: FC = () => {
           <TouchableOpacity
             onPress={handleOpenPlaceModal}
             activeOpacity={0.85}
-            style={styles.placeAnchorButton}>
-            <Text style={styles.placeAnchorButtonText}>📍 Marcar Ponto no Espaço</Text>
+            style={[styles.placeAnchorButton, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }]}>
+            <Ionicons name="location-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.placeAnchorButtonText}>Marcar Ponto no Espaço</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <View
-          style={[styles.readOnlyBadge, { bottom: Math.max(insets.bottom + 16, 28) }]}
+          style={[styles.readOnlyBadge, { bottom: Math.max(insets.bottom + 16, 28), flexDirection: 'row', alignItems: 'center', gap: 6 }]}
           pointerEvents="none">
+          <Ionicons name="eye-outline" size={13} color="#94A3B8" />
           <Text style={styles.readOnlyBadgeText}>
-            👁️ Modo leitura — edição exclusiva da equipe
+            Modo leitura — edição exclusiva da equipe
           </Text>
         </View>
       )}

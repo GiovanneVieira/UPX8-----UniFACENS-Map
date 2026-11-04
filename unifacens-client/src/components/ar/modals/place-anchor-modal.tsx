@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 interface PlaceAnchorModalProps {
   visible: boolean;
@@ -74,8 +75,14 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
             </Text>
 
             <View style={styles.geoInfoBox}>
-              <Text style={styles.geoInfoRow}>📍 Origem: {originLabel}</Text>
-              <Text style={styles.geoInfoRow}>🧭 Bússola: {heading}° (Norte Verdadeiro)</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="location-outline" size={13} color="#38BDF8" />
+                <Text style={styles.geoInfoRow}>Origem: {originLabel}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="compass-outline" size={13} color="#38BDF8" />
+                <Text style={styles.geoInfoRow}>Bússola: {heading}° (Norte Verdadeiro)</Text>
+              </View>
             </View>
 
             <View style={styles.distanceAdjustPanel}>
