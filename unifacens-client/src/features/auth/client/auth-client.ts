@@ -18,6 +18,9 @@ export const JWT_STORAGE_KEY = 'unifacens.jwt';
  */
 export const authClient = createAuthClient({
   baseURL: getApiBaseUrl(),
+  // O handler better-auth da API é montado em /auth (ver better-auth.ts no
+  // servidor); sem isto o client chamaria o default /api/auth → 404.
+  basePath: '/auth',
   plugins: [
     expoClient({
       scheme: 'unifacensclient',

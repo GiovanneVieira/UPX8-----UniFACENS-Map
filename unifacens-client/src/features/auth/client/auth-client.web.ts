@@ -9,6 +9,7 @@ export const JWT_STORAGE_KEY = 'unifacens.jwt';
  */
 export const authClient = createAuthClient({
   baseURL: getApiBaseUrl(),
+  basePath: '/auth',
 });
 
 export async function saveJwt(_token: string): Promise<void> {

@@ -15,8 +15,8 @@ export function useSignInForm(onAuthenticated: () => void) {
       try {
         await mutation.mutateAsync(credentials);
         onAuthenticated();
-      } catch {
-        /* A mensagem da mutação é exibida sem expor credenciais. */
+      } catch (err) {
+        console.warn('[auth] signIn falhou:', err);
       }
     },
   });

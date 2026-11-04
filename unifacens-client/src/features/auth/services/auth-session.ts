@@ -52,6 +52,10 @@ export async function hydrateAuth(): Promise<void> {
 export async function signInWithEmail(email: string, password: string): Promise<AuthUser> {
   const { error } = await authClient.signIn.email({ email, password });
   if (error) {
+    console.warn(
+      '[auth] signIn.email erro:',
+      JSON.stringify({ code: (error as { code?: string }).code, status: (error as { status?: number }).status, message: error.message }),
+    );
     throw new Error(
       error.code === 'INVALID_EMAIL_OR_PASSWORD'
         ? 'E-mail ou senha incorretos.'
