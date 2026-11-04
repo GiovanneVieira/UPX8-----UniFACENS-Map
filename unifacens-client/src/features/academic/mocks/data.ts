@@ -28,6 +28,8 @@ export const MOCK_SCHEDULE: ClassSlot[] = [
   { id: 'm3', day: 'Ter', start: '19:00', end: '19:50', discipline: 'Arquitetura de Computadores', teacher: 'Ana Souza', room: 'C12' },
   { id: 'm4', day: 'Ter', start: '21:00', end: '21:50', discipline: 'Arquitetura de Computadores', teacher: 'Ana Souza', room: 'C12' },
   { id: 'm5', day: 'Qua', start: '19:00', end: '19:50', discipline: 'Cálculo Numérico', teacher: 'Marcos Lima', room: 'B08' },
+  { id: 'm5b', day: 'Qua', start: '21:00', end: '21:50', discipline: 'Cálculo Numérico', teacher: 'Marcos Lima', room: 'B08' },
+  { id: 'm5c', day: 'Qua', start: '21:00', end: '21:50', discipline: 'Banco de Dados', teacher: 'Rafael Paz', room: 'D27 - Lab de Eletrônica de Potência' },
   { id: 'm6', day: 'Qui', start: '19:00', end: '19:50', discipline: 'Banco de Dados', teacher: 'Rafael Paz', room: 'C36' },
   { id: 'm7', day: 'Qui', start: '21:00', end: '21:50', discipline: 'Banco de Dados', teacher: 'Rafael Paz', room: 'D27 - Lab de Eletrônica de Potência' },
   { id: 'm8', day: 'Sex', start: '19:00', end: '19:50', discipline: 'Engenharia de Software', teacher: 'Ana Souza', room: 'C12' },

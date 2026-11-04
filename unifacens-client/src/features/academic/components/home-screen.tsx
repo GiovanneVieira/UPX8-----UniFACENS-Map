@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -30,11 +30,13 @@ function todayClasses(): ClassSlot[] {
 /** Card de aula do carrossel — layout do app oficial: título+chevron,
  *  professor e sala com ícones, horário no canto inferior direito. */
 function ClassCarouselCard({ slot }: { slot: ClassSlot }) {
+  const { width } = useWindowDimensions();
   return (
     <Pressable
       accessibilityRole="button"
       onPress={() => router.push('/aulas')}
-      className="h-[190px] w-[79%] justify-between rounded-3xl bg-neutral-900 p-5 active:opacity-90">
+      style={{ width: Math.round(width * 0.79) }}
+      className="h-[190px] justify-between rounded-3xl bg-neutral-900 p-5 active:opacity-90">
       <View>
         <View className="flex-row items-center justify-between">
           <Text className="flex-1 text-[22px] font-semibold text-neutral-200">
