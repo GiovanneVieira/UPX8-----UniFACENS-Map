@@ -440,7 +440,7 @@ export const ViroARAnchorContainer: FC = () => {
       />
 
       {/* Barra Inferior com o Botão Principal — exclusiva de administradores
-          (contas comuns navegam em modo leitura, plano v2/D2) */}
+          (contas comuns navegam em modo leitura, sem feedback visual extra) */}
       {isAdmin ? (
         <View
           style={[styles.bottomBar, { bottom: Math.max(insets.bottom + 16, 28) }]}
@@ -453,16 +453,7 @@ export const ViroARAnchorContainer: FC = () => {
             <Text style={styles.placeAnchorButtonText}>Marcar Ponto no Espaço</Text>
           </TouchableOpacity>
         </View>
-      ) : (
-        <View
-          style={[styles.readOnlyBadge, { bottom: Math.max(insets.bottom + 16, 28), flexDirection: 'row', alignItems: 'center', gap: 6 }]}
-          pointerEvents="none">
-          <Ionicons name="eye-outline" size={13} color="#94A3B8" />
-          <Text style={styles.readOnlyBadgeText}>
-            Modo leitura — edição exclusiva da equipe
-          </Text>
-        </View>
-      )}
+      ) : null}
 
       <CalibrationModal
         visible={calibrationModalVisible}
@@ -557,22 +548,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
-  },
-  readOnlyBadge: {
-    position: 'absolute',
-    bottom: 28,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  readOnlyBadgeText: {
-    color: '#94A3B8',
-    fontSize: 12,
-    fontWeight: '600',
   },
 });
 

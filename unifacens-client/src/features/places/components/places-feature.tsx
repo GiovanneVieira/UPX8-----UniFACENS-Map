@@ -151,14 +151,18 @@ export function PlacesFeature() {
                 {places.length} de {total} locais
               </Text>
             ) : null}
-            {places.map((place) => (
-              <PlaceCard
-                key={place.id}
-                place={place}
-                selected={selectedId === place.id}
-                onSelect={() => selectPlace(place.id)}
-              />
-            ))}
+            {places.length > 0 ? (
+              <View className="gap-3">
+                {places.map((place) => (
+                  <PlaceCard
+                    key={place.id}
+                    place={place}
+                    selected={selectedId === place.id}
+                    onSelect={() => selectPlace(place.id)}
+                  />
+                ))}
+              </View>
+            ) : null}
             {query.hasNextPage ? (
               <Pressable
                 accessibilityRole="button"

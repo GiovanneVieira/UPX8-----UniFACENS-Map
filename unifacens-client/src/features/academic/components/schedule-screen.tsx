@@ -8,12 +8,20 @@ import { MOCK_SCHEDULE, WEEK_DAYS, type ClassSlot, type WeekDay } from '../mocks
 function TimelineCard({ slot }: { slot: ClassSlot }) {
   return (
     <View className="flex-1 rounded-3xl border border-neutral-800 bg-neutral-900 p-5">
-      <View className="flex-row items-start justify-between">
+      <Pressable
+        accessibilityRole="button"
+        onPress={() =>
+          router.push({
+            pathname: '/aula-detalhe',
+            params: { discipline: slot.discipline },
+          })
+        }
+        className="flex-row items-start justify-between active:opacity-80">
         <Text className="flex-1 text-lg font-semibold text-neutral-200">
           {slot.discipline}
         </Text>
         <Ionicons name="chevron-forward" size={20} color="#404040" />
-      </View>
+      </Pressable>
       <View className="mt-2 gap-1.5">
         <View className="flex-row items-center gap-2">
           <Ionicons name="person-outline" size={14} color="#8F8F8F" />

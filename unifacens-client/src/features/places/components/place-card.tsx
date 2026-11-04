@@ -1,7 +1,9 @@
+import React from 'react';
 import { Pressable, Text, View } from "react-native";
 import { PLACE_CATEGORY_LABELS, PLACE_SOURCE_LABELS, type Place } from "shared";
 
-export function PlaceCard({
+/** Card memoizado: a lista re-renderiza apenas quando place/selected mudam. */
+export const PlaceCard = React.memo(function PlaceCard({
   place,
   selected,
   onSelect,
@@ -45,4 +47,4 @@ export function PlaceCard({
       </Text>
     </Pressable>
   );
-}
+});

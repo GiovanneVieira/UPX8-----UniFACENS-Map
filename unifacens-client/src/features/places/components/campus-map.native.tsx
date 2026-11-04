@@ -1,39 +1,61 @@
-import { Platform, View } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
-import { CAMPUS_MAP_CENTER, type CampusMapProps } from "./campus-map.types";
-import { MapUnavailable } from "./map-unavailable";
+import React, { useEffect, useRef } from 'react';
+import { Platform, View } from 'react-native';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { CAMPUS_MAP_CENTER, type CampusMapProps } from './campus-map.types';
+import { MapUnavailable } from './map-unavailable';
 
-export default function CampusMap({
+/**
+ * Mapa do campus — otimizado para 60 FPS:
+ * - `initialRegion` imutável (NUNCA `region` controlado: cada re-render do
+ *   explorer — ex.: cada tecla digitada na busca — faria o mapa "voar");
+ * - Centralização via `animateCamera` imperativa apenas quando o local
+ *   selecionado muda de fato;
+ * - `React.memo`: markers só re-criam quando a lista filtrada muda.
+ */
+const CampusMapBase = React.memo(function CampusMap({
   places,
   selectedPlace,
   onSelect,
 }: CampusMapProps) {
+  const mapRef = useRef<MapView>(null);
+  const lastSelectedId = useRef<string | null>(null);
+
+  useEffect(() => {
+    const id = selectedPlace?.id ?? null;
+    if (id && id !== lastSelectedId.current && selectedPlace) {
+      lastSelectedId.current = id;
+      mapRef.current?.animateCamera(
+        {
+          center: {
+            latitude: selectedPlace.latitude,
+            longitude: selectedPlace.longitude,
+          },
+          zoom: 17,
+        },
+        { duration: 350 },
+      );
+    }
+  }, [selectedPlace]);
+
   if (
-    Platform.OS === "android" &&
+    Platform.OS === 'android' &&
     !process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY
   )
     return <MapUnavailable />;
-  const center = selectedPlace ?? CAMPUS_MAP_CENTER;
+
   return (
-    <View className="h-72 overflow-hidden rounded-2xl border border-slate-700">
+    <View className="h-72 overflow-hidden rounded-2xl border border-neutral-800">
       <MapView
-        provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
+        ref={mapRef}
+        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         style={{ flex: 1 }}
         initialRegion={{
           ...CAMPUS_MAP_CENTER,
           latitudeDelta: 0.008,
           longitudeDelta: 0.008,
         }}
-        region={
-          selectedPlace
-            ? {
-                latitude: center.latitude,
-                longitude: center.longitude,
-                latitudeDelta: 0.003,
-                longitudeDelta: 0.003,
-              }
-            : undefined
-        }
+        rotateEnabled={false}
+        toolbarEnabled={false}
       >
         {places.map((place) => (
           <Marker
@@ -44,9 +66,9 @@ export default function CampusMap({
             }}
             title={place.name}
             description={
-              place.source === "demo"
-                ? "Exemplo ilustrativo"
-                : "Consulte as informações na lista"
+              place.source === 'demo'
+                ? 'Exemplo ilustrativo'
+                : 'Consulte as informações na lista'
             }
             onPress={() => onSelect(place.id)}
           />
@@ -54,4 +76,6 @@ export default function CampusMap({
       </MapView>
     </View>
   );
-}
+});
+
+export default CampusMapBase;

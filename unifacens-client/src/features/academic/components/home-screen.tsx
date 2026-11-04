@@ -1,9 +1,11 @@
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/hooks/use-auth';
 import { MOCK_SCHEDULE, type ClassSlot, type WeekDay } from '../mocks/data';
+import { HomeDrawer } from './home-drawer';
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -34,7 +36,12 @@ function ClassCarouselCard({ slot }: { slot: ClassSlot }) {
   return (
     <Pressable
       accessibilityRole="button"
-      onPress={() => router.push('/aulas')}
+      onPress={() =>
+        router.push({
+          pathname: '/aula-detalhe',
+          params: { discipline: slot.discipline },
+        })
+      }
       style={{ width: Math.round(width * 0.79) }}
       className="h-[190px] justify-between rounded-3xl bg-neutral-900 p-5 active:opacity-90">
       <View>
@@ -72,7 +79,8 @@ function ClassCarouselCard({ slot }: { slot: ClassSlot }) {
  */
 export function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { user, isAdmin, signOut } = useAuth();
+  const { user, isAdmin } = useAuth();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const firstName = user?.name?.split(' ')[0] ?? 'estudante';
 
   const shortcuts = [
@@ -87,21 +95,32 @@ export function HomeScreen() {
       className="flex-1 bg-neutral-950"
       contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 32 }}>
       <View className="w-full max-w-5xl self-center gap-7 px-5">
-        {/* Header: saudação + data (espelho UniFacens) */}
-        <View className="gap-1">
-          <View className="flex-row items-end justify-between gap-3">
-            <Text className="flex-1 text-3xl font-bold text-white">
+        {/* Header: menu + saudação + sino (espelho UniFacens) */}
+        <View className="flex-row items-center gap-3">
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Abrir menu"
+            onPress={() => setDrawerOpen(true)}
+            className="h-11 w-11 items-center justify-center rounded-full bg-neutral-800 active:opacity-80">
+            <Ionicons name="menu" size={22} color="#D4D4D4" />
+          </Pressable>
+          <View className="flex-1 gap-0.5">
+            <Text className="text-2xl font-bold text-white">
               {greeting()}, {firstName}
             </Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => void signOut()}
-              className="min-h-[44px] items-center justify-center rounded-full bg-neutral-800 px-5 active:opacity-80">
-              <Text className="text-sm font-medium text-neutral-300">Sair</Text>
-            </Pressable>
+            <Text className="text-sm text-neutral-400">{formattedDate()}</Text>
           </View>
-          <Text className="text-base text-neutral-400">{formattedDate()}</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Notificações"
+            onPress={() => router.push('/notificacoes')}
+            className="relative h-11 w-11 items-center justify-center rounded-full bg-neutral-800 active:opacity-80">
+            <Ionicons name="notifications-outline" size={20} color="#D4D4D4" />
+            <View className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-blue-400" />
+          </Pressable>
         </View>
+
+        <HomeDrawer visible={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
         {/* Badge de role + carteirinha */}
         <View className="flex-row items-center gap-2">

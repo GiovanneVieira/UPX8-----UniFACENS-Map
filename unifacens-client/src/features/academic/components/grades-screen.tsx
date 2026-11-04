@@ -7,7 +7,7 @@ import { MOCK_ATTENDANCE, MOCK_GRADES } from '../mocks/data';
 
 type Mode = 'grades' | 'attendance';
 
-const PERIODS = ['2026/1', '2026/2'];
+const PERIODS = ['2024/2', '2025/1', '2025/2', '2026/1', '2026/2'];
 const GRADE_COLUMNS = ['AC1', 'AC2', 'AF', 'Sub', 'AG'] as const;
 
 function formatGrade(value: number | null): string {
@@ -84,7 +84,16 @@ export function GradesScreen({ mode }: { mode: Mode }) {
         {isGrades ? (
           <View className="gap-4">
             {grades.map((subject) => (
-              <View key={subject.id} className="gap-2">
+              <Pressable
+                key={subject.id}
+                accessibilityRole="button"
+                onPress={() =>
+                  router.push({
+                    pathname: '/aula-detalhe',
+                    params: { discipline: subject.discipline },
+                  })
+                }
+                className="gap-2 active:opacity-80">
                 <Text className="text-sm font-medium text-neutral-400">
                   {subject.discipline}
                 </Text>
@@ -118,7 +127,7 @@ export function GradesScreen({ mode }: { mode: Mode }) {
                     </Text>
                   </View>
                 </View>
-              </View>
+              </Pressable>
             ))}
           </View>
         ) : (
@@ -126,9 +135,16 @@ export function GradesScreen({ mode }: { mode: Mode }) {
             {attendance.map((subject) => {
               const ratio = subject.total > 0 ? subject.absences / subject.total : 0;
               return (
-                <View
+                <Pressable
                   key={subject.id}
-                  className="gap-2 rounded-3xl bg-neutral-900 p-5">
+                  accessibilityRole="button"
+                  onPress={() =>
+                    router.push({
+                      pathname: '/aula-detalhe',
+                      params: { discipline: subject.discipline },
+                    })
+                  }
+                  className="gap-2 rounded-3xl bg-neutral-900 p-5 active:opacity-80">
                   <View className="flex-row items-center justify-between">
                     <Text className="flex-1 text-base font-semibold text-white">
                       {subject.discipline}
@@ -144,7 +160,7 @@ export function GradesScreen({ mode }: { mode: Mode }) {
                       style={{ width: `${Math.min(100, ratio * 100)}%` }}
                     />
                   </View>
-                </View>
+                </Pressable>
               );
             })}
           </View>
