@@ -40,13 +40,15 @@ export function PlacesFeature() {
                 Encontre salas, prédios e serviços cadastrados pela equipe.
               </Text>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => explorer.setEditor("create")}
-              className="min-h-[44px] justify-center rounded-xl bg-blue-700 px-4 active:opacity-80"
-            >
-              <Text className="font-semibold text-white">Cadastrar local</Text>
-            </Pressable>
+            {isAdmin ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => explorer.setEditor("create")}
+                className="min-h-[44px] justify-center rounded-xl bg-blue-700 px-4 active:opacity-80"
+              >
+                <Text className="font-semibold text-white">Cadastrar local</Text>
+              </Pressable>
+            ) : null}
           </View>
           {explorer.notice ? (
             <Text

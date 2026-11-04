@@ -12,6 +12,7 @@ import {
   useDeleteAnchorMutation,
   anchorKeys,
 } from '@/features/anchors/queries/use-anchors-query';
+import { useAuth } from '@/features/auth/hooks/use-auth';
 import type { CampusLandmark } from '@/constants/campus-landmarks';
 import { ViroARAnchorScene } from './ViroARAnchorScene';
 import { useARGeolocation } from './hooks/use-ar-geolocation';
@@ -59,6 +60,8 @@ export const ViroARAnchorContainer: FC = () => {
   const geo = useARGeolocation();
   const projection = useARProjection({ serverAnchors: anchorsQuery.data, geo });
   const { zoomLevel, applyZoom, pinchGesture, arZoomAnimatedStyle } = useARZoom();
+  // Capacidade por role: somente admins criam/excluem âncoras (plano v2/D2)
+  const { isAdmin } = useAuth();
 
   // ── Estado de UI local ────────────────────────────────────────────────────
   const [radiusFilter, setRadiusFilter] = useState<number>(0);
@@ -314,30 +317,37 @@ export const ViroARAnchorContainer: FC = () => {
         `ID: ${anchor.cloudAnchorId}${descInfo}${distInfo}${geoInfo}\nPosição AR: [${arPos[0].toFixed(2)}, ${arPos[1].toFixed(2)}, ${arPos[2].toFixed(2)}]m`,
         [
           { text: 'Fechar', style: 'cancel' },
-          {
-            text: 'Excluir Ponto',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                setIsSaving(true);
-                await deleteAnchorMutation.mutateAsync(anchor.id);
-                projection.removeAnchorLocal(anchor.id);
-                Alert.alert('Sucesso', 'Ponto excluído.');
-              } catch (err: any) {
-                console.warn('[AR] Erro ao excluir âncora:', err);
-                Alert.alert(
-                  'Erro ao excluir',
-                  err instanceof Error ? err.message : 'Não foi possível excluir o ponto.',
-                );
-              } finally {
-                setIsSaving(false);
-              }
-            },
-          },
+          // Exclusão exclusiva de administradores (read-only para contas comuns)
+          ...(isAdmin
+            ? [
+                {
+                  text: 'Excluir Ponto',
+                  style: 'destructive' as const,
+                  onPress: () => {
+                    void (async () => {
+                      try {
+                        setIsSaving(true);
+                        await deleteAnchorMutation.mutateAsync(anchor.id);
+                        projection.removeAnchorLocal(anchor.id);
+                        Alert.alert('Sucesso', 'Ponto excluído.');
+                      } catch (err: any) {
+                        console.warn('[AR] Erro ao excluir âncora:', err);
+                        Alert.alert(
+                          'Erro ao excluir',
+                          err instanceof Error ? err.message : 'Não foi possível excluir o ponto.',
+                        );
+                      } finally {
+                        setIsSaving(false);
+                      }
+                    })();
+                  },
+                },
+              ]
+            : []),
         ],
       );
     },
-    [createAnchorMutation, deleteAnchorMutation, projection],
+    [createAnchorMutation, deleteAnchorMutation, projection, isAdmin],
   );
 
   // Filtro de raio aplicado às âncoras passadas à cena AR
@@ -427,17 +437,28 @@ export const ViroARAnchorContainer: FC = () => {
         onRadiusChange={setRadiusFilter}
       />
 
-      {/* Barra Inferior com o Botão Principal */}
-      <View
-        style={[styles.bottomBar, { bottom: Math.max(insets.bottom + 16, 28) }]}
-        pointerEvents="box-none">
-        <TouchableOpacity
-          onPress={handleOpenPlaceModal}
-          activeOpacity={0.85}
-          style={styles.placeAnchorButton}>
-          <Text style={styles.placeAnchorButtonText}>📍 Marcar Ponto no Espaço</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Barra Inferior com o Botão Principal — exclusiva de administradores
+          (contas comuns navegam em modo leitura, plano v2/D2) */}
+      {isAdmin ? (
+        <View
+          style={[styles.bottomBar, { bottom: Math.max(insets.bottom + 16, 28) }]}
+          pointerEvents="box-none">
+          <TouchableOpacity
+            onPress={handleOpenPlaceModal}
+            activeOpacity={0.85}
+            style={styles.placeAnchorButton}>
+            <Text style={styles.placeAnchorButtonText}>📍 Marcar Ponto no Espaço</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View
+          style={[styles.readOnlyBadge, { bottom: Math.max(insets.bottom + 16, 28) }]}
+          pointerEvents="none">
+          <Text style={styles.readOnlyBadgeText}>
+            👁️ Modo leitura — edição exclusiva da equipe
+          </Text>
+        </View>
+      )}
 
       <CalibrationModal
         visible={calibrationModalVisible}
@@ -532,6 +553,22 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  readOnlyBadge: {
+    position: 'absolute',
+    bottom: 28,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  readOnlyBadgeText: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
 

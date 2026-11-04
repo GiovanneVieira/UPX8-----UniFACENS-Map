@@ -1,13 +1,5 @@
-import { PlacesFeature } from "@/features/places/components/places-feature";
-import Head from "expo-router/head";
+import { HomeScreen } from "@/features/academic/components/home-screen";
 
-export default function HomeScreen() {
-  return (
-    <>
-      <Head>
-        <title>UniFACENS Map — Locais do campus</title>
-      </Head>
-      <PlacesFeature />
-    </>
-  );
+export default function HomeTab() {
+  return <HomeScreen />;
 }
