@@ -300,3 +300,21 @@ No Android (`android.hardware.camera2`), **apenas um cliente pode acessar o sens
    - `j` no terminal do Metro abre o **React Native DevTools** (console, breakpoints, inspeção de componentes). *A aba Network não captura `fetch` nativo.*
    - `adb logcat -s ReactNativeJS:V` expõe `console.log/warn/error` do JS rodando no dispositivo.
    - **scrcpy** (espelho + controle do aparelho) e **mobile-mcp** (hierarquia de elementos, toques, logs, crashes) operam em paralelo com o Metro via ADB.
+
+---
+
+## 13. Autenticação better-auth (JWT, Roles e Secret Storage)
+
+### 🏛️ Arquitetura
+- **Servidor (`unifacens-api`)**: instância central em `src/common/auth/better-auth.ts` com plugins `admin` (roles `user`/`admin`, default `user`) e `jwt` (expiração **24h**, issuer/audience = `BETTER_AUTH_URL`, payload com `role`/`email`/`name`). Handler montado em `/auth/*` via `toNodeHandler` — exige `bodyParser: false` no Nest com `express.json()` restaurado para as demais rotas.
+- **Guard global (`JwtAdminGuard`)**: leituras (GET/HEAD/OPTIONS) e `@PublicContribution()` seguem abertas; **toda mutation exige `Authorization: Bearer <JWT>` válido em qualquer ambiente** (sem bypass em dev), com `role === 'admin'` obrigatória (role `user` → 403). Validação local via `jose/createRemoteJWKSet` contra `GET /auth/jwks` (cache e rotação automáticos). `@AdminOnly()` estende a exigência para leituras.
+- **Mobile (`unifacens-client`)**: `authClient` (better-auth/react + `expoClient`) persiste os cookies de sessão no **expo-secure-store** (Android Keystore/iOS Keychain); o JWT é obtido em `GET /auth/token` (`authClient.$fetch` anexa a sessão) e guardado sob `unifacens.jwt`. `hydrateAuth()` (chamado no `_layout`) faz o **refresh silencioso** do JWT enquanto a sessão viva. Login é **aberto a todos** (`useAuth().canEdit` só para admins).
+- **Endpoints de contrato**: `GET /access` (política) e `GET /access/session` (`@AdminOnly`, valida o JWT e retorna `{ canEdit, user }`).
+
+### ⚠️ Invariáveis Críticas
+1. **NUNCA anote o tipo de retorno de `createBetterAuth` manualmente** — a inferência preserva os endpoints tipados dos plugins (`auth.api.createUser` etc.).
+2. O `drizzleAdapter` exige o mapa de tabelas: `schema: { user, session, account, verification, jwks }` (colunas conforme better-auth 1.7, incluindo `session.impersonatedBy`, `jwks.crv`, `jwks.expiresAt`).
+3. O client `jwtClient()` do better-auth 1.7 **não expõe mais `getToken()`** — use `authClient.$fetch('/token')`.
+4. Rebuild do container da API é **obrigatório** ao adicionar dependências (o volume sincroniza `src/`, mas `node_modules` é local do container).
+5. Seed do admin (`npm run db:seed-admin`): idempotente, roda no `start:dev` com `ADMIN_EMAIL`/`ADMIN_PASSWORD`; produção valida `BETTER_AUTH_SECRET` como obrigatório.
+6. Tabelas de auth são criadas por migrations Drizzle idempotentes — nunca use `npx auth generate` sobre o schema sem revisar o SQL gerado (padrão `IF NOT EXISTS` do §5).
