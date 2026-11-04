@@ -8,9 +8,9 @@ describe('Variáveis de publicação', () => {
       CORS_ORIGINS: [],
     });
   });
-  it('recusa produção sem banco e sem código de equipe', () => {
+  it('recusa produção sem banco e sem secret do better-auth', () => {
     expect(() => loadApiConfig({ NODE_ENV: 'production' })).toThrow(
-      'DATABASE_URL, TEAM_ACCESS_TOKEN',
+      'DATABASE_URL, BETTER_AUTH_SECRET',
     );
   });
   it('valida configuração sem expor credenciais nos erros', () => {
@@ -20,7 +20,7 @@ describe('Variáveis de publicação', () => {
       loadApiConfig({
         NODE_ENV: 'production',
         DATABASE_URL: `invalid://${secret}`,
-        TEAM_ACCESS_TOKEN: secret,
+        BETTER_AUTH_SECRET: secret,
       });
     } catch (error) {
       message = (error as Error).message;
@@ -34,7 +34,7 @@ describe('Variáveis de publicação', () => {
     const config = loadApiConfig({
       NODE_ENV: 'production',
       DATABASE_URL: url,
-      TEAM_ACCESS_TOKEN: 'fixture-token-with-at-least-32-characters',
+      BETTER_AUTH_SECRET: 'fixture-secret-with-at-least-32-characters',
       CORS_ORIGINS: 'https://campus.example.org/, https://outro.example.org',
     });
     expect(config.DATABASE_URL).toBe(url);

@@ -38,7 +38,7 @@ export class AnchorsController {
   }
 
   @Post()
-  @ApiBearerAuth('team-access')
+  @ApiBearerAuth('admin-bearer')
   @ApiOperation({ summary: 'Cadastrar nova âncora com Cloud Anchor ID gerado pelo ARCore' })
   async createAnchor(
     @Body(new ZodValidationPipe(createAnchorSchema)) dto: CreateAnchorDto,
@@ -47,7 +47,7 @@ export class AnchorsController {
   }
 
   @Delete(':id')
-  @ApiBearerAuth('team-access')
+  @ApiBearerAuth('admin-bearer')
   @ApiOperation({ summary: 'Excluir uma âncora do catálogo pelo ID' })
   async deleteAnchor(@Param('id') id: string): Promise<{ success: boolean }> {
     const res = await this.anchorsService.remove(id);

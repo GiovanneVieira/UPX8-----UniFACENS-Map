@@ -47,7 +47,7 @@ async function bootstrap() {
       'Catálogo de locais do campus UniFACENS e âncoras espaciais para realidade aumentada',
     )
     .setVersion('1.0.0')
-    .addBearerAuth({ type: 'http', scheme: 'bearer' }, 'team-access')
+    .addBearerAuth({ type: 'http', scheme: 'bearer' }, 'admin-bearer')
     .addTag('access', 'Acesso da equipe para edição e exclusão')
     .addTag('anchors', 'Gerenciamento de Google ARCore Cloud Anchors')
     .addTag(

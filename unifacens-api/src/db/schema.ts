@@ -68,6 +68,8 @@ export const session = pgTable('session', {
   userId: text('user_id')
     .notNull()
     .references(() => user.id, { onDelete: 'cascade' }),
+  // Admin plugin (impersonação)
+  impersonatedBy: text('impersonated_by'),
 });
 
 export const account = pgTable('account', {
@@ -115,6 +117,8 @@ export const jwks = pgTable('jwks', {
   publicKey: text('public_key').notNull(),
   privateKey: text('private_key'),
   alg: text('alg'),
+  crv: text('crv'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

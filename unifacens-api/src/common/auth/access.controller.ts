@@ -1,29 +1,37 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { ApiEnvironment } from 'shared';
-import { API_CONFIG } from '../../config/runtime-config.js';
-import { TeamOnly } from './access.decorators.js';
+import type { Request } from 'express';
+import { AdminOnly } from './access.decorators.js';
+import type { AuthenticatedAdmin } from './jwt-admin.guard.js';
 
 @ApiTags('access')
 @Controller('access')
 export class AccessController {
-  constructor(@Inject(API_CONFIG) private readonly config: ApiEnvironment) {}
-
   @Get()
-  @ApiOperation({ summary: 'Consultar a política de acesso ao catálogo' })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Consultar a política de acesso ao catálogo (edição exige admin)',
+  })
   policy() {
-    return {
-      requiresTeamAccess:
-        this.config.NODE_ENV === 'production' ||
-        Boolean(this.config.TEAM_ACCESS_TOKEN),
-    };
+    // Autenticação é obrigatória para mutations em qualquer ambiente (D3).
+    return { requiresTeamAccess: true as const };
   }
 
-  @Get('team')
-  @TeamOnly()
-  @ApiBearerAuth('team-access')
-  @ApiOperation({ summary: 'Validar o código de acesso da equipe' })
-  verify() {
-    return { canEdit: true as const };
+  @Get('session')
+  @AdminOnly()
+  @ApiBearerAuth('admin-bearer')
+  @ApiOperation({ summary: 'Validar o JWT de administrador e obter a identidade' })
+  @HttpCode(HttpStatus.OK)
+  session(@Req() request: Request) {
+    const admin = request.admin as AuthenticatedAdmin;
+    return {
+      canEdit: true as const,
+      user: {
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        role: admin.role,
+      },
+    };
   }
 }

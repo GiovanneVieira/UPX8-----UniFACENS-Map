@@ -43,9 +43,6 @@ export const apiEnvironmentSchema = z
     PORT: z.coerce.number().int().min(1).max(65535).default(8000),
     DATABASE_URL: databaseUrl,
     DATABASE_MIGRATION_URL: databaseUrl,
-    TEAM_ACCESS_TOKEN: optionalValue.pipe(
-      z.string().min(32).max(512).regex(/^\S+$/).optional(),
-    ),
     BETTER_AUTH_URL: httpUrl.default("http://127.0.0.1:8000"),
     BETTER_AUTH_SECRET: optionalValue.pipe(
       z

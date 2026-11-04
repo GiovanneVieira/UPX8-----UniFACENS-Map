@@ -4,6 +4,13 @@ import { admin } from 'better-auth/plugins';
 import { jwt } from 'better-auth/plugins/jwt';
 import type { ApiEnvironment } from 'shared';
 import type { DrizzleDB } from '../../db/database.module.js';
+import {
+  user,
+  session,
+  account,
+  verification,
+  jwks,
+} from '../../db/schema.js';
 
 export const BETTER_AUTH = Symbol('BETTER_AUTH');
 
@@ -26,7 +33,10 @@ export function createBetterAuth(
   return betterAuth({
     baseURL: config.BETTER_AUTH_URL,
     basePath: '/auth',
-    database: drizzleAdapter(db, { provider: 'pg' }),
+    database: drizzleAdapter(db, {
+      provider: 'pg',
+      schema: { user, session, account, verification, jwks },
+    }),
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
@@ -45,6 +55,7 @@ export function createBetterAuth(
           definePayload: ({ user }) => ({
             role: (user as { role?: string }).role ?? 'user',
             email: user.email,
+            name: user.name,
           }),
         },
       }),
