@@ -69,7 +69,7 @@ function getFreePort(): Promise<number> {
   });
 }
 
-describe('Autenticação better-auth: JWT, roles admin e PostgreSQL real', () => {
+describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real', () => {
   let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let app: NestExpressApplication;
@@ -102,6 +102,10 @@ describe('Autenticação better-auth: JWT, roles admin e PostgreSQL real', () =>
     const body = (await tokenResponse.json()) as { token: string };
     expect(body.token).toBeTruthy();
     return body.token;
+  }
+
+  function bearer(jwt: string): Record<string, string> {
+    return { authorization: `Bearer ${jwt}` };
   }
 
   beforeAll(async () => {
@@ -200,22 +204,21 @@ describe('Autenticação better-auth: JWT, roles admin e PostgreSQL real', () =>
     expect(adminJwt).not.toEqual(commonJwt);
   });
 
-  it('mantém política, leituras e contribuição públicas', async () => {
+  it('mantém públicas apenas política e healthcheck', async () => {
     const policy = await fetch(`${baseUrl}/access`);
     expect(policy.status).toBe(200);
     expect(await policy.json()).toEqual({ requiresTeamAccess: true });
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+  });
 
-    expect((await fetch(`${baseUrl}/places`)).status).toBe(200);
-    expect((await fetch(`${baseUrl}/anchors`)).status).toBe(200);
+  it('exige JWT para leituras (401 sem token) e libera para qualquer role', async () => {
+    expect((await fetch(`${baseUrl}/places`)).status).toBe(401);
+    expect((await fetch(`${baseUrl}/anchors`)).status).toBe(401);
 
-    const created = await fetch(`${baseUrl}/places`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(publicPlace),
-    });
-    expect(created.status).toBe(201);
-    const createdBody = (await created.json()) as { verificationStatus: string };
-    expect(createdBody.verificationStatus).toBe('unverified');
+    const asUser = await fetch(`${baseUrl}/places`, { headers: bearer(commonJwt) });
+    expect(asUser.status).toBe(200);
+    const asAdmin = await fetch(`${baseUrl}/anchors`, { headers: bearer(adminJwt) });
+    expect(asAdmin.status).toBe(200);
   });
 
   it('bloqueia mutations sem token (401) também em desenvolvimento', async () => {
@@ -257,22 +260,33 @@ describe('Autenticação better-auth: JWT, roles admin e PostgreSQL real', () =>
     expect(response.status).toBe(401);
   });
 
-  it('proíbe edição para contas comuns (role user → 403)', async () => {
-    const response = await fetch(`${baseUrl}/anchors`, {
+  it('proíbe qualquer mutation para contas comuns (role user → 403)', async () => {
+    const createPlace = await fetch(`${baseUrl}/places`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${commonJwt}`,
+        ...bearer(commonJwt),
+      },
+      body: JSON.stringify(publicPlace),
+    });
+    expect(createPlace.status).toBe(403);
+
+    const createAnchor = await fetch(`${baseUrl}/anchors`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...bearer(commonJwt),
       },
       body: JSON.stringify(anchorPayload),
     });
-    expect(response.status).toBe(403);
+    expect(createAnchor.status).toBe(403);
     expect(await db.select().from(anchors)).toHaveLength(0);
+    expect(await db.select().from(places)).toHaveLength(0);
   });
 
   it('valida a sessão de admin e libera o CRUD completo de âncoras', async () => {
     const session = await fetch(`${baseUrl}/access/session`, {
-      headers: { authorization: `Bearer ${adminJwt}` },
+      headers: bearer(adminJwt),
     });
     expect(session.status).toBe(200);
     const sessionBody = (await session.json()) as {
@@ -287,7 +301,7 @@ describe('Autenticação better-auth: JWT, roles admin e PostgreSQL real', () =>
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${adminJwt}`,
+        ...bearer(adminJwt),
       },
       body: JSON.stringify(anchorPayload),
     });
@@ -298,15 +312,56 @@ describe('Autenticação better-auth: JWT, roles admin e PostgreSQL real', () =>
       (
         await fetch(`${baseUrl}/anchors/${createdBody.id}`, {
           method: 'DELETE',
-          headers: { authorization: `Bearer ${adminJwt}` },
+          headers: bearer(adminJwt),
         })
       ).status,
     ).toBe(200);
     expect(await db.select().from(anchors)).toHaveLength(0);
   });
 
+  it('admin cadastra, edita e exclui locais do catálogo', async () => {
+    const created = await fetch(`${baseUrl}/places`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...bearer(adminJwt),
+      },
+      body: JSON.stringify(publicPlace),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = (await created.json()) as {
+      id: string;
+      verificationStatus: string;
+    };
+    expect(createdBody.verificationStatus).toBe('unverified');
+
+    const updated = await fetch(`${baseUrl}/places/${createdBody.id}`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        ...bearer(adminJwt),
+      },
+      body: JSON.stringify({ name: 'Exemplo revisado' }),
+    });
+    expect(updated.status).toBe(200);
+
+    expect(
+      (
+        await fetch(`${baseUrl}/places/${createdBody.id}`, {
+          method: 'DELETE',
+          headers: bearer(adminJwt),
+        })
+      ).status,
+    ).toBe(200);
+    expect(await db.select().from(places)).toHaveLength(0);
+  });
+
   it('exige admin mesmo em rota de leitura marcada com @AdminOnly sem token', async () => {
     expect((await fetch(`${baseUrl}/access/session`)).status).toBe(401);
+    expect(
+      (await fetch(`${baseUrl}/access/session`, { headers: bearer(commonJwt) }))
+        .status,
+    ).toBe(403);
   });
 
   it('permite preflight somente para a origem configurada, com Authorization', async () => {
@@ -324,7 +379,7 @@ describe('Autenticação better-auth: JWT, roles admin e PostgreSQL real', () =>
       'Authorization',
     );
 
-    const rejected = await fetch(`${baseUrl}/places`, {
+    const rejected = await fetch(`${baseUrl}/access`, {
       headers: { origin: 'https://outra-origem.example.org' },
     });
     expect(rejected.status).toBe(200);

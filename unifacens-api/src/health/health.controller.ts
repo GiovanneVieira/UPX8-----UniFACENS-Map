@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type pg from 'pg';
+import { Public } from '../common/auth/access.decorators.js';
 
 @ApiTags('health')
 @Controller('health')
@@ -13,6 +14,7 @@ export class HealthController {
   constructor(@Inject('PG_POOL') private readonly pool: pg.Pool) {}
 
   @Get()
+  @Public()
   @ApiOperation({ summary: 'Verificar disponibilidade da API e do banco' })
   async check() {
     try {

@@ -11,9 +11,9 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Request } from 'express';
 import type { ApiEnvironment } from 'shared';
 import { API_CONFIG } from '../../config/runtime-config.js';
-import { ADMIN_ONLY, PUBLIC_CONTRIBUTION } from './access.decorators.js';
+import { ADMIN_ONLY, PUBLIC } from './access.decorators.js';
 
-export interface AuthenticatedAdmin {
+export interface AuthenticatedUser {
   id: string;
   name: string;
   email: string;
@@ -22,25 +22,23 @@ export interface AuthenticatedAdmin {
 
 declare module 'express-serve-static-core' {
   interface Request {
-    admin?: AuthenticatedAdmin;
+    user?: AuthenticatedUser;
   }
 }
 
 const BEARER_PATTERN = /^Bearer (\S+)$/;
-const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
+const MUTATION_METHODS = ['POST', 'PATCH', 'PUT', 'DELETE'];
 
 /**
- * Guard global de autorização (substitui o TeamAccessGuard).
+ * Guard global de autenticação/autorização (modelo: identidade primeiro).
  *
- * Regras (decisões D2–D4 do plano de auth):
- * - Leituras (GET/HEAD/OPTIONS) e `@PublicContribution()` permanecem abertas;
- * - Toda mutation exige `Authorization: Bearer <JWT>` válido — também em
- *   desenvolvimento (D3: comportamento prod-like, sem bypass);
+ * Regras (plano de auth v2 — JWT em tudo):
+ * - `@Public()` isenta a rota (política de acesso, healthcheck);
+ * - Toda outra rota exige `Authorization: Bearer <JWT>` válido — em qualquer
+ *   ambiente (sem bypass em dev), para leituras e mutations;
+ * - Mutations (POST/PATCH/PUT/DELETE) e `@AdminOnly()` exigem `role === 'admin'`;
  * - O JWT é emitido pelo plugin `jwt` do better-auth e validado localmente
- *   contra o JWKS de `/auth/jwks` (jose com cache e rotação automática);
- * - Apenas `role === 'admin'` pode mutar (D4: login aberto a todos, edição
- *   exclusiva da equipe);
- * - `@AdminOnly()` exige admin mesmo em rotas de leitura.
+ *   contra o JWKS de `/auth/jwks` (jose com cache e rotação automáticos).
  */
 @Injectable()
 export class JwtAdminGuard implements CanActivate {
@@ -62,24 +60,15 @@ export class JwtAdminGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
     const targets = [context.getHandler(), context.getClass()];
-    const adminOnly =
-      this.reflector.getAllAndOverride<boolean>(ADMIN_ONLY, targets) ?? false;
-    const publicContribution = this.reflector.getAllAndOverride<boolean>(
-      PUBLIC_CONTRIBUTION,
-      targets,
-    );
-
-    if (
-      !adminOnly &&
-      (SAFE_METHODS.includes(request.method) || publicContribution)
-    ) {
-      return true;
-    }
+    const isPublic =
+      this.reflector.getAllAndOverride<boolean>(PUBLIC, targets) ?? false;
+    // Preflight CORS não carrega credenciais — sempre liberado.
+    if (isPublic || request.method === 'OPTIONS') return true;
 
     const token = request.headers.authorization?.match(BEARER_PATTERN)?.[1];
     if (!token) {
       throw new UnauthorizedException(
-        'Autenticação necessária. Faça login com uma conta de administrador.',
+        'Autenticação necessária. Faça login para acessar.',
       );
     }
 
@@ -95,17 +84,20 @@ export class JwtAdminGuard implements CanActivate {
       );
     }
 
-    if (payload.role !== 'admin') {
+    const adminOnly =
+      this.reflector.getAllAndOverride<boolean>(ADMIN_ONLY, targets) ?? false;
+    const isMutation = MUTATION_METHODS.includes(request.method);
+    if ((isMutation || adminOnly) && payload.role !== 'admin') {
       throw new ForbiddenException('Operação exclusiva de administradores.');
     }
 
     const nameClaim = payload.name;
     const emailClaim = payload.email;
-    request.admin = {
+    request.user = {
       id: payload.sub ?? '',
       name: typeof nameClaim === 'string' ? nameClaim : '',
       email: typeof emailClaim === 'string' ? emailClaim : '',
-      role: payload.role,
+      role: typeof payload.role === 'string' ? payload.role : 'user',
     };
     return true;
   }

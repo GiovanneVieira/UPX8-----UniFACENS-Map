@@ -28,7 +28,6 @@ import {
 } from 'shared';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
 import { PlacesService } from './places.service.js';
-import { PublicContribution } from '../../common/auth/access.decorators.js';
 import { ApiBearerAuth } from '@nestjs/swagger';
 
 @ApiTags('places')
@@ -55,10 +54,9 @@ export class PlacesController {
   }
 
   @Post()
-  @PublicContribution()
+  @ApiBearerAuth('admin-bearer')
   @ApiOperation({
-    summary:
-      'Cadastrar local como ainda não verificado, sem depender de uma âncora AR',
+    summary: 'Cadastrar local (exclusivo de administradores)',
   })
   @ApiBody({
     schema: z.toJSONSchema(createPlaceSchema, {
@@ -70,7 +68,7 @@ export class PlacesController {
   }
 
   @Patch(':id')
-  @ApiBearerAuth('team-access')
+  @ApiBearerAuth('admin-bearer')
   @ApiOperation({
     summary: 'Atualizar um local e invalidar sua verificação anterior',
   })
@@ -87,7 +85,7 @@ export class PlacesController {
   }
 
   @Delete(':id')
-  @ApiBearerAuth('team-access')
+  @ApiBearerAuth('admin-bearer')
   @ApiOperation({ summary: 'Excluir um local do catálogo' })
   remove(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.service.remove(id);
