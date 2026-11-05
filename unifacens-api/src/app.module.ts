@@ -5,6 +5,7 @@ import { AppService } from './app.service.js';
 import { DatabaseModule } from './db/database.module.js';
 import { AnchorsModule } from './anchors/anchors.module.js';
 import { PlacesModule } from './modules/places/places.module.js';
+import { RoutingModule } from './modules/routing/routing.module.js';
 import { RuntimeConfigModule } from './config/runtime-config.js';
 import { AccessModule } from './common/auth/access.module.js';
 import { HealthController } from './health/health.controller.js';
@@ -25,6 +26,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AccessModule,
     AnchorsModule,
     PlacesModule,
+    RoutingModule,
     ...(hasObserveKeys
       ? [
           ObserveModule.forRoot({

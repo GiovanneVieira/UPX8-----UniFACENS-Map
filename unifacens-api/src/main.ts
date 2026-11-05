@@ -7,11 +7,18 @@ import {
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import express from 'express';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { AppModule, ObserveInstrument } from './app.module.js';
 import { API_CONFIG } from './config/runtime-config.js';
 import type { ApiEnvironment } from 'shared';
 import { configureHttp } from './config/configure-http.js';
 import { BETTER_AUTH, type BetterAuthInstance } from './common/auth/better-auth.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UPLOADS_DIR = path.resolve(__dirname, '../uploads');
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
@@ -38,6 +45,7 @@ async function bootstrap() {
   // para as rotas fora de /auth, montadas depois do handler.
   const expressInstance = app.getHttpAdapter().getInstance();
   expressInstance.use('/auth', toNodeHandler(auth));
+  expressInstance.use('/uploads', express.static(UPLOADS_DIR, { fallthrough: false }));
   expressInstance.use(express.json({ limit: '1mb' }));
 
   // Configuração OpenAPI / Swagger

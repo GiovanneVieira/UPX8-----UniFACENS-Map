@@ -8,6 +8,7 @@ import {
   boolean,
   index,
   check,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -16,6 +17,9 @@ export const anchors = pgTable('anchors', {
   name: text('name').notNull(),
   cloudAnchorId: text('cloud_anchor_id').notNull(),
   description: text('description'),
+  longDescription: text('long_description'),
+  images: jsonb('images').$type<string[]>().default([]),
+  placeId: uuid('place_id'),
   positionX: doublePrecision('position_x'),
   positionY: doublePrecision('position_y'),
   positionZ: doublePrecision('position_z'),
@@ -119,6 +123,37 @@ export const jwks = pgTable('jwks', {
   alg: text('alg'),
   crv: text('crv'),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Malha caminhável do campus (C2 do plano de navegação AR)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Obstáculos físicos do campus (footprints de prédios, água, áreas restritas). */
+export const campusObstacles = pgTable('campus_obstacles', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  category: text('category').notNull().default('building'),
+  polygon: jsonb('polygon').$type<Array<[number, number]>>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Entradas de prédios — destinos privilegiados para navegação até a porta. */
+export const campusEntrances = pgTable('campus_entrances', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  latitude: doublePrecision('latitude').notNull(),
+  longitude: doublePrecision('longitude').notNull(),
+  altitude: doublePrecision('altitude'),
+  accessible: boolean('accessible').default(true),
+  obstacleId: text('obstacle_id').references(() => campusObstacles.id, {
+    onDelete: 'set null',
+  }),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

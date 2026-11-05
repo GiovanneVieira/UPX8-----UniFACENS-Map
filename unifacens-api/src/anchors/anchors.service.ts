@@ -1,9 +1,16 @@
 import { Injectable, Inject, OnModuleInit } from '@nestjs/common';
 import { eq, desc } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DRIZZLE } from '../db/database.module.js';
 import type { DrizzleDB } from '../db/database.module.js';
 import { anchors } from '../db/schema.js';
-import type { Anchor, CreateAnchorDto } from 'shared';
+import type { Anchor, AnchorDetail, CreateAnchorDto } from 'shared';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UPLOADS_ROOT = path.resolve(__dirname, '../../../uploads');
 
 @Injectable()
 export class AnchorsService implements OnModuleInit {
@@ -23,27 +30,13 @@ export class AnchorsService implements OnModuleInit {
       .from(anchors)
       .orderBy(desc(anchors.createdAt));
 
-    return records.map((record) => ({
-      id: record.id,
-      name: record.name,
-      cloudAnchorId: record.cloudAnchorId,
-      description: record.description ?? null,
-      position:
-        record.positionX !== null && record.positionY !== null && record.positionZ !== null
-          ? [record.positionX, record.positionY, record.positionZ]
-          : null,
-      latitude: record.latitude ?? null,
-      longitude: record.longitude ?? null,
-      altitude: record.altitude ?? null,
-      heading: record.heading ?? null,
-      createdAt: record.createdAt.toISOString(),
-    }));
+    return records.map((record) => this.mapToAnchor(record));
   }
 
   /**
-   * Busca uma âncora específica por ID.
+   * Busca uma âncora específica por ID (com imagens e detalhe enriquecido).
    */
-  async findById(id: string): Promise<Anchor | null> {
+  async findById(id: string): Promise<AnchorDetail | null> {
     const [record] = await this.db
       .select()
       .from(anchors)
@@ -51,22 +44,7 @@ export class AnchorsService implements OnModuleInit {
       .limit(1);
 
     if (!record) return null;
-
-    return {
-      id: record.id,
-      name: record.name,
-      cloudAnchorId: record.cloudAnchorId,
-      description: record.description ?? null,
-      position:
-        record.positionX !== null && record.positionY !== null && record.positionZ !== null
-          ? [record.positionX, record.positionY, record.positionZ]
-          : null,
-      latitude: record.latitude ?? null,
-      longitude: record.longitude ?? null,
-      altitude: record.altitude ?? null,
-      heading: record.heading ?? null,
-      createdAt: record.createdAt.toISOString(),
-    };
+    return this.mapToDetail(record);
   }
 
   /**
@@ -89,21 +67,40 @@ export class AnchorsService implements OnModuleInit {
       })
       .returning();
 
-    return {
-      id: inserted.id,
-      name: inserted.name,
-      cloudAnchorId: inserted.cloudAnchorId,
-      description: inserted.description ?? null,
-      position:
-        inserted.positionX !== null && inserted.positionY !== null && inserted.positionZ !== null
-          ? [inserted.positionX, inserted.positionY, inserted.positionZ]
-          : null,
-      latitude: inserted.latitude ?? null,
-      longitude: inserted.longitude ?? null,
-      altitude: inserted.altitude ?? null,
-      heading: inserted.heading ?? null,
-      createdAt: inserted.createdAt.toISOString(),
-    };
+    return this.mapToAnchor(inserted);
+  }
+
+  /**
+   * Salva imagens em disco (/uploads/anchors/:id/) e atualiza o JSONB images.
+   */
+  async addImages(id: string, buffers: Buffer[], mimetypes: string[]): Promise<string[]> {
+    const [record] = await this.db
+      .select()
+      .from(anchors)
+      .where(eq(anchors.id, id))
+      .limit(1);
+    if (!record) return [];
+
+    const anchorDir = path.join(UPLOADS_ROOT, 'anchors', id);
+    fs.mkdirSync(anchorDir, { recursive: true });
+
+    const existing: string[] = Array.isArray(record.images) ? record.images : [];
+    const newPaths: string[] = [];
+
+    for (let i = 0; i < buffers.length; i++) {
+      const ext = mimetypes[i] === 'image/png' ? 'png' : mimetypes[i] === 'image/webp' ? 'webp' : 'jpg';
+      const filename = `${randomUUID()}.${ext}`;
+      fs.writeFileSync(path.join(anchorDir, filename), buffers[i]);
+      newPaths.push(`/uploads/anchors/${id}/${filename}`);
+    }
+
+    const updatedImages = [...existing, ...newPaths];
+    await this.db
+      .update(anchors)
+      .set({ images: updatedImages })
+      .where(eq(anchors.id, id));
+
+    return updatedImages;
   }
 
   /**
@@ -116,6 +113,33 @@ export class AnchorsService implements OnModuleInit {
       .returning();
 
     return { success: deleted.length > 0 };
+  }
+
+  private mapToAnchor(record: typeof anchors.$inferSelect): Anchor {
+    return {
+      id: record.id,
+      name: record.name,
+      cloudAnchorId: record.cloudAnchorId,
+      description: record.description ?? null,
+      position:
+        record.positionX !== null && record.positionY !== null && record.positionZ !== null
+          ? [record.positionX, record.positionY, record.positionZ]
+          : null,
+      latitude: record.latitude ?? null,
+      longitude: record.longitude ?? null,
+      altitude: record.altitude ?? null,
+      heading: record.heading ?? null,
+      createdAt: record.createdAt.toISOString(),
+    };
+  }
+
+  private mapToDetail(record: typeof anchors.$inferSelect): AnchorDetail {
+    return {
+      ...this.mapToAnchor(record),
+      longDescription: record.longDescription ?? null,
+      images: Array.isArray(record.images) ? record.images : [],
+      placeId: record.placeId ?? null,
+    };
   }
 
   private async seedSampleAnchorsIfEmpty() {

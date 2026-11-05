@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { anchorSchema } from "./anchor.schema.js";
 
 export const accessPolicySchema = z.object({ requiresTeamAccess: z.boolean() });
 
@@ -123,3 +124,52 @@ export const adminSessionSchema = z.object({
   user: authUserSchema,
 });
 export type AdminSession = z.infer<typeof adminSessionSchema>;
+
+/**
+ * Detalhe enriquecido de uma âncora (com imagens e vínculo a place).
+ */
+export const anchorDetailSchema = anchorSchema.extend({
+  longDescription: z.string().optional().nullable(),
+  images: z.array(z.string()).default([]),
+  placeId: z.string().uuid().optional().nullable(),
+});
+export type AnchorDetail = z.infer<typeof anchorDetailSchema>;
+
+/**
+ * Requisição de rota pedestrian (POST /routing/route).
+ */
+export const routeRequestSchema = z.strictObject({
+  origin: z.strictObject({
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+  }),
+  target: z.union([
+    z.strictObject({ anchorId: z.string().uuid() }),
+    z.strictObject({ placeId: z.string().uuid() }),
+    z.strictObject({
+      latitude: z.number().min(-90).max(90),
+      longitude: z.number().min(-180).max(180),
+    }),
+  ]),
+  profile: z.enum(['fast', 'accessible']).optional().default('fast'),
+});
+export type RouteRequest = z.infer<typeof routeRequestSchema>;
+
+export const routePointSchema = z.strictObject({
+  latitude: z.number(),
+  longitude: z.number(),
+});
+export type RoutePoint = z.infer<typeof routePointSchema>;
+
+export const routeSegmentSchema = z.strictObject({
+  instruction: z.enum(['straight', 'left', 'right', 'arrive']),
+  meters: z.number(),
+});
+export type RouteSegment = z.infer<typeof routeSegmentSchema>;
+
+export const routeResponseSchema = z.object({
+  path: z.array(routePointSchema),
+  distanceMeters: z.number(),
+  segments: z.array(routeSegmentSchema),
+});
+export type RouteResponse = z.infer<typeof routeResponseSchema>;
