@@ -321,3 +321,32 @@ No Android (`android.hardware.camera2`), **apenas um cliente pode acessar o sens
 7. **Peer deps nativas do `@better-auth/expo`**: `expo-network`, `expo-constants`, `expo-linking`, `expo-web-browser` e `expo-secure-store` — todas módulos nativos. Faltando `expo-network`, TODA chamada do `authClient` no nativo falha com `Cannot find module 'expo-network'` (sintoma: "[auth] Falha ao hidratar sessão"). Instalar com `npx expo install` e **rebuildar o dev build**.
 8. **basePath do client deve casar com o servidor**: o handler é montado em `/auth` (`basePath: '/auth'` no servidor + `expressInstance.use('/auth', ...)`). O client better-auth assume o default `/api/auth` — sem `basePath: '/auth'` no `createAuthClient`, todo endpoint retorna **404 `Cannot POST /api/auth/...`**.
 9. **trustedOrigins em desenvolvimento**: o client expo envia como `Origin` a URL do Metro (IP de LAN que muda com a rede). Fora de produção, o servidor aceita a própria origem do request via função em `trustedOrigins` (ver `better-auth.ts`); em produção apenas `CORS_ORIGINS` + baseURL são aceitos. Sintoma do 403: `INVALID_ORIGIN`.
+10. **Hash de senha = scrypt** (`node:crypto scrypt`, formato `salt(16B hex):hash(64B hex)`, salt novo a cada senha — memory-hard, resistente a GPU). A tabela `account` é o modelo de identity linking 1:N: `user_id` = usuário local; `account_id` = ID no provedor (para `credential` o better-auth copia o `userId`; para OAuth difere); `access_token`/`refresh_token` só se preenchem em OAuth.
+11. **Seed de admin é UPSERT**: `db:seed-admin` sincroniza a senha com `ADMIN_PASSWORD` do `.env.api` quando o admin já existe (via `auth.api.setPassword` + revogação de sessões) — a env é a fonte de verdade em qualquer restart.
+
+---
+
+## 14. AuthGate, Espelho UniFacens e Matriz de Capacidades (plano v2)
+
+### 🚪 Modelo "identidade primeiro"
+- O `_layout` raiz implementa o **AuthGate**: `!hydrated → splash` · `!jwt → LoginScreen` (tela cheia, abas Entrar/Criar conta) · autenticado → **Stack raiz** contendo o grupo `(tabs)` (NativeTabs: Início | Campus | AR) e as telas empilhadas `/aulas /notas /faltas /carteirinha /servicos`.
+- **O Stack raiz é obrigatório** para que `router.push('/aulas')` funcione — NativeTabs sozinho não empilha rotas fora dos triggers.
+- Sign-out ou **401 em qualquer chamada** (`api.ts`/`places-api`) fazem `clearSession()` → o gate devolve ao login automaticamente.
+
+### 🎭 Matriz de capacidades (role → recurso)
+| Capacidade | `user` | `admin` |
+|---|---|---|
+| Home/Carteirinha/telas acadêmicas (mocks) | ✔ | ✔ |
+| Campus: buscar/ver | ✔ | ✔ |
+| Campus: cadastrar/editar/excluir local | ✖ (UI oculta; API 403) | ✔ |
+| AR: ver pins | ✔ | ✔ |
+| AR: "Marcar Ponto"/excluir | ✖ (badge "Modo leitura") | ✔ |
+
+### 🏛️ Espelho UniFacens (liga.app.facens)
+- Telas replicadas estruturalmente por **mapeamento de acessibilidade** (o app oficial usa `FLAG_SECURE` — screenshots saem pretos; a hierarquia de a11y continua acessível).
+- Dados acadêmicos são **MOCKS** em `src/features/academic/mocks/` (salas C36/D27/B08 reais para exercitar "Aula → Campus/AR").
+- Referência extraída: Home (saudação+data, próxima aula com sala, atalhos Aulas/Notas/Faltas/Ver mais), Aulas (Seg–Sáb + timeline), Notas/Faltas (seletor de período), Carteirinha, Serviços (grid + lista Acesso).
+- **Drawer completo**: perfil, Carteirinha, Botão de Emergência (motivo+localização+envio), Notificações, Configurações (Aparência/Atualizações/Segurança/Idioma), Ajuda, Reportar, Desconectar, versão no rodapé. ⚠️ O sheet de emergência é **overlay absoluto dentro do Modal do drawer** — NÃO usar `Modal` aninhado em `Modal` no RN (window encalha e a tela congela).
+- **Detalhes da Aula** (`/aula-detalhe?discipline=`): hub alcançado do carrossel da Home, dos cards de Aulas e das disciplinas de Notas/Faltas — salas expandíveis, Turma, Faltas, Notas segmentadas e timeline de Tarefas.
+- **Períodos históricos**: seletor ‹ › + bottom sheet em grade (espelho oficial) percorre todo o histórico (2024/01→2026/02 nos mocks).
+- **Performance do mapa**: JAMAIS use `region` controlado no `MapView` (cada re-render faz o mapa "voar" — inclusive a cada tecla da busca). Use `initialRegion` + `animateCamera` via ref + `React.memo`.

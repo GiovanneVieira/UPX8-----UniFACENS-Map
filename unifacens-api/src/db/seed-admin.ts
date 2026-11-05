@@ -1,19 +1,28 @@
 import { config as loadEnv } from 'dotenv';
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { and, eq } from 'drizzle-orm';
 import pg from 'pg';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { hashPassword } from 'better-auth/crypto';
 import { apiEnvironmentSchema } from 'shared';
 import { createBetterAuth } from '../common/auth/better-auth.js';
+import { user as userTable, account as accountTable, session as sessionTable } from '../db/schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 loadEnv({ path: path.resolve(__dirname, '../../../.env.api'), quiet: true });
 
 /**
- * Seed idempotente do administrador inicial (ADMIN_EMAIL/ADMIN_PASSWORD).
- * Usado no start:dev para garantir um admin local em desenvolvimento
- * (decisão D3: autenticação obrigatória também em dev, comportamento prod-like).
+ * Seed UPSERT do administrador inicial (ADMIN_EMAIL/ADMIN_PASSWORD).
+ *
+ * - Admin NÃO existe → cria com role admin via auth.api.createUser.
+ * - Admin JÁ existe → **sincroniza a senha** com ADMIN_PASSWORD do .env.api
+ *   (hash scrypt via `hashPassword` do better-auth) e **revoga as sessões
+ *   ativas** na tabela session.
+ *
+ * Com isso, o `.env.api` é a fonte de verdade da senha de dev em qualquer
+ * `docker compose up` / restart (C0/M1 do plano de navegação AR).
  */
 async function main() {
   const parsed = apiEnvironmentSchema.safeParse(process.env);
@@ -61,13 +70,61 @@ async function main() {
       console.log(`[SeedAdmin] ✅ Admin criado: ${config.ADMIN_EMAIL}`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      if (/already exist|duplicate|unique/i.test(message)) {
-        console.log(
-          `[SeedAdmin] Admin ${config.ADMIN_EMAIL} já existe — nada a fazer.`,
-        );
-      } else {
+      if (!/already exist|duplicate|unique/i.test(message)) {
         throw err;
       }
+
+      // Admin já existe: sincroniza a senha com a env (upsert de senha).
+      const [existingUser] = await db
+        .select({ id: userTable.id })
+        .from(userTable)
+        .where(eq(userTable.email, config.ADMIN_EMAIL))
+        .limit(1);
+
+      if (!existingUser) {
+        console.warn(
+          '[SeedAdmin] ⚠️ Conflito de e-mail mas usuário não encontrado — verifique manualmente.',
+        );
+        return;
+      }
+      const userId = existingUser.id;
+
+      // Hash scrypt (mesmo algoritmo/formato do better-auth: salt:hash hex).
+      const passwordHash = await hashPassword(config.ADMIN_PASSWORD);
+
+      // Atualiza o hash na account credential (ou cria se não existir).
+      const [credentialAccount] = await db
+        .select({ id: accountTable.id })
+        .from(accountTable)
+        .where(
+          and(
+            eq(accountTable.userId, userId),
+            eq(accountTable.providerId, 'credential'),
+          ),
+        )
+        .limit(1);
+
+      if (credentialAccount) {
+        await db
+          .update(accountTable)
+          .set({ password: passwordHash, updatedAt: new Date() })
+          .where(eq(accountTable.id, credentialAccount.id));
+      } else {
+        await db.insert(accountTable).values({
+          id: `seed-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          accountId: userId,
+          providerId: 'credential',
+          userId,
+          password: passwordHash,
+        });
+      }
+
+      // Revoga sessões ativas (segurança: senha antiga não deve manter acesso).
+      await db.delete(sessionTable).where(eq(sessionTable.userId, userId));
+
+      console.log(
+        `[SeedAdmin] ✅ Admin ${config.ADMIN_EMAIL} já existia — senha sincronizada com .env.api (sessões revogadas).`,
+      );
     }
   } finally {
     await pool.end();
