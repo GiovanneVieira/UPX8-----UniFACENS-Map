@@ -1,5 +1,5 @@
 import React, { FC, useState, useRef, useCallback, useMemo } from 'react';
-import { Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
@@ -25,6 +25,8 @@ import { ARZoomSelector } from './hud/ar-zoom-selector';
 import { ARReticle } from './hud/ar-reticle';
 import { CalibrationModal } from './modals/calibration-modal';
 import { PlaceAnchorModal } from './modals/place-anchor-modal';
+import { AnchorDetailSheet } from './modals/anchor-detail-sheet';
+import { useARNavigation } from '@/features/ar/hooks/use-ar-navigation';
 
 const HIT_TEST_PRIORITY = [
   'DepthPoint',
@@ -63,6 +65,19 @@ export const ViroARAnchorContainer: FC = () => {
   const { zoomLevel, applyZoom, pinchGesture, arZoomAnimatedStyle } = useARZoom();
   // Capacidade por role: somente admins criam/excluem âncoras (plano v2/D2)
   const { isAdmin } = useAuth();
+
+  // ── Navegação AR (C4): rota A* + projeção em setas no chão ────────────────
+  const [detailSheetVisible, setDetailSheetVisible] = useState(false);
+  const [detailAnchor, setDetailAnchor] = useState<Anchor | null>(null);
+  const { route: arRoute, startNavigation, stopNavigation } = useARNavigation({
+    userCoordsRef: geo.userCoordsRef,
+    referenceHeadingRef: useRef<number | null>(null),
+    projectionOrigin: () => ({
+      latitude: projection.calibratedLandmark?.latitude ?? geo.userCoordsRef.current.latitude,
+      longitude: projection.calibratedLandmark?.longitude ?? geo.userCoordsRef.current.longitude,
+      altitude: projection.calibratedLandmark?.altitude ?? geo.userCoordsRef.current.altitude,
+    }),
+  });
 
   // ── Estado de UI local ────────────────────────────────────────────────────
   const [radiusFilter, setRadiusFilter] = useState<number>(0);
@@ -300,55 +315,13 @@ export const ViroARAnchorContainer: FC = () => {
     }
   };
 
+  // Abre o bottom sheet de detalhes (C4) em vez do Alert
   const handleSelectAnchor = useCallback(
     (anchor: Anchor) => {
-      const arPos = anchor.arPosition || anchor.position || [0, 0, 0];
-      const descInfo = anchor.description ? `\nDescrição: ${anchor.description}` : '';
-      const distInfo =
-        typeof anchor.distanceMeters === 'number'
-          ? `\nDistância Real: ${Math.round(anchor.distanceMeters)} m`
-          : '';
-      const geoInfo =
-        anchor.latitude != null && anchor.longitude != null
-          ? `\nGPS: [${anchor.latitude.toFixed(6)}, ${anchor.longitude.toFixed(6)}]`
-          : '';
-
-      Alert.alert(
-        anchor.name,
-        `ID: ${anchor.cloudAnchorId}${descInfo}${distInfo}${geoInfo}\nPosição AR: [${arPos[0].toFixed(2)}, ${arPos[1].toFixed(2)}, ${arPos[2].toFixed(2)}]m`,
-        [
-          { text: 'Fechar', style: 'cancel' },
-          // Exclusão exclusiva de administradores (read-only para contas comuns)
-          ...(isAdmin
-            ? [
-                {
-                  text: 'Excluir Ponto',
-                  style: 'destructive' as const,
-                  onPress: () => {
-                    void (async () => {
-                      try {
-                        setIsSaving(true);
-                        await deleteAnchorMutation.mutateAsync(anchor.id);
-                        projection.removeAnchorLocal(anchor.id);
-                        Alert.alert('Sucesso', 'Ponto excluído.');
-                      } catch (err: any) {
-                        console.warn('[AR] Erro ao excluir âncora:', err);
-                        Alert.alert(
-                          'Erro ao excluir',
-                          err instanceof Error ? err.message : 'Não foi possível excluir o ponto.',
-                        );
-                      } finally {
-                        setIsSaving(false);
-                      }
-                    })();
-                  },
-                },
-              ]
-            : []),
-        ],
-      );
+      setDetailAnchor(anchor);
+      setDetailSheetVisible(true);
     },
-    [createAnchorMutation, deleteAnchorMutation, projection, isAdmin],
+    [],
   );
 
   // Filtro de raio aplicado às âncoras passadas à cena AR
@@ -365,6 +338,7 @@ export const ViroARAnchorContainer: FC = () => {
   const viroAppProps = useMemo(
     () => ({
       anchors: visibleAnchors,
+      routeArPath: arRoute.active ? arRoute.arPath : [],
       onSelectAnchor: handleSelectAnchor,
       onPlaneTapped: handlePlaneTapped,
       onCameraUpdate: handleCameraUpdate,
@@ -374,6 +348,8 @@ export const ViroARAnchorContainer: FC = () => {
     }),
     [
       visibleAnchors,
+      arRoute.active,
+      arRoute.arPath,
       handleSelectAnchor,
       handlePlaneTapped,
       handleCameraUpdate,
@@ -470,6 +446,76 @@ export const ViroARAnchorContainer: FC = () => {
         onClose={() => setCalibrationModalVisible(false)}
       />
 
+      {/* Bottom sheet de detalhes do ponto AR (C1/C4) */}
+      <AnchorDetailSheet
+        visible={detailSheetVisible}
+        anchor={detailAnchor}
+        distanceMeters={detailAnchor?.distanceMeters ?? undefined}
+        onClose={() => setDetailSheetVisible(false)}
+        onNavigate={(anchor) => {
+          setDetailSheetVisible(false);
+          void startNavigation(anchor);
+        }}
+        onDelete={
+          isAdmin
+            ? (anchor) => {
+                setDetailSheetVisible(false);
+                Alert.alert('Excluir ponto', `Confirmar exclusão de "${anchor.name}"?`, [
+                  { text: 'Cancelar', style: 'cancel' },
+                  {
+                    text: 'Excluir',
+                    style: 'destructive',
+                    onPress: () => {
+                      void (async () => {
+                        try {
+                          setIsSaving(true);
+                          await deleteAnchorMutation.mutateAsync(anchor.id);
+                          projection.removeAnchorLocal(anchor.id);
+                        } catch (err) {
+                          console.warn('[AR] Erro ao excluir:', err);
+                          Alert.alert('Erro', 'Não foi possível excluir o ponto.');
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      })();
+                    },
+                  },
+                ]);
+              }
+            : undefined
+        }
+      />
+
+      {/* HUD de Navegação AR (C4): distância restante + encerrar */}
+      {arRoute.active ? (
+        <View
+          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
+          pointerEvents="box-none">
+          <View style={styles.navHudPill}>
+            <Ionicons name="navigate" size={16} color="#34D399" />
+            <Text style={styles.navHudText}>
+              {arRoute.targetName} · {arRoute.distanceRemaining} m
+            </Text>
+            <TouchableOpacity
+              onPress={stopNavigation}
+              style={styles.navHudStopBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Encerrar navegação">
+              <Ionicons name="close-circle" size={20} color="#FDA4AF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : arRoute.isLoading ? (
+        <View
+          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
+          pointerEvents="none">
+          <View style={styles.navHudPill}>
+            <ActivityIndicator size="small" color="#34D399" />
+            <Text style={styles.navHudText}>Calculando rota...</Text>
+          </View>
+        </View>
+      ) : null}
+
       <PlaceAnchorModal
         visible={modalVisible}
         isSaving={isSaving}
@@ -548,6 +594,34 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
+  },
+  navHud: {
+    position: 'absolute',
+    top: 188,
+    left: 16,
+    right: 16,
+    alignItems: 'center',
+    zIndex: 30,
+    elevation: 30,
+  },
+  navHudPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(6, 78, 59, 0.9)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#059669',
+  },
+  navHudText: {
+    color: '#D1FAE5',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  navHudStopBtn: {
+    marginLeft: 4,
   },
 });
 

@@ -43,10 +43,15 @@ ViroMaterials.createMaterials({
     diffuseColor: '#3B82F633', // Azul translúcido para superfícies rastreadas
     lightingModel: 'Constant',
   },
+  routeArrow: {
+    diffuseColor: '#34D399',
+    lightingModel: 'Constant',
+  },
 });
 
 export interface ViroARAnchorSceneProps {
   anchors?: Anchor[];
+  routeArPath?: Array<[number, number, number]>;
   onSelectAnchor?: (anchor: Anchor) => void;
   onPlaneTapped?: (anchorId: string, position: [number, number, number]) => void;
   onCameraUpdate?: (pos: [number, number, number], fwd: [number, number, number]) => void;
@@ -74,6 +79,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
   const onPlaneTapped = viroProps.onPlaneTapped;
   const onPlanesUpdated = viroProps.onPlanesUpdated;
+  const routeArPath = viroProps.routeArPath || [];
 
   const arSceneRef = useRef<any>(null);
   const allPlanesRef = useRef<Map<string, any>>(new Map());
@@ -169,6 +175,36 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       {/* Iluminação ambiente e direcional otimizada para GPU mobile */}
       <ViroAmbientLight color="#FFFFFF" intensity={800} />
       <ViroDirectionalLight color="#FFFFFF" direction={[0, -1, -0.4]} />
+
+      {/* Rota de navegação: setas chevron no chão apontando para o próximo waypoint (C4) */}
+      {routeArPath.length > 1
+        ? routeArPath.slice(0, -1).map((pos, i) => {
+            const next = routeArPath[i + 1]!;
+            // Bearing no plano XZ para rotacionar a seta
+            const dx = next[0] - pos[0];
+            const dz = next[2] - pos[2];
+            const angleDeg = (Math.atan2(dx, -dz) * 180) / Math.PI;
+            return (
+              <ViroNode key={`route-${i}`} position={[pos[0], -1.4, pos[2]]} rotation={[0, angleDeg, 0]}>
+                <ViroQuad
+                  width={0.8}
+                  height={0.5}
+                  rotation={[-90, 0, 0]}
+                  materials={['routeArrow']}
+                />
+              </ViroNode>
+            );
+          })
+        : null}
+      {/* Bandeira/pilar pulsante no destino */}
+      {routeArPath.length > 0 ? (
+        <ViroNode
+          key="route-dest"
+          position={[routeArPath[routeArPath.length - 1]![0], -1.0, routeArPath[routeArPath.length - 1]![2]]}>
+          <ViroBox scale={[0.15, 1.2, 0.15]} position={[0, 0.6, 0]} materials={['routeArrow']} />
+          <ViroQuad width={0.6} height={0.4} position={[0.35, 1.0, 0]} rotation={[0, 90, 0]} materials={['routeArrow']} />
+        </ViroNode>
+      ) : null}
 
       {/* Visualização das Maiores Superfícies Físicas Detectadas pelo ARCore */}
       {visiblePlanes.map((plane) => {
