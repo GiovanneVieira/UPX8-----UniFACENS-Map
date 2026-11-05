@@ -71,7 +71,7 @@ export const ViroARAnchorContainer: FC = () => {
   const [detailAnchor, setDetailAnchor] = useState<Anchor | null>(null);
   const { route: arRoute, startNavigation, stopNavigation } = useARNavigation({
     userCoordsRef: geo.userCoordsRef,
-    referenceHeadingRef: useRef<number | null>(null),
+    referenceHeadingRef: projection.referenceHeadingRef,
     projectionOrigin: () => ({
       latitude: projection.calibratedLandmark?.latitude ?? geo.userCoordsRef.current.latitude,
       longitude: projection.calibratedLandmark?.longitude ?? geo.userCoordsRef.current.longitude,

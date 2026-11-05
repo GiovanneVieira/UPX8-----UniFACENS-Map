@@ -224,5 +224,6 @@ export function useARProjection({ serverAnchors, geo }: UseARProjectionParams) {
     lockPosition,
     removeAnchorLocal,
     prependAnchor,
+    referenceHeadingRef,
   };
 }

@@ -47,6 +47,10 @@ ViroMaterials.createMaterials({
     diffuseColor: '#34D399',
     lightingModel: 'Constant',
   },
+  anchorHitArea: {
+    diffuseColor: '#FFFFFF00', // Totalmente transparente — só captura toques
+    lightingModel: 'Constant',
+  },
 });
 
 export interface ViroARAnchorSceneProps {
@@ -176,7 +180,9 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       <ViroAmbientLight color="#FFFFFF" intensity={800} />
       <ViroDirectionalLight color="#FFFFFF" direction={[0, -1, -0.4]} />
 
-      {/* Rota de navegação: setas chevron no chão apontando para o próximo waypoint (C4) */}
+      {/* Rota de navegação: setas chevron no chão apontando para o próximo waypoint (C4).
+          O y de cada waypoint vem da projeção geodésica (relativo à câmera) —
+          desloca para o chão estimado (-1.5m da câmera) apenas se o y do path for ~0. */}
       {routeArPath.length > 1
         ? routeArPath.slice(0, -1).map((pos, i) => {
             const next = routeArPath[i + 1]!;
@@ -184,8 +190,10 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
             const dx = next[0] - pos[0];
             const dz = next[2] - pos[2];
             const angleDeg = (Math.atan2(dx, -dz) * 180) / Math.PI;
+            // Y: usa o y do path + offset do chão (câmera está ~1.5m acima do solo)
+            const groundY = pos[1] - 1.5;
             return (
-              <ViroNode key={`route-${i}`} position={[pos[0], -1.4, pos[2]]} rotation={[0, angleDeg, 0]}>
+              <ViroNode key={`route-${i}`} position={[pos[0], groundY, pos[2]]} rotation={[0, angleDeg, 0]}>
                 <ViroQuad
                   width={0.8}
                   height={0.5}
@@ -196,11 +204,11 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
             );
           })
         : null}
-      {/* Bandeira/pilar pulsante no destino */}
+      {/* Bandeira/pilar no destino */}
       {routeArPath.length > 0 ? (
         <ViroNode
           key="route-dest"
-          position={[routeArPath[routeArPath.length - 1]![0], -1.0, routeArPath[routeArPath.length - 1]![2]]}>
+          position={[routeArPath[routeArPath.length - 1]![0], routeArPath[routeArPath.length - 1]![1] - 1.0, routeArPath[routeArPath.length - 1]![2]]}>
           <ViroBox scale={[0.15, 1.2, 0.15]} position={[0, 0.6, 0]} materials={['routeArrow']} />
           <ViroQuad width={0.6} height={0.4} position={[0.35, 1.0, 0]} rotation={[0, 90, 0]} materials={['routeArrow']} />
         </ViroNode>
@@ -250,11 +258,19 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           <ViroNode
             key={anchor.id || `anchor-${index}`}
             position={renderPos}>
+            {/* HIT AREA INVISÍVEL: cubo transparente maior para capturar toques
+                de forma confiável em qualquer distância (mínimo 1.2m, cresce com o pin) */}
+            <ViroBox
+              scale={[Math.max(1.2, 0.6 * scaleFactor), Math.max(1.6, 0.8 * scaleFactor), Math.max(1.2, 0.6 * scaleFactor)]}
+              position={[0, 0.2 * scaleFactor, 0]}
+              materials={['anchorHitArea']}
+              onClick={() => onSelectAnchor?.(anchor)}
+            />
+
             {/* Cubo 3D representando a âncora com escala dinâmica adaptativa */}
             <ViroBox
               scale={[0.28 * scaleFactor, 0.28 * scaleFactor, 0.28 * scaleFactor]}
               materials={[materialName]}
-              onClick={() => onSelectAnchor?.(anchor)}
             />
 
             {/* Haste inferior de sustentação visual */}
@@ -271,7 +287,6 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
               position={[0, 0.32 * scaleFactor, 0]}
               transformBehaviors={['billboardY']}
               style={styles.viroText}
-              onClick={() => onSelectAnchor?.(anchor)}
             />
           </ViroNode>
         );
