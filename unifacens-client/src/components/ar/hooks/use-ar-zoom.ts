@@ -30,7 +30,7 @@ function clampZoom(value: number, decimals = 1): number {
  * O estado React (`zoomLevel`) é commitado uma única vez ao final do
  * gesto, evitando re-renders do container concorrendo com os toques.
  */
-export function useARZoom() {
+export function useARZoom({ onTap }: { onTap: () => void }) {
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const zoomLevelRef = useRef<number>(1.0);
 
@@ -55,22 +55,39 @@ export function useARZoom() {
     setZoomLevel(clamped);
   }, []);
 
+  // Exclusive(Tap, Pinch): whichever activates FIRST wins and cancels the other.
+  // - Quick single tap → Tap wins → opens detail sheet instantly (no release delay)
+  // - 2nd finger joins → Pinch wins → Tap is cancelled (no accidental modal)
+  // - No Gesture.Native() needed: we handle tap ourselves via reticle selection
   const pinchGesture = useMemo(
     () =>
-      Gesture.Pinch()
-        .onBegin(() => {
-          'worklet';
-          pinchStartZoom.value = zoom.value;
-        })
-        .onUpdate((event) => {
-          'worklet';
-          zoom.value = clampZoom(pinchStartZoom.value * event.scale, 2);
-        })
-        .onEnd(() => {
-          'worklet';
-          runOnJS(commitPinchZoom)(zoom.value);
-        }),
-    [zoom, pinchStartZoom, commitPinchZoom],
+      Gesture.Exclusive(
+        Gesture.Tap()
+          .maxDuration(250)
+          .onEnd(() => {
+            'worklet';
+            runOnJS(onTap)();
+          }),
+        Gesture.Pinch()
+          .onBegin(() => {
+            'worklet';
+            pinchStartZoom.value = zoom.value;
+          })
+          .onUpdate((event) => {
+            'worklet';
+            // Amplifica o delta do scale: em uma tela de celular o spread
+            // físico máximo é ~2x, mas o zoom vai até 5x. Amplificação de
+            // 3x faz um spread de 1.5x virar zoom de 2.5x (responsivo).
+            const amplification = 4;
+            const adjustedScale = 1 + (event.scale - 1) * amplification;
+            zoom.value = clampZoom(pinchStartZoom.value * adjustedScale, 2);
+          })
+          .onEnd(() => {
+            'worklet';
+            runOnJS(commitPinchZoom)(zoom.value);
+          }),
+      ),
+    [zoom, pinchStartZoom, commitPinchZoom, onTap],
   );
 
   const arZoomAnimatedStyle = useAnimatedStyle(() => ({

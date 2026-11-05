@@ -48,7 +48,7 @@ ViroMaterials.createMaterials({
     lightingModel: 'Constant',
   },
   anchorHitArea: {
-    diffuseColor: '#FFFFFF00', // Totalmente transparente — só captura toques
+    diffuseColor: '#FFFFFF00', // Invisível — seleção é por retícula, não por raycast
     lightingModel: 'Constant',
   },
 });
@@ -77,13 +77,18 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
     props;
 
   const anchors = viroProps.anchors || [];
-  const onSelectAnchor = viroProps.onSelectAnchor;
   const onCameraUpdate = viroProps.onCameraUpdate;
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
-  const onPlaneTapped = viroProps.onPlaneTapped;
   const onPlanesUpdated = viroProps.onPlanesUpdated;
   const routeArPath = viroProps.routeArPath || [];
+  // Debug: verificar se a cena recebe o path da rota
+  if (routeArPath.length > 0) {
+    console.log('[ViroScene] routeArPath RECEBIDO:', routeArPath.length, 'pts, primeiro:', routeArPath[0]?.map((v) => v.toFixed(1)));
+  }
+  // onPlaneTapped removido: planos NÃO devem ter onClick (interceptam taps nos pins).
+  // onSelectAnchor removido: tap vem do RNGH Exclusive(Tap, Pinch) no container,
+  // não mais do onClick da GLSurfaceView do Viro.
 
   const arSceneRef = useRef<any>(null);
   const allPlanesRef = useRef<Map<string, any>>(new Map());
@@ -195,8 +200,8 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
             return (
               <ViroNode key={`route-${i}`} position={[pos[0], groundY, pos[2]]} rotation={[0, angleDeg, 0]}>
                 <ViroQuad
-                  width={0.8}
-                  height={0.5}
+                  width={2.5}
+                  height={1.5}
                   rotation={[-90, 0, 0]}
                   materials={['routeArrow']}
                 />
@@ -209,12 +214,15 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         <ViroNode
           key="route-dest"
           position={[routeArPath[routeArPath.length - 1]![0], routeArPath[routeArPath.length - 1]![1] - 1.0, routeArPath[routeArPath.length - 1]![2]]}>
-          <ViroBox scale={[0.15, 1.2, 0.15]} position={[0, 0.6, 0]} materials={['routeArrow']} />
-          <ViroQuad width={0.6} height={0.4} position={[0.35, 1.0, 0]} rotation={[0, 90, 0]} materials={['routeArrow']} />
+          <ViroBox scale={[0.3, 2.5, 0.3]} position={[0, 1.2, 0]} materials={['routeArrow']} />
+          <ViroQuad width={1.5} height={1.0} position={[0.9, 2.0, 0]} rotation={[0, 90, 0]} materials={['routeArrow']} />
         </ViroNode>
       ) : null}
 
-      {/* Visualização das Maiores Superfícies Físicas Detectadas pelo ARCore */}
+      {/* Visualização das Maiores Superfícies Físicas Detectadas pelo ARCore.
+          SEM onClick — planos interceptam o raycast de taps nos pins (o chão
+          está fisicamente entre a câmera e qualquer pin a nível do solo).
+          O botão "Marcar Ponto" já abre o modal via hit test do retículo. */}
       {visiblePlanes.map((plane) => {
         const extentWidth = plane.width || 0.5;
         const extentHeight = plane.height || 0.5;
@@ -229,9 +237,6 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
               height={Math.max(0.4, extentHeight)}
               rotation={isHorizontal ? [-90, 0, 0] : [0, 0, 0]}
               materials={['detectedPlaneSurface']}
-              onClick={() => {
-                onPlaneTapped?.(planeId, planePos);
-              }}
             />
           </ViroNode>
         );
@@ -258,13 +263,12 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           <ViroNode
             key={anchor.id || `anchor-${index}`}
             position={renderPos}>
-            {/* HIT AREA INVISÍVEL: cubo transparente maior para capturar toques
-                de forma confiável em qualquer distância (mínimo 1.2m, cresce com o pin) */}
+            {/* HIT AREA visual reduzida (debug): só um pouco maior que o pin
+                para validar que a seleção é pela retícula, não pela hitbox. */}
             <ViroBox
-              scale={[Math.max(1.2, 0.6 * scaleFactor), Math.max(1.6, 0.8 * scaleFactor), Math.max(1.2, 0.6 * scaleFactor)]}
-              position={[0, 0.2 * scaleFactor, 0]}
+              scale={[Math.max(0.5, 0.35 * scaleFactor), Math.max(0.7, 0.45 * scaleFactor), Math.max(0.5, 0.35 * scaleFactor)]}
+              position={[0, 0.15 * scaleFactor, 0]}
               materials={['anchorHitArea']}
-              onClick={() => onSelectAnchor?.(anchor)}
             />
 
             {/* Cubo 3D representando a âncora com escala dinâmica adaptativa */}

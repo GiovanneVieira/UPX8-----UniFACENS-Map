@@ -1,39 +1,47 @@
-import React, { FC, useState, useRef, useCallback, useMemo } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { GestureDetector } from 'react-native-gesture-handler';
-import Animated from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ViroARSceneNavigator } from '@reactvision/react-viro';
-import { useQueryClient } from '@tanstack/react-query';
-import { type Anchor, isUsablePoint } from 'shared';
+import React, { FC, useState, useRef, useCallback, useMemo } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { GestureDetector } from "react-native-gesture-handler";
+import Animated from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ViroARSceneNavigator } from "@reactvision/react-viro";
+import { useQueryClient } from "@tanstack/react-query";
+import { type Anchor, isUsablePoint } from "shared";
 import {
   useAnchorsQuery,
   useCreateAnchorMutation,
   useDeleteAnchorMutation,
   anchorKeys,
-} from '@/features/anchors/queries/use-anchors-query';
-import { useAuth } from '@/features/auth/hooks/use-auth';
-import type { CampusLandmark } from '@/constants/campus-landmarks';
-import { ViroARAnchorScene } from './ViroARAnchorScene';
-import { useARGeolocation } from './hooks/use-ar-geolocation';
-import { useARProjection } from './hooks/use-ar-projection';
-import { useARZoom } from './hooks/use-ar-zoom';
-import { ARStatusHud } from './hud/ar-status-hud';
-import { ARCompassRadiusBar } from './hud/ar-compass-radius-bar';
-import { ARZoomSelector } from './hud/ar-zoom-selector';
-import { ARReticle } from './hud/ar-reticle';
-import { CalibrationModal } from './modals/calibration-modal';
-import { PlaceAnchorModal } from './modals/place-anchor-modal';
-import { AnchorDetailSheet } from './modals/anchor-detail-sheet';
-import { useARNavigation } from '@/features/ar/hooks/use-ar-navigation';
+} from "@/features/anchors/queries/use-anchors-query";
+import { useAuth } from "@/features/auth/hooks/use-auth";
+import type { CampusLandmark } from "@/constants/campus-landmarks";
+import { ViroARAnchorScene } from "./ViroARAnchorScene";
+import { useARGeolocation } from "./hooks/use-ar-geolocation";
+import { useARProjection } from "./hooks/use-ar-projection";
+import { useARZoom } from "./hooks/use-ar-zoom";
+import { ARStatusHud } from "./hud/ar-status-hud";
+import { ARCompassRadiusBar } from "./hud/ar-compass-radius-bar";
+import { ARZoomSelector } from "./hud/ar-zoom-selector";
+import { ARReticle } from "./hud/ar-reticle";
+import { CalibrationModal } from "./modals/calibration-modal";
+import { PlaceAnchorModal } from "./modals/place-anchor-modal";
+import { AnchorDetailSheet } from "./modals/anchor-detail-sheet";
+import { useARNavigation } from "@/features/ar/hooks/use-ar-navigation";
 
 const HIT_TEST_PRIORITY = [
-  'DepthPoint',
-  'ExistingPlaneUsingExtent',
-  'ExistingPlane',
-  'EstimatedHorizontalPlane',
-  'FeaturePoint',
+  "DepthPoint",
+  "ExistingPlaneUsingExtent",
+  "ExistingPlane",
+  "EstimatedHorizontalPlane",
+  "FeaturePoint",
 ];
 
 // Constante estática da cena inicial para nunca recriar a instância nativa do ViroARSceneNavigator
@@ -62,20 +70,68 @@ export const ViroARAnchorContainer: FC = () => {
   // ── Motores de domínio (hooks dedicados) ─────────────────────────────────
   const geo = useARGeolocation();
   const projection = useARProjection({ serverAnchors: anchorsQuery.data, geo });
-  const { zoomLevel, applyZoom, pinchGesture, arZoomAnimatedStyle } = useARZoom();
   // Capacidade por role: somente admins criam/excluem âncoras (plano v2/D2)
   const { isAdmin } = useAuth();
+
+  // ── Seleção por retícula: tap abre o pin mais próximo da mira ────────────
+  // (substitui o onClick do Viro — RNGH Exclusive(Tap, Pinch) não deixa o
+  // evento chegar na GLSurfaceView; nós mesmos encontramos o alvo)
+  const handleTapByReticle = useCallback(() => {
+    const camPos = cameraPosRef.current;
+    const camFwd = cameraFwdRef.current;
+    const fwdLen = Math.hypot(camFwd[0], camFwd[1], camFwd[2]) || 1;
+    const fwd: [number, number, number] = [
+      camFwd[0] / fwdLen,
+      camFwd[1] / fwdLen,
+      camFwd[2] / fwdLen,
+    ];
+
+    let bestAnchor: Anchor | null = null;
+    let bestDot = 0.97; // cos(~14°) — mira deve estar praticamente EM CIMA do pin.
+
+    for (const a of projection.anchors) {
+      if (!a.arPosition) continue;
+      const dx = a.arPosition[0] - camPos[0];
+      const dy = a.arPosition[1] - camPos[1];
+      const dz = a.arPosition[2] - camPos[2];
+      const len = Math.hypot(dx, dy, dz) || 1;
+      const dot = (dx * fwd[0] + dy * fwd[1] + dz * fwd[2]) / len;
+      if (dot > bestDot) {
+        bestDot = dot;
+        bestAnchor = a;
+      }
+    }
+
+    if (bestAnchor) {
+      setDetailAnchor(bestAnchor);
+      setDetailSheetVisible(true);
+    }
+  }, [projection.anchors]);
+
+  const { zoomLevel, applyZoom, pinchGesture, arZoomAnimatedStyle } = useARZoom(
+    { onTap: handleTapByReticle },
+  );
 
   // ── Navegação AR (C4): rota A* + projeção em setas no chão ────────────────
   const [detailSheetVisible, setDetailSheetVisible] = useState(false);
   const [detailAnchor, setDetailAnchor] = useState<Anchor | null>(null);
-  const { route: arRoute, startNavigation, stopNavigation } = useARNavigation({
+  const {
+    route: arRoute,
+    startNavigation,
+    stopNavigation,
+  } = useARNavigation({
     userCoordsRef: geo.userCoordsRef,
     referenceHeadingRef: projection.referenceHeadingRef,
     projectionOrigin: () => ({
-      latitude: projection.calibratedLandmark?.latitude ?? geo.userCoordsRef.current.latitude,
-      longitude: projection.calibratedLandmark?.longitude ?? geo.userCoordsRef.current.longitude,
-      altitude: projection.calibratedLandmark?.altitude ?? geo.userCoordsRef.current.altitude,
+      latitude:
+        projection.calibratedLandmark?.latitude ??
+        geo.userCoordsRef.current.latitude,
+      longitude:
+        projection.calibratedLandmark?.longitude ??
+        geo.userCoordsRef.current.longitude,
+      altitude:
+        projection.calibratedLandmark?.altitude ??
+        geo.userCoordsRef.current.altitude,
     }),
   });
 
@@ -85,9 +141,11 @@ export const ViroARAnchorContainer: FC = () => {
 
   // Modal de criação de ponto
   const [modalVisible, setModalVisible] = useState(false);
-  const [anchorName, setAnchorName] = useState('');
-  const [anchorDescription, setAnchorDescription] = useState('');
-  const [pendingCoords, setPendingCoords] = useState<[number, number, number]>([0, 0, -2.0]);
+  const [anchorName, setAnchorName] = useState("");
+  const [anchorDescription, setAnchorDescription] = useState("");
+  const [pendingCoords, setPendingCoords] = useState<[number, number, number]>([
+    0, 0, -2.0,
+  ]);
   const [pendingDistance, setPendingDistance] = useState<number>(2.0);
 
   // Pose instantânea da câmera no espaço AR
@@ -104,8 +162,8 @@ export const ViroARAnchorContainer: FC = () => {
 
   // Status do HUD derivado do estado do query — sem estado espelho (§7/§8)
   const cloudStatusDerived = useMemo(() => {
-    if (anchorsQuery.isPending) return 'Carregando pontos...';
-    if (anchorsQuery.isError) return 'Erro de conexão';
+    if (anchorsQuery.isPending) return "Carregando pontos...";
+    if (anchorsQuery.isError) return "Erro de conexão";
     return `${anchorsQuery.data?.length ?? 0} ponto(s)`;
   }, [anchorsQuery.isPending, anchorsQuery.isError, anchorsQuery.data]);
   const cloudStatus = mutationStatus ?? cloudStatusDerived;
@@ -165,11 +223,15 @@ export const ViroARAnchorContainer: FC = () => {
 
     if (arSceneRef.current?.performARHitTestWithPoint) {
       try {
-        const hits = await arSceneRef.current.performARHitTestWithPoint(centerX, centerY);
+        const hits = await arSceneRef.current.performARHitTestWithPoint(
+          centerX,
+          centerY,
+        );
         if (Array.isArray(hits) && hits.length > 0) {
           for (const type of HIT_TEST_PRIORITY) {
             const match = hits.find(
-              (h: any) => h.type === type && isUsablePoint(h.transform?.position),
+              (h: any) =>
+                h.type === type && isUsablePoint(h.transform?.position),
             );
             if (match) {
               targetCoords = [
@@ -182,7 +244,7 @@ export const ViroARAnchorContainer: FC = () => {
           }
         }
       } catch (hitErr) {
-        console.warn('[AR] Hit test aviso:', hitErr);
+        console.warn("[AR] Hit test aviso:", hitErr);
       }
     }
 
@@ -226,7 +288,9 @@ export const ViroARAnchorContainer: FC = () => {
   // Micro-ajuste de profundidade: setters independentes e updaters puros (§7/A4)
   const handleAdjustDistance = useCallback(
     (delta: number) => {
-      const newDist = Number(Math.max(0.3, Math.min(30.0, pendingDistance + delta)).toFixed(2));
+      const newDist = Number(
+        Math.max(0.3, Math.min(30.0, pendingDistance + delta)).toFixed(2),
+      );
       const origin = rayOriginRef.current;
       const dir = rayDirectionRef.current;
 
@@ -243,18 +307,24 @@ export const ViroARAnchorContainer: FC = () => {
   // Criação de ponto geodésico persistente (offset métrico a partir da mira)
   const handleCreate = async () => {
     if (!anchorName.trim()) {
-      Alert.alert('Aviso', 'Informe o nome do ponto.');
+      Alert.alert("Aviso", "Informe o nome do ponto.");
       return;
     }
 
     try {
       setIsSaving(true);
-      setMutationStatus('Gravando ponto...');
+      setMutationStatus("Gravando ponto...");
 
       const calibrated = projection.calibratedLandmark;
-      const activeLat = calibrated ? calibrated.latitude : geo.userCoordsRef.current.latitude;
-      const activeLon = calibrated ? calibrated.longitude : geo.userCoordsRef.current.longitude;
-      const activeAlt = calibrated ? calibrated.altitude : geo.userCoordsRef.current.altitude;
+      const activeLat = calibrated
+        ? calibrated.latitude
+        : geo.userCoordsRef.current.latitude;
+      const activeLon = calibrated
+        ? calibrated.longitude
+        : geo.userCoordsRef.current.longitude;
+      const activeAlt = calibrated
+        ? calibrated.altitude
+        : geo.userCoordsRef.current.altitude;
 
       const dist = pendingDistance;
       const bearingRad = (geo.userTrueHeadingRef.current * Math.PI) / 180;
@@ -262,11 +332,14 @@ export const ViroARAnchorContainer: FC = () => {
       const deltaEast = dist * Math.sin(bearingRad);
 
       const latOffset = deltaNorth / 111320;
-      const lonOffset = deltaEast / (111320 * Math.cos((activeLat * Math.PI) / 180));
+      const lonOffset =
+        deltaEast / (111320 * Math.cos((activeLat * Math.PI) / 180));
 
       const targetLat = Number((activeLat + latOffset).toFixed(7));
       const targetLon = Number((activeLon + lonOffset).toFixed(7));
-      const targetAlt = Number((activeAlt + (pendingCoords[1] || 0)).toFixed(1));
+      const targetAlt = Number(
+        (activeAlt + (pendingCoords[1] || 0)).toFixed(1),
+      );
 
       const cloudAnchorId = `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -295,40 +368,37 @@ export const ViroARAnchorContainer: FC = () => {
       projection.prependAnchor(saved);
 
       setMutationStatus(null);
-      setAnchorName('');
-      setAnchorDescription('');
+      setAnchorName("");
+      setAnchorDescription("");
       setModalVisible(false);
 
       Alert.alert(
-        'Ponto Registrado!',
+        "Ponto Registrado!",
         `Nome: ${saved.name}\nCoordenadas: [${targetLat}, ${targetLon}]\nDistância: ${pendingDistance.toFixed(1)}m\n\nO ponto foi registrado geograficamente e está projetado no espaço AR.`,
       );
     } catch (err: any) {
-      console.warn('[AR] Erro ao salvar âncora:', err);
+      console.warn("[AR] Erro ao salvar âncora:", err);
       Alert.alert(
-        'Erro ao Salvar',
-        err instanceof Error ? err.message : 'Não foi possível salvar o ponto.',
+        "Erro ao Salvar",
+        err instanceof Error ? err.message : "Não foi possível salvar o ponto.",
       );
-      setMutationStatus('Falha na gravação');
+      setMutationStatus("Falha na gravação");
     } finally {
       setIsSaving(false);
     }
   };
 
   // Abre o bottom sheet de detalhes (C4) em vez do Alert
-  const handleSelectAnchor = useCallback(
-    (anchor: Anchor) => {
-      setDetailAnchor(anchor);
-      setDetailSheetVisible(true);
-    },
-    [],
-  );
+  const handleSelectAnchor = useCallback((anchor: Anchor) => {
+    setDetailAnchor(anchor);
+    setDetailSheetVisible(true);
+  }, []);
 
   // Filtro de raio aplicado às âncoras passadas à cena AR
   const visibleAnchors = useMemo(() => {
     return projection.anchors.filter((a) => {
       if (!isUsablePoint(a.arPosition)) return false;
-      if (radiusFilter > 0 && typeof a.distanceMeters === 'number') {
+      if (radiusFilter > 0 && typeof a.distanceMeters === "number") {
         return a.distanceMeters <= radiusFilter;
       }
       return true;
@@ -360,11 +430,11 @@ export const ViroARAnchorContainer: FC = () => {
   );
 
   const calibratedLabel = projection.calibratedLandmark
-    ? projection.calibratedLandmark.name.split(' ')[0]
+    ? projection.calibratedLandmark.name.split(" ")[0]
     : null;
 
   const originLabel = projection.calibratedLandmark
-    ? projection.calibratedLandmark.name.split(' ')[0]
+    ? projection.calibratedLandmark.name.split(" ")[0]
     : `GPS (±${Math.round(geo.userCoords.accuracy)}m)`;
 
   return (
@@ -389,15 +459,31 @@ export const ViroARAnchorContainer: FC = () => {
 
       {/* Indicador de Zoom Ativo */}
       {zoomLevel > 1.05 ? (
-        <View style={[styles.zoomBadge, { top: Math.max(insets.top + 98, 138), flexDirection: 'row', alignItems: 'center', gap: 5 }]} pointerEvents="none">
+        <View
+          style={[
+            styles.zoomBadge,
+            {
+              top: Math.max(insets.top + 98, 138),
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 5,
+            },
+          ]}
+          pointerEvents="none"
+        >
           <Ionicons name="search" size={12} color="#FFFFFF" />
-          <Text style={styles.zoomBadgeText}>Zoom: {zoomLevel.toFixed(1)}x</Text>
+          <Text style={styles.zoomBadgeText}>
+            Zoom: {zoomLevel.toFixed(1)}x
+          </Text>
         </View>
       ) : null}
 
       <ARReticle zoomLevel={zoomLevel} />
 
-      <ARZoomSelector zoomLevel={zoomLevel} onZoomChange={(level) => applyZoom(level, true)} />
+      <ARZoomSelector
+        zoomLevel={zoomLevel}
+        onZoomChange={(level) => applyZoom(level, true)}
+      />
 
       <ARStatusHud
         cloudStatus={cloudStatus}
@@ -419,14 +505,29 @@ export const ViroARAnchorContainer: FC = () => {
           (contas comuns navegam em modo leitura, sem feedback visual extra) */}
       {isAdmin ? (
         <View
-          style={[styles.bottomBar, { bottom: Math.max(insets.bottom + 16, 28) }]}
-          pointerEvents="box-none">
+          style={[
+            styles.bottomBar,
+            { bottom: Math.max(insets.bottom + 16, 28) },
+          ]}
+          pointerEvents="box-none"
+        >
           <TouchableOpacity
             onPress={handleOpenPlaceModal}
             activeOpacity={0.85}
-            style={[styles.placeAnchorButton, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }]}>
+            style={[
+              styles.placeAnchorButton,
+              {
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              },
+            ]}
+          >
             <Ionicons name="location-outline" size={18} color="#FFFFFF" />
-            <Text style={styles.placeAnchorButtonText}>Marcar Ponto no Espaço</Text>
+            <Text style={styles.placeAnchorButtonText}>
+              Marcar Ponto no Espaço
+            </Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -460,27 +561,34 @@ export const ViroARAnchorContainer: FC = () => {
           isAdmin
             ? (anchor) => {
                 setDetailSheetVisible(false);
-                Alert.alert('Excluir ponto', `Confirmar exclusão de "${anchor.name}"?`, [
-                  { text: 'Cancelar', style: 'cancel' },
-                  {
-                    text: 'Excluir',
-                    style: 'destructive',
-                    onPress: () => {
-                      void (async () => {
-                        try {
-                          setIsSaving(true);
-                          await deleteAnchorMutation.mutateAsync(anchor.id);
-                          projection.removeAnchorLocal(anchor.id);
-                        } catch (err) {
-                          console.warn('[AR] Erro ao excluir:', err);
-                          Alert.alert('Erro', 'Não foi possível excluir o ponto.');
-                        } finally {
-                          setIsSaving(false);
-                        }
-                      })();
+                Alert.alert(
+                  "Excluir ponto",
+                  `Confirmar exclusão de "${anchor.name}"?`,
+                  [
+                    { text: "Cancelar", style: "cancel" },
+                    {
+                      text: "Excluir",
+                      style: "destructive",
+                      onPress: () => {
+                        void (async () => {
+                          try {
+                            setIsSaving(true);
+                            await deleteAnchorMutation.mutateAsync(anchor.id);
+                            projection.removeAnchorLocal(anchor.id);
+                          } catch (err) {
+                            console.warn("[AR] Erro ao excluir:", err);
+                            Alert.alert(
+                              "Erro",
+                              "Não foi possível excluir o ponto.",
+                            );
+                          } finally {
+                            setIsSaving(false);
+                          }
+                        })();
+                      },
                     },
-                  },
-                ]);
+                  ],
+                );
               }
             : undefined
         }
@@ -490,7 +598,8 @@ export const ViroARAnchorContainer: FC = () => {
       {arRoute.active ? (
         <View
           style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
-          pointerEvents="box-none">
+          pointerEvents="box-none"
+        >
           <View style={styles.navHudPill}>
             <Ionicons name="navigate" size={16} color="#34D399" />
             <Text style={styles.navHudText}>
@@ -500,7 +609,8 @@ export const ViroARAnchorContainer: FC = () => {
               onPress={stopNavigation}
               style={styles.navHudStopBtn}
               accessibilityRole="button"
-              accessibilityLabel="Encerrar navegação">
+              accessibilityLabel="Encerrar navegação"
+            >
               <Ionicons name="close-circle" size={20} color="#FDA4AF" />
             </TouchableOpacity>
           </View>
@@ -508,7 +618,8 @@ export const ViroARAnchorContainer: FC = () => {
       ) : arRoute.isLoading ? (
         <View
           style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
-          pointerEvents="none">
+          pointerEvents="none"
+        >
           <View style={styles.navHudPill}>
             <ActivityIndicator size="small" color="#34D399" />
             <Text style={styles.navHudText}>Calculando rota...</Text>
@@ -537,12 +648,12 @@ export const ViroARAnchorContainer: FC = () => {
 const styles = StyleSheet.create({
   rootContainer: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: "#000000",
   },
   arViewportClip: {
     flex: 1,
-    backgroundColor: '#000000',
-    overflow: 'hidden',
+    backgroundColor: "#000000",
+    overflow: "hidden",
   },
   arZoomWrapper: {
     flex: 1,
@@ -551,25 +662,25 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   zoomBadge: {
-    position: 'absolute',
+    position: "absolute",
     top: 138,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(37, 99, 235, 0.92)',
+    alignSelf: "center",
+    backgroundColor: "rgba(37, 99, 235, 0.92)",
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: 'rgba(96, 165, 250, 0.6)',
+    borderColor: "rgba(96, 165, 250, 0.6)",
     zIndex: 20,
     elevation: 32,
   },
   zoomBadgeText: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   bottomBar: {
-    position: 'absolute',
+    position: "absolute",
     bottom: 28,
     left: 20,
     right: 20,
@@ -577,48 +688,48 @@ const styles = StyleSheet.create({
     elevation: 20,
   },
   placeAnchorButton: {
-    backgroundColor: '#2563EB',
+    backgroundColor: "#2563EB",
     paddingVertical: 15,
     borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     borderWidth: 1,
-    borderColor: '#60A5FA',
-    shadowColor: '#2563EB',
+    borderColor: "#60A5FA",
+    shadowColor: "#2563EB",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
     shadowRadius: 8,
     elevation: 10,
   },
   placeAnchorButtonText: {
-    color: '#FFFFFF',
+    color: "#FFFFFF",
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   navHud: {
-    position: 'absolute',
+    position: "absolute",
     top: 188,
     left: 16,
     right: 16,
-    alignItems: 'center',
+    alignItems: "center",
     zIndex: 30,
     elevation: 30,
   },
   navHudPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
-    backgroundColor: 'rgba(6, 78, 59, 0.9)',
+    backgroundColor: "rgba(6, 78, 59, 0.9)",
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#059669',
+    borderColor: "#059669",
   },
   navHudText: {
-    color: '#D1FAE5',
+    color: "#D1FAE5",
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   navHudStopBtn: {
     marginLeft: 4,
