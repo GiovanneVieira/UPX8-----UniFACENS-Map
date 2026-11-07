@@ -120,6 +120,8 @@ export const ViroARAnchorContainer: FC = () => {
     startNavigation,
     stopNavigation,
   } = useARNavigation({
+    isLocationAvailable: () =>
+      geo.hasLocationRef.current || projection.calibratedLandmark != null,
     userCoordsRef: geo.userCoordsRef,
     referenceHeadingRef: projection.referenceHeadingRef,
     projectionOrigin: () => ({
@@ -618,11 +620,42 @@ export const ViroARAnchorContainer: FC = () => {
       ) : arRoute.isLoading ? (
         <View
           style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
-          pointerEvents="none"
+          pointerEvents="box-none"
         >
           <View style={styles.navHudPill}>
             <ActivityIndicator size="small" color="#34D399" />
             <Text style={styles.navHudText}>Calculando rota...</Text>
+            <TouchableOpacity
+              onPress={stopNavigation}
+              style={styles.navHudStopBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Cancelar cálculo da rota"
+            >
+              <Ionicons name="close-circle" size={20} color="#FDA4AF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : arRoute.error ? (
+        <View
+          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
+          pointerEvents="box-none"
+        >
+          <View style={[styles.navHudPill, styles.navHudError]}>
+            <Text
+              accessibilityRole="alert"
+              accessibilityLiveRegion="assertive"
+              style={styles.navHudText}
+            >
+              {arRoute.error}
+            </Text>
+            <TouchableOpacity
+              onPress={stopNavigation}
+              style={styles.navHudStopBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Fechar aviso da rota"
+            >
+              <Ionicons name="close-circle" size={20} color="#FDA4AF" />
+            </TouchableOpacity>
           </View>
         </View>
       ) : null}
@@ -727,12 +760,22 @@ const styles = StyleSheet.create({
     borderColor: "#059669",
   },
   navHudText: {
+    flexShrink: 1,
     color: "#D1FAE5",
     fontSize: 14,
     fontWeight: "700",
   },
   navHudStopBtn: {
     marginLeft: 4,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  navHudError: {
+    backgroundColor: "#451A1A",
+    borderColor: "#FDA4AF",
+    borderRadius: 20,
   },
 });
 

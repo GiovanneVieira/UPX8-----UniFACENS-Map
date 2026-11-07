@@ -1,3 +1,4 @@
+import { withRequestTimeout } from "@/services/request-timeout";
 import {
   createPlaceSchema,
   updatePlaceSchema,
@@ -18,17 +19,19 @@ export interface PlaceFilters {
 }
 
 export async function fetchPlace(id: string, signal: AbortSignal) {
-  const response = await fetch(`${getApiBaseUrl()}/places/${id}`, {
-    headers: { ...getTeamAuthorization() },
-    signal,
-  });
-  if (response.status === 401) {
-    useAuthStore.getState().clearSession();
-    throw new Error("Sessão expirada. Faça login novamente.");
-  }
-  if (!response.ok)
-    throw new Error("Não foi possível carregar os detalhes do local.");
-  return placeSchema.parse(await response.json());
+  return withRequestTimeout(async (requestSignal) => {
+    const response = await fetch(`${getApiBaseUrl()}/places/${id}`, {
+      headers: { ...getTeamAuthorization() },
+      signal: requestSignal,
+    });
+    if (response.status === 401) {
+      useAuthStore.getState().clearSession();
+      throw new Error("Sessão expirada. Faça login novamente.");
+    }
+    if (!response.ok)
+      throw new Error("Não foi possível carregar os detalhes do local.");
+    return placeSchema.parse(await response.json());
+  }, signal);
 }
 
 export async function fetchPlaces(
@@ -36,60 +39,74 @@ export async function fetchPlaces(
   offset: number,
   signal: AbortSignal,
 ): Promise<PlacesPage> {
-  const params = new URLSearchParams({ limit: "50", offset: String(offset) });
-  if (filters.search.trim()) params.set("search", filters.search.trim());
-  if (filters.category) params.set("category", filters.category);
-  const response = await fetch(`${getApiBaseUrl()}/places?${params}`, {
-    headers: { ...getTeamAuthorization() },
-    signal,
-  });
-  if (response.status === 401) {
-    useAuthStore.getState().clearSession();
-    throw new Error("Sessão expirada. Faça login novamente.");
-  }
-  if (!response.ok)
-    throw new Error("Não foi possível carregar os locais. Tente novamente.");
-  return placesPageSchema.parse(await response.json());
+  return withRequestTimeout(async (requestSignal) => {
+    const params = new URLSearchParams({ limit: "50", offset: String(offset) });
+    if (filters.search.trim()) params.set("search", filters.search.trim());
+    if (filters.category) params.set("category", filters.category);
+    const response = await fetch(`${getApiBaseUrl()}/places?${params}`, {
+      headers: { ...getTeamAuthorization() },
+      signal: requestSignal,
+    });
+    if (response.status === 401) {
+      useAuthStore.getState().clearSession();
+      throw new Error("Sessão expirada. Faça login novamente.");
+    }
+    if (!response.ok)
+      throw new Error("Não foi possível carregar os locais. Tente novamente.");
+    return placesPageSchema.parse(await response.json());
+  }, signal);
 }
 
 export async function createPlace(dto: CreatePlaceDto) {
-  const response = await fetch(`${getApiBaseUrl()}/places`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getTeamAuthorization() },
-    body: JSON.stringify(createPlaceSchema.parse(dto)),
-  }).catch(() => {
-    throw new Error(
-      "Não foi possível salvar o local. Confira a conexão e tente novamente.",
-    );
+  return withRequestTimeout(async (requestSignal) => {
+    const response = await fetch(`${getApiBaseUrl()}/places`, {
+      signal: requestSignal,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getTeamAuthorization(),
+      },
+      body: JSON.stringify(createPlaceSchema.parse(dto)),
+    }).catch(() => {
+      throw new Error(
+        "Não foi possível salvar o local. Confira a conexão e tente novamente.",
+      );
+    });
+    if (!response.ok)
+      throw new Error(
+        "Não foi possível salvar o local. Confira os dados e tente novamente.",
+      );
+    return placeSchema.parse(await response.json());
   });
-  if (!response.ok)
-    throw new Error(
-      "Não foi possível salvar o local. Confira os dados e tente novamente.",
-    );
-  return placeSchema.parse(await response.json());
 }
 
 export async function updatePlace(id: string, dto: UpdatePlaceDto) {
-  const response = await fetch(`${getApiBaseUrl()}/places/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json", ...getTeamAuthorization() },
-    body: JSON.stringify(updatePlaceSchema.parse(dto)),
-  }).catch(() => {
-    throw new Error(
-      "Não foi possível atualizar o local. Confira a conexão e tente novamente.",
-    );
+  return withRequestTimeout(async (requestSignal) => {
+    const response = await fetch(`${getApiBaseUrl()}/places/${id}`, {
+      signal: requestSignal,
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getTeamAuthorization(),
+      },
+      body: JSON.stringify(updatePlaceSchema.parse(dto)),
+    }).catch(() => {
+      throw new Error(
+        "Não foi possível atualizar o local. Confira a conexão e tente novamente.",
+      );
+    });
+    if (response.status === 401) {
+      useAuthStore.getState().clearSession();
+      throw new Error(
+        "Sessão expirada ou inválida. Entre novamente para editar.",
+      );
+    }
+    if (!response.ok)
+      throw new Error(
+        response.status === 404
+          ? "Este local não está mais disponível. Feche a edição e atualize a lista."
+          : "Não foi possível atualizar o local. Confira a conexão e tente novamente.",
+      );
+    return placeSchema.parse(await response.json());
   });
-  if (response.status === 401) {
-    useAuthStore.getState().clearSession();
-    throw new Error(
-      "Sessão expirada ou inválida. Entre novamente para editar.",
-    );
-  }
-  if (!response.ok)
-    throw new Error(
-      response.status === 404
-        ? "Este local não está mais disponível. Feche a edição e atualize a lista."
-        : "Não foi possível atualizar o local. Confira a conexão e tente novamente.",
-    );
-  return placeSchema.parse(await response.json());
 }

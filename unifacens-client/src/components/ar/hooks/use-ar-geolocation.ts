@@ -29,6 +29,7 @@ const DEFAULT_CAMPUS_COORDS: GeoCoords = {
  * `useEffect` conforme AGENTS.MD §7), com cleanup obrigatório.
  */
 export function useARGeolocation() {
+  const hasLocationRef = useRef(false);
   const userCoordsRef = useRef<GeoCoords>(DEFAULT_CAMPUS_COORDS);
   const [userCoords, setUserCoords] = useState<GeoCoords>(userCoordsRef.current);
 
@@ -50,7 +51,7 @@ export function useARGeolocation() {
         }
 
         // 1. Posição inicial rápida (última conhecida)
-        const initialLoc = await Location.getLastKnownPositionAsync({});
+        const initialLoc = await Location.getLastKnownPositionAsync({ maxAge: 30000 });
         if (initialLoc && isMounted) {
           const coords: GeoCoords = {
             latitude: initialLoc.coords.latitude,
@@ -59,6 +60,7 @@ export function useARGeolocation() {
             accuracy: initialLoc.coords.accuracy ?? 10,
           };
           userCoordsRef.current = coords;
+          hasLocationRef.current = true;
           setUserCoords(coords);
         }
 
@@ -78,6 +80,7 @@ export function useARGeolocation() {
               accuracy: loc.coords.accuracy ?? 10,
             };
             userCoordsRef.current = coords;
+            hasLocationRef.current = true;
             setUserCoords(coords);
           },
         );
@@ -109,5 +112,5 @@ export function useARGeolocation() {
     };
   }, []);
 
-  return { userCoords, userCoordsRef, userTrueHeading, userTrueHeadingRef };
+  return { userCoords, userCoordsRef, userTrueHeading, userTrueHeadingRef, hasLocationRef };
 }
