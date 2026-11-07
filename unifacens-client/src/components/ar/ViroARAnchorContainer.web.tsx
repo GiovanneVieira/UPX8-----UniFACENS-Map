@@ -95,9 +95,9 @@ export const ViroARAnchorContainer: FC = () => {
                   <Text style={{ color: '#a855f7', fontSize: 11, fontFamily: 'monospace', marginTop: 4 }}>
                     ID: {item.cloudAnchorId}
                   </Text>
-                  {item.position ? (
+                  {typeof item.latitude === 'number' && typeof item.longitude === 'number' ? (
                     <Text style={{ color: '#38bdf8', fontSize: 11, fontFamily: 'monospace', marginTop: 2 }}>
-                      Pos: [{item.position[0].toFixed(2)}, {item.position[1].toFixed(2)}, {item.position[2].toFixed(2)}]
+                      GPS: [{item.latitude.toFixed(6)}, {item.longitude.toFixed(6)}]
                     </Text>
                   ) : null}
                 </View>

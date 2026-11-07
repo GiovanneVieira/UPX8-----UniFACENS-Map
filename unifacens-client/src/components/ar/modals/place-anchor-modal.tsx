@@ -20,6 +20,10 @@ interface PlaceAnchorModalProps {
   originLabel: string;
   /** Heading verdadeiro em graus. */
   heading: number;
+  /** Acurácia horizontal da pose (m) — null = indisponível. */
+  accuracyMeters: number | null;
+  /** Limite de acurácia para habilitar o salvar (mesma const do container). */
+  maxAccuracyMeters: number;
   pendingDistance: number;
   onAdjustDistance: (delta: number) => void;
   anchorName: string;
@@ -47,6 +51,8 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   isSaving,
   originLabel,
   heading,
+  accuracyMeters,
+  maxAccuracyMeters,
   pendingDistance,
   onAdjustDistance,
   anchorName,
@@ -56,6 +62,15 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   onCreate,
   onClose,
 }) => {
+  // Gate de precisão (P3): verde ≤5m, âmbar ≤limite, vermelho > limite
+  const accuracyOk = accuracyMeters === null || accuracyMeters <= maxAccuracyMeters;
+  const accuracyColor =
+    accuracyMeters === null ? '#94A3B8' : accuracyMeters <= 5 ? '#34D399' : accuracyOk ? '#FBBF24' : '#EF4444';
+  const accuracyLabel =
+    accuracyMeters === null
+      ? 'indisponível'
+      : `±${accuracyMeters.toFixed(1)}m${accuracyOk ? '' : ' — aguarde melhorar'}`;
+  const saveBlocked = isSaving || !accuracyOk;
   return (
     <Modal
       visible={visible}
@@ -82,6 +97,16 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Ionicons name="compass-outline" size={13} color="#38BDF8" />
                 <Text style={styles.geoInfoRow}>Bússola: {heading}° (Norte Verdadeiro)</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons
+                  name={accuracyOk ? 'locate' : 'warning'}
+                  size={13}
+                  color={accuracyColor}
+                />
+                <Text style={[styles.geoInfoRow, { color: accuracyColor }]}>
+                  Precisão do GPS: {accuracyLabel}
+                </Text>
               </View>
             </View>
 
@@ -128,10 +153,13 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
               <TouchableOpacity onPress={onClose} disabled={isSaving} style={styles.cancelButton}>
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={onCreate} disabled={isSaving} style={styles.saveButton}>
+              <TouchableOpacity
+                onPress={onCreate}
+                disabled={saveBlocked}
+                style={[styles.saveButton, !accuracyOk && styles.saveButtonBlocked]}>
                 {isSaving ? <ActivityIndicator size="small" color="#FFFFFF" /> : null}
                 <Text style={styles.saveButtonText}>
-                  {isSaving ? 'Salvando...' : 'Salvar Ponto'}
+                  {isSaving ? 'Salvando...' : !accuracyOk ? 'Precisão insuficiente' : 'Salvar Ponto'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -290,6 +318,11 @@ const styles = StyleSheet.create({
     gap: 8,
     borderWidth: 1,
     borderColor: '#60A5FA',
+  },
+  saveButtonBlocked: {
+    backgroundColor: '#1E3A5F',
+    borderColor: '#475569',
+    opacity: 0.7,
   },
   saveButtonText: {
     color: '#FFFFFF',

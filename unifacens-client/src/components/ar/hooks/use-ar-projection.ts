@@ -1,229 +1,129 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  type Anchor,
-  calculateDistance,
-  calculateRelativeARPosition,
-} from 'shared';
-import type { CampusLandmark } from '@/constants/campus-landmarks';
-import type { GeoCoords } from './use-ar-geolocation';
-
-/** Deslocamento mínimo (m) antes de re-projetar âncoras por GPS (modo outdoor). */
-const REPROJECTION_THRESHOLD_M = 15;
+import { useCallback, useEffect, useState } from 'react';
+import { geodeticToENU, type Anchor } from 'shared';
+import type { NativeAnchorEntry } from './use-native-anchors';
+import type { GeospatialPose } from './use-geospatial-pose';
 
 interface UseARProjectionParams {
   /** Âncoras vindas do server state (TanStack Query). */
   serverAnchors: Anchor[] | undefined;
-  /** Sensores de geolocalização (GPS + bússola compensada). */
-  geo: {
-    userCoords: GeoCoords;
-    userCoordsRef: React.MutableRefObject<GeoCoords>;
-    userTrueHeading: number;
-    userTrueHeadingRef: React.MutableRefObject<number>;
-  };
+  /** Âncoras nativas (pinId -> posição AR mantida pelo ARCore). */
+  nativeEntries: Map<string, NativeAnchorEntry>;
+  /** Pose geospatial da câmera (para fallback de projeção). */
+  geoPoseRef: React.MutableRefObject<GeospatialPose | null>;
+  /** Pose instantânea da câmera no mundo AR. */
+  cameraPosRef: React.MutableRefObject<[number, number, number]>;
+}
+
+/** Fallback: projeta WGS84→AR usando a pose geospatial (sem âncora nativa). */
+function fallbackProject(
+  pose: GeospatialPose,
+  camPos: [number, number, number],
+  lat: number,
+  lng: number,
+): [number, number, number] {
+  const { east, north } = geodeticToENU(pose.latitude, pose.longitude, 0, lat, lng, 0);
+  const h = (pose.heading * Math.PI) / 180;
+  const arX = east * Math.cos(h) - north * Math.sin(h);
+  const arZ = -(east * Math.sin(h) + north * Math.cos(h));
+  return [camPos[0] + arX, -1.5, camPos[2] + arZ];
+}
+
+/** Acurácia máxima da pose para o FALLBACK projetar pins (m). */
+const FALLBACK_MAX_ACCURACY_M = 10;
+
+/** Posição é utilizável (finita, não colapsada na origem)? */
+function isValidPosition(pos: [number, number, number]): boolean {
+  return (
+    Number.isFinite(pos[0]) &&
+    Number.isFinite(pos[1]) &&
+    Number.isFinite(pos[2]) &&
+    !(Math.abs(pos[0]) < 0.005 && Math.abs(pos[1]) < 0.005 && Math.abs(pos[2]) < 0.005)
+  );
 }
 
 /**
- * Motor Geodésico do container AR: projeta âncoras WGS84 no frustum local
- * (ENU rotacionado pelo Norte Verdadeiro), gerencia a Calibração Zero-Marker
- * e o cache de posições travadas na sessão (pontos criados pelo usuário que
- * jamais devem ser recalculados — rigidez SLAM absoluta).
+ * Projeção de âncoras pós-WorldAnchor — DUAS fontes:
+ *
+ * 1. Âncora NATIVA (ARCore mantém Terra-ancorada) — prioridade máxima
+ * 2. FALLBACK via pose geospatial — quando a âncora nativa falha,
+ *    ainda está resolvendo, ou retornou posição inválida
+ *
+ * Pin invisível APENAS quando não há nem âncora nativa nem pose geospatial.
  */
-export function useARProjection({ serverAnchors, geo }: UseARProjectionParams) {
-  const rawAnchorsRef = useRef<Anchor[]>([]);
+export function useARProjection({
+  serverAnchors,
+  nativeEntries,
+  geoPoseRef,
+  cameraPosRef,
+}: UseARProjectionParams) {
   const [anchors, setAnchors] = useState<Anchor[]>([]);
 
-  // Cache de posições travadas na sessão atual
-  const sessionLockedPositionsRef = useRef<Map<string, [number, number, number]>>(new Map());
-
-  // Calibração Zero-Marker (pinpoint em marco conhecido do campus)
-  const [calibratedLandmark, setCalibratedLandmark] = useState<CampusLandmark | null>(null);
-  const calibratedLandmarkRef = useRef<CampusLandmark | null>(null);
-
-  // Orientação/coords de referência da projeção (imutáveis até recalibrar)
-  const referenceHeadingRef = useRef<number | null>(null);
-  const lastProjectedCoordsRef = useRef<{ latitude: number; longitude: number } | null>(null);
-
-  const updateProjectedAnchors = useCallback(
-    (
-      sourceAnchors: Anchor[],
-      coords: { latitude: number; longitude: number; altitude: number },
-      heading: number,
-      calibrated: CampusLandmark | null,
-    ) => {
-      const activeLat = calibrated ? calibrated.latitude : coords.latitude;
-      const activeLon = calibrated ? calibrated.longitude : coords.longitude;
-      const activeAlt = calibrated ? calibrated.altitude : coords.altitude;
-
-      const projected: Anchor[] = sourceAnchors.map((anchor) => {
-        // 1. Âncora criada/travada nesta sessão: preserva a pose SLAM exata
-        if (sessionLockedPositionsRef.current.has(anchor.id)) {
-          const lockedPos = sessionLockedPositionsRef.current.get(anchor.id)!;
-          return {
-            ...anchor,
-            arPosition: lockedPos,
-            distanceMeters:
-              anchor.distanceMeters ?? Math.hypot(lockedPos[0], lockedPos[1], lockedPos[2]),
-          };
-        }
-
-        // 2. Projeta âncoras conhecidas em relação à origem ativa
-        if (
-          typeof anchor.latitude === 'number' &&
-          Number.isFinite(anchor.latitude) &&
-          typeof anchor.longitude === 'number' &&
-          Number.isFinite(anchor.longitude)
-        ) {
-          const targetAlt =
-            typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude)
-              ? anchor.altitude
-              : activeAlt;
-
-          const distanceMeters = calculateDistance(
-            activeLat,
-            activeLon,
-            anchor.latitude,
-            anchor.longitude,
-          );
-
-          // O próprio marco de calibração fica à frente, na altura dos olhos
-          if (
-            calibrated &&
-            Math.abs(anchor.latitude - calibrated.latitude) < 0.00002 &&
-            Math.abs(anchor.longitude - calibrated.longitude) < 0.00002
-          ) {
-            return {
-              ...anchor,
-              distanceMeters: 0,
-              arPosition: [0, 0, -1.2] as [number, number, number],
-            };
-          }
-
-          const arPos = calculateRelativeARPosition(
-            activeLat,
-            activeLon,
-            activeAlt,
-            heading,
-            anchor.latitude,
-            anchor.longitude,
-            targetAlt,
-          );
-
-          return { ...anchor, distanceMeters, arPosition: arPos };
-        }
-
-        return anchor;
-      });
-
-      setAnchors(projected);
-    },
-    [],
-  );
-
-  // Sincronização do server state (TanStack Query) com o motor de projeção.
-  // Efeito legítimo (§7): sincroniza com fonte externa quando `data` muda.
   useEffect(() => {
-    if (!serverAnchors) return;
-    rawAnchorsRef.current = serverAnchors;
-    const headingToUse = referenceHeadingRef.current ?? geo.userTrueHeadingRef.current;
-    updateProjectedAnchors(
-      serverAnchors,
-      geo.userCoordsRef.current,
-      headingToUse,
-      calibratedLandmarkRef.current,
-    );
-  }, [serverAnchors, updateProjectedAnchors, geo.userCoordsRef, geo.userTrueHeadingRef]);
-
-  // Inicializa a orientação de referência na primeira leitura válida da bússola
-  useEffect(() => {
-    if (referenceHeadingRef.current !== null || geo.userTrueHeading === 0) return;
-    const heading = geo.userTrueHeadingRef.current;
-    if (heading === 0) return;
-    referenceHeadingRef.current = heading;
-    updateProjectedAnchors(
-      rawAnchorsRef.current,
-      geo.userCoordsRef.current,
-      heading,
-      calibratedLandmarkRef.current,
-    );
-  }, [geo.userTrueHeading, geo.userTrueHeadingRef, geo.userCoordsRef, updateProjectedAnchors]);
-
-  // Política outdoor: re-projeta somente quando NÃO calibrado e o deslocamento
-  // acumulado desde a última projeção ultrapassa o limiar (evita churn de nós 3D)
-  useEffect(() => {
-    if (calibratedLandmarkRef.current) return;
-    const newCoords = geo.userCoords;
-    if (!lastProjectedCoordsRef.current) {
-      lastProjectedCoordsRef.current = newCoords;
+    if (!serverAnchors) {
+      setAnchors([]);
       return;
     }
-    const movedDist = calculateDistance(
-      lastProjectedCoordsRef.current.latitude,
-      lastProjectedCoordsRef.current.longitude,
-      newCoords.latitude,
-      newCoords.longitude,
-    );
-    if (movedDist > REPROJECTION_THRESHOLD_M) {
-      lastProjectedCoordsRef.current = newCoords;
-      updateProjectedAnchors(
-        rawAnchorsRef.current,
-        newCoords,
-        referenceHeadingRef.current ?? geo.userTrueHeadingRef.current,
-        null,
-      );
+    const camPos = cameraPosRef.current;
+    const pose = geoPoseRef.current;
+    const projected: Anchor[] = [];
+
+    for (const anchor of serverAnchors) {
+      if (
+        typeof anchor.latitude !== 'number' ||
+        !Number.isFinite(anchor.latitude) ||
+        typeof anchor.longitude !== 'number' ||
+        !Number.isFinite(anchor.longitude)
+      ) {
+        continue;
+      }
+
+      // 1. Âncora nativa (ARCore mantém) — se válida, usa SEMPRE (a âncora
+      //    nativa já foi validada pelo ARCore contra a Terra)
+      const native = nativeEntries.get(anchor.id);
+      if (native && isValidPosition(native.position)) {
+        const dist = Math.hypot(
+          native.position[0] - camPos[0],
+          native.position[1] - camPos[1],
+          native.position[2] - camPos[2],
+        );
+        projected.push({
+          ...anchor,
+          arPosition: native.position,
+          distanceMeters: Number(dist.toFixed(2)),
+        });
+        continue;
+      }
+
+      // 2. FALLBACK: projeção via pose geospatial — SÓ quando a acurácia
+      //    é boa o suficiente (pins não devem nascer em posição errada)
+      if (pose && pose.horizontalAccuracy <= FALLBACK_MAX_ACCURACY_M) {
+        const fbPos = fallbackProject(pose, camPos, anchor.latitude, anchor.longitude);
+        if (isValidPosition(fbPos)) {
+          const dist = Math.hypot(
+            fbPos[0] - camPos[0],
+            fbPos[1] - camPos[1],
+            fbPos[2] - camPos[2],
+          );
+          projected.push({
+            ...anchor,
+            arPosition: fbPos,
+            distanceMeters: Number(dist.toFixed(2)),
+          });
+        }
+      }
+      // 3. Sem âncora nativa E pose ruim → invisível (calibrando)
     }
-  }, [geo.userCoords, geo.userTrueHeadingRef, updateProjectedAnchors]);
 
-  /** Calibra em um marco conhecido (ou restaura o GPS passando `null`). */
-  const calibrate = useCallback(
-    (landmark: CampusLandmark | null) => {
-      setCalibratedLandmark(landmark);
-      calibratedLandmarkRef.current = landmark;
-      referenceHeadingRef.current = geo.userTrueHeadingRef.current;
-      lastProjectedCoordsRef.current = geo.userCoordsRef.current;
-      updateProjectedAnchors(
-        rawAnchorsRef.current,
-        geo.userCoordsRef.current,
-        geo.userTrueHeadingRef.current,
-        landmark,
-      );
-    },
-    [geo.userCoordsRef, geo.userTrueHeadingRef, updateProjectedAnchors],
-  );
+    setAnchors(projected);
+  }, [serverAnchors, nativeEntries, geoPoseRef, cameraPosRef]);
 
-  /** Trava rigidamente a posição 3D de uma âncora nesta sessão (SLAM puro). */
-  const lockPosition = useCallback((id: string, position: [number, number, number]) => {
-    sessionLockedPositionsRef.current.set(id, position);
-  }, []);
-
-  /** Remove o travamento de sessão e a âncora das listas locais. */
-  const removeAnchorLocal = useCallback(
-    (id: string) => {
-      sessionLockedPositionsRef.current.delete(id);
-      const remaining = rawAnchorsRef.current.filter((a) => a.id !== id);
-      rawAnchorsRef.current = remaining;
-      updateProjectedAnchors(
-        remaining,
-        geo.userCoordsRef.current,
-        geo.userTrueHeadingRef.current,
-        calibratedLandmarkRef.current,
-      );
-    },
-    [geo.userCoordsRef, geo.userTrueHeadingRef, updateProjectedAnchors],
-  );
-
-  /** Adiciona uma âncora recém-criada à lista bruta local (exibição imediata). */
-  const prependAnchor = useCallback((anchor: Anchor) => {
-    rawAnchorsRef.current = [anchor, ...rawAnchorsRef.current];
+  /** Remove a âncora das listas locais (exclusão otimista). */
+  const removeAnchorLocal = useCallback((id: string) => {
+    setAnchors((prev) => prev.filter((a) => a.id !== id));
   }, []);
 
   return {
     anchors,
-    updateProjectedAnchors,
-    calibratedLandmark,
-    calibrate,
-    lockPosition,
     removeAnchorLocal,
-    prependAnchor,
-    referenceHeadingRef,
   };
 }

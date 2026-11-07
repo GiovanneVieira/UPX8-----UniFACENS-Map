@@ -8,7 +8,8 @@
     "lint": "npm run lint -w unifacens-api && node unifacens-api/node_modules/oxlint/bin/oxlint unifacens-client/src",
     "typecheck": "tsc --noEmit -p packages/shared && tsc --noEmit -p unifacens-client",
     "test": "npm run test -w unifacens-api",
-    "android:connect": "adb reverse tcp:8081 tcp:8081 && adb reverse tcp:8000 tcp:8000",
+    "android:connect": "powershell -ExecutionPolicy Bypass -File scripts/connect-device.ps1",
+    "android": "powershell -ExecutionPolicy Bypass -File scripts/connect-device.ps1 && npm --workspace=unifacens-client run android",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [],

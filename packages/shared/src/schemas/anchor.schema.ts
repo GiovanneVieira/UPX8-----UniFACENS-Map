@@ -8,13 +8,15 @@ export type Vector3 = z.infer<typeof vector3Schema>;
 
 /**
  * Schema para entidade Anchor persistida no PostgreSQL (Google ARCore Cloud Anchors).
+ * `position` (coordenadas AR do mundo local) foi REMOVIDO: era session-relative
+ * (origem = pose do celular no launch da sessão) — lixo entre sessões.
+ * O SSOT geográfico é lat/lng/alt; `arPosition` é runtime-only (client).
  */
 export const anchorSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1, 'O nome é obrigatório').max(255),
   cloudAnchorId: z.string().min(1, 'O Cloud Anchor ID é obrigatório'),
   description: z.string().max(1000).optional().nullable(),
-  position: vector3Schema.optional().nullable(),
   latitude: z.number().optional().nullable(),
   longitude: z.number().optional().nullable(),
   altitude: z.number().optional().nullable(),
@@ -36,7 +38,6 @@ export const createAnchorSchema = z.object({
   name: z.string().trim().min(1, 'O nome da âncora é obrigatório').max(255),
   cloudAnchorId: z.string().trim().min(1, 'O Cloud Anchor ID é obrigatório'),
   description: z.string().trim().max(1000).optional().nullable(),
-  position: vector3Schema.optional().nullable(),
   latitude: z.number().optional().nullable(),
   longitude: z.number().optional().nullable(),
   altitude: z.number().optional().nullable(),

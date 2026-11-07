@@ -2,6 +2,7 @@ import React, { FC, useState, useRef, useCallback, useMemo } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -22,16 +23,17 @@ import {
   anchorKeys,
 } from "@/features/anchors/queries/use-anchors-query";
 import { useAuth } from "@/features/auth/hooks/use-auth";
-import type { CampusLandmark } from "@/constants/campus-landmarks";
 import { ViroARAnchorScene } from "./ViroARAnchorScene";
 import { useARGeolocation } from "./hooks/use-ar-geolocation";
 import { useARProjection } from "./hooks/use-ar-projection";
+import { useGeospatialPose, isPoseFresh } from "./hooks/use-geospatial-pose";
+import { useNativeAnchors } from "./hooks/use-native-anchors";
 import { useARZoom } from "./hooks/use-ar-zoom";
 import { ARStatusHud } from "./hud/ar-status-hud";
 import { ARCompassRadiusBar } from "./hud/ar-compass-radius-bar";
 import { ARZoomSelector } from "./hud/ar-zoom-selector";
 import { ARReticle } from "./hud/ar-reticle";
-import { CalibrationModal } from "./modals/calibration-modal";
+import { NavInstructionHud } from "./hud/nav-instruction-hud";
 import { PlaceAnchorModal } from "./modals/place-anchor-modal";
 import { AnchorDetailSheet } from "./modals/anchor-detail-sheet";
 import { useARNavigation } from "@/features/ar/hooks/use-ar-navigation";
@@ -46,6 +48,16 @@ const HIT_TEST_PRIORITY = [
 
 // Constante estática da cena inicial para nunca recriar a instância nativa do ViroARSceneNavigator
 const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
+
+/**
+ * EXPERIMENTO DE ISOLAMENTO DE TRACKING (temporário):
+ * true  = navigator renderiza NU (sem wrapper de zoom/gestos)
+ * false = layout padrão com zoom.
+ */
+const STRIP_ZOOM_FOR_TRACKING_TEST = true;
+
+/** P3 — Gate de precisão na criação de pins. */
+const CREATE_MAX_ACCURACY_M = 10;
 
 /** Facade mínima do ref da cena Viro utilizada para hit-tests. */
 interface ViroSceneHitTestRef {
@@ -64,18 +76,110 @@ export const ViroARAnchorContainer: FC = () => {
   const createAnchorMutation = useCreateAnchorMutation();
   const deleteAnchorMutation = useDeleteAnchorMutation();
   const [isSaving, setIsSaving] = useState(false);
-  // Override de status do HUD durante mutações (null = status derivado do query)
   const [mutationStatus, setMutationStatus] = useState<string | null>(null);
-
-  // ── Motores de domínio (hooks dedicados) ─────────────────────────────────
-  const geo = useARGeolocation();
-  const projection = useARProjection({ serverAnchors: anchorsQuery.data, geo });
-  // Capacidade por role: somente admins criam/excluem âncoras (plano v2/D2)
   const { isAdmin } = useAuth();
 
-  // ── Seleção por retícula: tap abre o pin mais próximo da mira ────────────
-  // (substitui o onClick do Viro — RNGH Exclusive(Tap, Pinch) não deixa o
-  // evento chegar na GLSurfaceView; nós mesmos encontramos o alvo)
+  // ── Motores de domínio (hooks dedicados) ─────────────────────────────────
+  const cameraPosRef = useRef<[number, number, number]>([0, 0, 0]);
+  const cameraFwdRef = useRef<[number, number, number]>([0, 0, -1]);
+  const trackingStateRef = useRef<number>(2);
+  const [trackingState, setTrackingState] = useState<number>(2);
+
+  const geo = useARGeolocation();
+  const geospatial = useGeospatialPose();
+
+  // ── SISTEMA PRIMÁRIO: âncoras NATIVAS ARCore (Terra-ancoradas) ──────────
+  const nativeAnchors = useNativeAnchors({
+    serverAnchors: anchorsQuery.data,
+  });
+
+  const projection = useARProjection({
+    serverAnchors: anchorsQuery.data,
+    nativeEntries: nativeAnchors.entries,
+    geoPoseRef: geospatial.poseRef,
+    cameraPosRef,
+  });
+
+  // ── Navegação ────────────────────────────────────────────────────────────
+  const [detailSheetVisible, setDetailSheetVisible] = useState(false);
+  const [detailAnchor, setDetailAnchor] = useState<Anchor | null>(null);
+  const {
+    route: arRoute,
+    startNavigation,
+    stopNavigation,
+    updateProgress,
+  } = useARNavigation({
+    geoPoseRef: geospatial.poseRef,
+    cameraPosRef,
+  });
+
+  // ── Estado de UI local ────────────────────────────────────────────────────
+  const [radiusFilter, setRadiusFilter] = useState<number>(0);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [anchorName, setAnchorName] = useState("");
+  const [anchorDescription, setAnchorDescription] = useState("");
+  const [pendingCoords, setPendingCoords] = useState<[number, number, number]>([0, 0, -2.0]);
+  const [pendingDistance, setPendingDistance] = useState<number>(2.0);
+  const rayOriginRef = useRef<[number, number, number]>([0, 0, 0]);
+  const rayDirectionRef = useRef<[number, number, number]>([0, 0, -1]);
+
+  // ── Status do HUD ─────────────────────────────────────────────────────────
+  const cloudStatusDerived = useMemo(() => {
+    if (anchorsQuery.isPending) return "Carregando pontos...";
+    if (anchorsQuery.isError) return "Erro de conexão";
+    const total = anchorsQuery.data?.length ?? 0;
+    if (total === 0) return "0 ponto(s)";
+    // Pins do servidor existem mas nenhum projetado → calibrando
+    if (projection.anchors.length === 0) {
+      const pose = geospatial.pose;
+      const acc = pose?.horizontalAccuracy;
+      if (acc !== undefined && acc !== null) {
+        return `Calibrando AR… ±${acc.toFixed(0)}m`;
+      }
+      return "Calibrando AR…";
+    }
+    return `${projection.anchors.length} ponto(s)`;
+  }, [
+    anchorsQuery.isPending,
+    anchorsQuery.isError,
+    anchorsQuery.data,
+    projection.anchors.length,
+    geospatial.pose,
+  ]);
+  const cloudStatus = mutationStatus ?? cloudStatusDerived;
+
+  // ── Callbacks da cena Viro ────────────────────────────────────────────────
+  const lastNavTickRef = useRef<number>(0);
+
+  const handleCameraUpdate = useCallback(
+    (pos: [number, number, number], fwd: [number, number, number]) => {
+      cameraPosRef.current = pos;
+      cameraFwdRef.current = fwd;
+
+      const now = Date.now();
+      if (now - lastNavTickRef.current >= 1000) {
+        lastNavTickRef.current = now;
+        const pose = geospatial.poseRef.current;
+        if (pose && isPoseFresh(pose)) {
+          updateProgress(pose.latitude, pose.longitude);
+        }
+      }
+    },
+    [geospatial.poseRef, updateProgress],
+  );
+
+  const handleTrackingUpdate = useCallback((state: number) => {
+    trackingStateRef.current = state;
+    setTrackingState(state);
+  }, []);
+
+  const handleRegisterSceneRef = useCallback((scene: any) => {
+    arSceneRef.current = scene;
+  }, []);
+
+  const handlePlanesUpdated = useCallback((_count: number) => {}, []);
+
+  // ── Seleção por retícula ──────────────────────────────────────────────────
   const handleTapByReticle = useCallback(() => {
     const camPos = cameraPosRef.current;
     const camFwd = cameraFwdRef.current;
@@ -87,7 +191,7 @@ export const ViroARAnchorContainer: FC = () => {
     ];
 
     let bestAnchor: Anchor | null = null;
-    let bestDot = 0.97; // cos(~14°) — mira deve estar praticamente EM CIMA do pin.
+    let bestDot = 0.97;
 
     for (const a of projection.anchors) {
       if (!a.arPosition) continue;
@@ -112,110 +216,28 @@ export const ViroARAnchorContainer: FC = () => {
     { onTap: handleTapByReticle },
   );
 
-  // ── Navegação AR (C4): rota A* + projeção em setas no chão ────────────────
-  const [detailSheetVisible, setDetailSheetVisible] = useState(false);
-  const [detailAnchor, setDetailAnchor] = useState<Anchor | null>(null);
-  const {
-    route: arRoute,
-    startNavigation,
-    stopNavigation,
-  } = useARNavigation({
-    userCoordsRef: geo.userCoordsRef,
-    referenceHeadingRef: projection.referenceHeadingRef,
-    projectionOrigin: () => ({
-      latitude:
-        projection.calibratedLandmark?.latitude ??
-        geo.userCoordsRef.current.latitude,
-      longitude:
-        projection.calibratedLandmark?.longitude ??
-        geo.userCoordsRef.current.longitude,
-      altitude:
-        projection.calibratedLandmark?.altitude ??
-        geo.userCoordsRef.current.altitude,
-    }),
-  });
-
-  // ── Estado de UI local ────────────────────────────────────────────────────
-  const [radiusFilter, setRadiusFilter] = useState<number>(0);
-  const [calibrationModalVisible, setCalibrationModalVisible] = useState(false);
-
-  // Modal de criação de ponto
-  const [modalVisible, setModalVisible] = useState(false);
-  const [anchorName, setAnchorName] = useState("");
-  const [anchorDescription, setAnchorDescription] = useState("");
-  const [pendingCoords, setPendingCoords] = useState<[number, number, number]>([
-    0, 0, -2.0,
-  ]);
-  const [pendingDistance, setPendingDistance] = useState<number>(2.0);
-
-  // Pose instantânea da câmera no espaço AR
-  const cameraPosRef = useRef<[number, number, number]>([0, 0, 0]);
-  const cameraFwdRef = useRef<[number, number, number]>([0, 0, -1]);
-
-  // Linha de visada para micro-ajuste de profundidade no modal
-  const rayOriginRef = useRef<[number, number, number]>([0, 0, 0]);
-  const rayDirectionRef = useRef<[number, number, number]>([0, 0, -1]);
-
-  // Estado de Rastreamento SLAM (1: Indisponível, 2: Mapeando, 3: Estável)
-  const [trackingState, setTrackingState] = useState<number>(2);
-  const [_planesCount, setPlanesCount] = useState<number>(0);
-
-  // Status do HUD derivado do estado do query — sem estado espelho (§7/§8)
-  const cloudStatusDerived = useMemo(() => {
-    if (anchorsQuery.isPending) return "Carregando pontos...";
-    if (anchorsQuery.isError) return "Erro de conexão";
-    return `${anchorsQuery.data?.length ?? 0} ponto(s)`;
-  }, [anchorsQuery.isPending, anchorsQuery.isError, anchorsQuery.data]);
-  const cloudStatus = mutationStatus ?? cloudStatusDerived;
-
-  // ── Callbacks da cena Viro ────────────────────────────────────────────────
-  const handleCameraUpdate = useCallback(
-    (pos: [number, number, number], fwd: [number, number, number]) => {
-      cameraPosRef.current = pos;
-      cameraFwdRef.current = fwd;
-    },
-    [],
-  );
-
-  const handleTrackingUpdate = useCallback((state: number) => {
-    setTrackingState(state);
-  }, []);
-
-  const handleRegisterSceneRef = useCallback((scene: any) => {
-    arSceneRef.current = scene;
-  }, []);
-
-  const handlePlanesUpdated = useCallback((count: number) => {
-    setPlanesCount(count);
-  }, []);
-
+  // ── "Marcar Ponto" ────────────────────────────────────────────────────────
   const handlePlaneTapped = useCallback(
     (_anchorId: string, position: [number, number, number]) => {
-      const target: [number, number, number] = [
+      setPendingCoords([
         Number(position[0].toFixed(2)),
         Number(position[1].toFixed(2)),
         Number(position[2].toFixed(2)),
-      ];
-      setPendingCoords(target);
-
+      ]);
       const camPos = cameraPosRef.current || [0, 0, 0];
-      const dx = target[0] - camPos[0];
-      const dy = target[1] - camPos[1];
-      const dz = target[2] - camPos[2];
+      const dx = position[0] - camPos[0];
+      const dy = position[1] - camPos[1];
+      const dz = position[2] - camPos[2];
       const dist = Math.hypot(dx, dy, dz);
-      const finalDist = Number(Math.max(0.3, Math.min(30.0, dist)).toFixed(2));
-      setPendingDistance(finalDist);
-
+      setPendingDistance(Number(Math.max(0.3, Math.min(30.0, dist)).toFixed(2)));
       rayOriginRef.current = camPos;
       const fwdLen = dist || 1;
       rayDirectionRef.current = [dx / fwdLen, dy / fwdLen, dz / fwdLen];
-
       setModalVisible(true);
     },
     [],
   );
 
-  // Abertura do modal de criação com Hit-Test no centro da tela ou projeção do retículo
   const handleOpenPlaceModal = useCallback(async () => {
     const centerX = screenWidth / 2;
     const centerY = screenHeight / 2;
@@ -223,15 +245,11 @@ export const ViroARAnchorContainer: FC = () => {
 
     if (arSceneRef.current?.performARHitTestWithPoint) {
       try {
-        const hits = await arSceneRef.current.performARHitTestWithPoint(
-          centerX,
-          centerY,
-        );
+        const hits = await arSceneRef.current.performARHitTestWithPoint(centerX, centerY);
         if (Array.isArray(hits) && hits.length > 0) {
           for (const type of HIT_TEST_PRIORITY) {
             const match = hits.find(
-              (h: any) =>
-                h.type === type && isUsablePoint(h.transform?.position),
+              (h: any) => h.type === type && isUsablePoint(h.transform?.position),
             );
             if (match) {
               targetCoords = [
@@ -285,15 +303,11 @@ export const ViroARAnchorContainer: FC = () => {
     setModalVisible(true);
   }, [screenWidth, screenHeight]);
 
-  // Micro-ajuste de profundidade: setters independentes e updaters puros (§7/A4)
   const handleAdjustDistance = useCallback(
     (delta: number) => {
-      const newDist = Number(
-        Math.max(0.3, Math.min(30.0, pendingDistance + delta)).toFixed(2),
-      );
+      const newDist = Number(Math.max(0.3, Math.min(30.0, pendingDistance + delta)).toFixed(2));
       const origin = rayOriginRef.current;
       const dir = rayDirectionRef.current;
-
       setPendingDistance(newDist);
       setPendingCoords([
         Number((origin[0] + dir[0] * newDist).toFixed(2)),
@@ -304,7 +318,7 @@ export const ViroARAnchorContainer: FC = () => {
     [pendingDistance],
   );
 
-  // Criação de ponto geodésico persistente (offset métrico a partir da mira)
+  // ── handleCreate: conversão tap→lat/lng via POSE GEOSPATIAL ─────────────
   const handleCreate = async () => {
     if (!anchorName.trim()) {
       Alert.alert("Aviso", "Informe o nome do ponto.");
@@ -315,57 +329,62 @@ export const ViroARAnchorContainer: FC = () => {
       setIsSaving(true);
       setMutationStatus("Gravando ponto...");
 
-      const calibrated = projection.calibratedLandmark;
-      const activeLat = calibrated
-        ? calibrated.latitude
-        : geo.userCoordsRef.current.latitude;
-      const activeLon = calibrated
-        ? calibrated.longitude
-        : geo.userCoordsRef.current.longitude;
-      const activeAlt = calibrated
-        ? calibrated.altitude
-        : geo.userCoordsRef.current.altitude;
+      const pose = geospatial.poseRef.current;
+      if (!pose || !isPoseFresh(pose)) {
+        setMutationStatus(null);
+        Alert.alert(
+          "Aguarde o GPS",
+          "A pose geospatial ainda não está pronta. Aponte para o ambiente e aguarde alguns segundos.",
+        );
+        return;
+      }
 
-      const dist = pendingDistance;
-      const bearingRad = (geo.userTrueHeadingRef.current * Math.PI) / 180;
-      const deltaNorth = dist * Math.cos(bearingRad);
-      const deltaEast = dist * Math.sin(bearingRad);
+      // Gate de precisão
+      const avgPose = geospatial.averagedPose();
+      const creationAccuracy =
+        avgPose?.horizontalAccuracy ?? pose.horizontalAccuracy ?? null;
+      if (creationAccuracy !== null && creationAccuracy > CREATE_MAX_ACCURACY_M) {
+        setMutationStatus(null);
+        Alert.alert(
+          "Precisão insuficiente",
+          `A precisão atual é de ±${creationAccuracy.toFixed(1)}m (máximo: ±${CREATE_MAX_ACCURACY_M}m).`,
+        );
+        return;
+      }
 
-      const latOffset = deltaNorth / 111320;
-      const lonOffset =
-        deltaEast / (111320 * Math.cos((activeLat * Math.PI) / 180));
-
-      const targetLat = Number((activeLat + latOffset).toFixed(7));
-      const targetLon = Number((activeLon + lonOffset).toFixed(7));
-      const targetAlt = Number(
-        (activeAlt + (pendingCoords[1] || 0)).toFixed(1),
+      // Conversão tap SLAM → WGS84 usando pose geospatial (one-shot)
+      const camPos = cameraPosRef.current;
+      const offset: [number, number, number] = [
+        pendingCoords[0] - camPos[0],
+        pendingCoords[1] - camPos[1],
+        pendingCoords[2] - camPos[2],
+      ];
+      const headingRad = (pose.heading * Math.PI) / 180;
+      const east = offset[0] * Math.cos(headingRad) - offset[2] * Math.sin(headingRad);
+      const north = -(offset[0] * Math.sin(headingRad) + offset[2] * Math.cos(headingRad));
+      const targetLat = Number((pose.latitude + north / 111320).toFixed(7));
+      const targetLon = Number(
+        (pose.longitude + east / (111320 * Math.cos((pose.latitude * Math.PI) / 180))).toFixed(7),
       );
+      const targetAlt = pose.altitude;
 
       const cloudAnchorId = `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      const targetArPosition: [number, number, number] = [
-        pendingCoords[0],
-        pendingCoords[1],
-        pendingCoords[2],
-      ];
 
       const saved = await createAnchorMutation.mutateAsync({
         name: anchorName.trim(),
         cloudAnchorId,
         description: anchorDescription.trim() || undefined,
-        position: targetArPosition,
         latitude: targetLat,
         longitude: targetLon,
         altitude: targetAlt,
-        heading: geo.userTrueHeadingRef.current,
+        heading: pose.heading,
       });
 
-      // Trava a pose SLAM exata na sessão + cache otimista + lista bruta local
-      projection.lockPosition(saved.id, targetArPosition);
+      // Exibição imediata: posição SLAM local até a âncora nativa resolver
+      nativeAnchors.addLocal(saved.id, pendingCoords);
       queryClient.setQueryData<Anchor[]>(anchorKeys.lists(), (old) =>
         old ? [saved, ...old] : [saved],
       );
-      projection.prependAnchor(saved);
 
       setMutationStatus(null);
       setAnchorName("");
@@ -374,10 +393,9 @@ export const ViroARAnchorContainer: FC = () => {
 
       Alert.alert(
         "Ponto Registrado!",
-        `Nome: ${saved.name}\nCoordenadas: [${targetLat}, ${targetLon}]\nDistância: ${pendingDistance.toFixed(1)}m\n\nO ponto foi registrado geograficamente e está projetado no espaço AR.`,
+        `Nome: ${saved.name}\nCoordenadas: [${targetLat}, ${targetLon}]\n\nÂncora nativa será criada automaticamente.`,
       );
-    } catch (err: any) {
-      console.warn("[AR] Erro ao salvar âncora:", err);
+    } catch (err: unknown) {
       Alert.alert(
         "Erro ao Salvar",
         err instanceof Error ? err.message : "Não foi possível salvar o ponto.",
@@ -388,13 +406,7 @@ export const ViroARAnchorContainer: FC = () => {
     }
   };
 
-  // Abre o bottom sheet de detalhes (C4) em vez do Alert
-  const handleSelectAnchor = useCallback((anchor: Anchor) => {
-    setDetailAnchor(anchor);
-    setDetailSheetVisible(true);
-  }, []);
-
-  // Filtro de raio aplicado às âncoras passadas à cena AR
+  // ── Filtro de visibilidade ────────────────────────────────────────────────
   const visibleAnchors = useMemo(() => {
     return projection.anchors.filter((a) => {
       if (!isUsablePoint(a.arPosition)) return false;
@@ -405,11 +417,15 @@ export const ViroARAnchorContainer: FC = () => {
     });
   }, [projection.anchors, radiusFilter]);
 
+  // ── viroAppProps ─────────────────────────────────────────────────────────
   const viroAppProps = useMemo(
     () => ({
       anchors: visibleAnchors,
-      routeArPath: arRoute.active ? arRoute.arPath : [],
-      onSelectAnchor: handleSelectAnchor,
+      routeChevrons: arRoute.active && !arRoute.arrived ? arRoute.chevrons : [],
+      onGeospatialStatus: nativeAnchors.handleGeospatialStatus,
+      onGeospatialPose: geospatial.handlePose,
+      onNavigatorReady: nativeAnchors.handleNavigatorReady,
+      onSelectAnchor: handleTapByReticle,
       onPlaneTapped: handlePlaneTapped,
       onCameraUpdate: handleCameraUpdate,
       onTrackingUpdate: handleTrackingUpdate,
@@ -419,8 +435,12 @@ export const ViroARAnchorContainer: FC = () => {
     [
       visibleAnchors,
       arRoute.active,
-      arRoute.arPath,
-      handleSelectAnchor,
+      arRoute.arrived,
+      arRoute.chevrons,
+      nativeAnchors.handleGeospatialStatus,
+      nativeAnchors.handleNavigatorReady,
+      geospatial.handlePose,
+      handleTapByReticle,
       handlePlaneTapped,
       handleCameraUpdate,
       handleTrackingUpdate,
@@ -429,19 +449,29 @@ export const ViroARAnchorContainer: FC = () => {
     ],
   );
 
-  const calibratedLabel = projection.calibratedLandmark
-    ? projection.calibratedLandmark.name.split(" ")[0]
-    : null;
-
-  const originLabel = projection.calibratedLandmark
-    ? projection.calibratedLandmark.name.split(" ")[0]
-    : `GPS (±${Math.round(geo.userCoords.accuracy)}m)`;
+  const originLabel = geospatial.isFresh
+    ? `VPS ±${Math.round(geospatial.pose?.horizontalAccuracy ?? 0)}m`
+    : `GPS ±${Math.round(geo.userCoords.accuracy)}m`;
 
   return (
     <View style={styles.rootContainer}>
-      {/* Viewport AR com Zoom Visual Contínuo processado 100% na UI thread nativa.
-          O GestureDetector cobre apenas o viewport: toques simples seguem para o
-          Viro (onPlaneTapped/onSelectAnchor) e apenas 2 dedos ativam o zoom. */}
+      {STRIP_ZOOM_FOR_TRACKING_TEST ? (
+        <>
+          <ViroARSceneNavigator
+            ref={navigatorRef}
+            provider="arcore"
+            autofocus={true}
+            initialScene={INITIAL_AR_SCENE}
+            viroAppProps={viroAppProps}
+            style={styles.arNavigator}
+          />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={handleTapByReticle}
+            accessible={false}
+          />
+        </>
+      ) : (
       <GestureDetector gesture={pinchGesture}>
         <View style={styles.arViewportClip}>
           <Animated.View style={[styles.arZoomWrapper, arZoomAnimatedStyle]}>
@@ -456,8 +486,8 @@ export const ViroARAnchorContainer: FC = () => {
           </Animated.View>
         </View>
       </GestureDetector>
+      )}
 
-      {/* Indicador de Zoom Ativo */}
       {zoomLevel > 1.05 ? (
         <View
           style={[
@@ -489,9 +519,12 @@ export const ViroARAnchorContainer: FC = () => {
         cloudStatus={cloudStatus}
         trackingState={trackingState}
         isFetching={anchorsQuery.isFetching}
-        calibratedLabel={calibratedLabel}
+        calibratedLabel={null}
         gpsAccuracyMeters={geo.userCoords.accuracy}
-        onOpenCalibration={() => setCalibrationModalVisible(true)}
+        vpsAccuracyMeters={
+          geospatial.isFresh ? (geospatial.pose?.horizontalAccuracy ?? null) : null
+        }
+        onOpenCalibration={() => {}}
         onRefresh={() => anchorsQuery.refetch()}
       />
 
@@ -501,8 +534,6 @@ export const ViroARAnchorContainer: FC = () => {
         onRadiusChange={setRadiusFilter}
       />
 
-      {/* Barra Inferior com o Botão Principal — exclusiva de administradores
-          (contas comuns navegam em modo leitura, sem feedback visual extra) */}
       {isAdmin ? (
         <View
           style={[
@@ -532,22 +563,7 @@ export const ViroARAnchorContainer: FC = () => {
         </View>
       ) : null}
 
-      <CalibrationModal
-        visible={calibrationModalVisible}
-        calibratedLandmark={projection.calibratedLandmark}
-        userCoords={geo.userCoords}
-        onSelect={(landmark: CampusLandmark) => {
-          projection.calibrate(landmark);
-          setCalibrationModalVisible(false);
-        }}
-        onReset={() => {
-          projection.calibrate(null);
-          setCalibrationModalVisible(false);
-        }}
-        onClose={() => setCalibrationModalVisible(false)}
-      />
-
-      {/* Bottom sheet de detalhes do ponto AR (C1/C4) */}
+      {/* Bottom sheet de detalhes do ponto AR */}
       <AnchorDetailSheet
         visible={detailSheetVisible}
         anchor={detailAnchor}
@@ -574,13 +590,9 @@ export const ViroARAnchorContainer: FC = () => {
                           try {
                             setIsSaving(true);
                             await deleteAnchorMutation.mutateAsync(anchor.id);
-                            projection.removeAnchorLocal(anchor.id);
-                          } catch (err) {
-                            console.warn("[AR] Erro ao excluir:", err);
-                            Alert.alert(
-                              "Erro",
-                              "Não foi possível excluir o ponto.",
-                            );
+                            nativeAnchors.removeLocal(anchor.id);
+                          } catch {
+                            Alert.alert("Erro", "Não foi possível excluir o ponto.");
                           } finally {
                             setIsSaving(false);
                           }
@@ -594,25 +606,49 @@ export const ViroARAnchorContainer: FC = () => {
         }
       />
 
-      {/* HUD de Navegação AR (C4): distância restante + encerrar */}
-      {arRoute.active ? (
+      {/* HUD de Navegação AR */}
+      {arRoute.arrived ? (
+        <View
+          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
+          pointerEvents="none"
+        >
+          <View style={[styles.navHudPill, styles.arrivedPill]}>
+            <Ionicons name="flag" size={16} color="#34D399" />
+            <Text style={styles.navHudText}>Você chegou 🎉</Text>
+          </View>
+        </View>
+      ) : arRoute.active ? (
         <View
           style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
           pointerEvents="box-none"
         >
-          <View style={styles.navHudPill}>
-            <Ionicons name="navigate" size={16} color="#34D399" />
-            <Text style={styles.navHudText}>
-              {arRoute.targetName} · {arRoute.distanceRemaining} m
-            </Text>
-            <TouchableOpacity
-              onPress={stopNavigation}
-              style={styles.navHudStopBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Encerrar navegação"
-            >
-              <Ionicons name="close-circle" size={20} color="#FDA4AF" />
-            </TouchableOpacity>
+          <View style={styles.navHudStack}>
+            <View style={styles.navHudPill}>
+              <Ionicons
+                name={arRoute.isRerouting ? "refresh" : "navigate"}
+                size={16}
+                color={arRoute.isRerouting ? "#FCD34D" : "#34D399"}
+              />
+              <Text style={styles.navHudText}>
+                {arRoute.isRerouting
+                  ? "Recalculando..."
+                  : `${arRoute.targetName} · ${arRoute.distanceRemaining} m`}
+              </Text>
+              <TouchableOpacity
+                onPress={stopNavigation}
+                style={styles.navHudStopBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Encerrar navegação"
+              >
+                <Ionicons name="close-circle" size={20} color="#FDA4AF" />
+              </TouchableOpacity>
+            </View>
+            <NavInstructionHud
+              instruction={arRoute.instruction}
+              metersToTurn={arRoute.metersToTurn}
+              headingToPathDeg={arRoute.headingToPathDeg}
+              userHeadingDeg={geo.userTrueHeading}
+            />
           </View>
         </View>
       ) : arRoute.isLoading ? (
@@ -625,6 +661,23 @@ export const ViroARAnchorContainer: FC = () => {
             <Text style={styles.navHudText}>Calculando rota...</Text>
           </View>
         </View>
+      ) : arRoute.error ? (
+        <View
+          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
+          pointerEvents="none"
+        >
+          <View
+            style={[
+              styles.navHudPill,
+              { backgroundColor: "rgba(69, 26, 3, 0.92)", borderColor: "#B45309" },
+            ]}
+          >
+            <Ionicons name="warning" size={16} color="#FDBA74" />
+            <Text style={[styles.navHudText, { color: "#FED7AA" }]}>
+              {arRoute.error}
+            </Text>
+          </View>
+        </View>
       ) : null}
 
       <PlaceAnchorModal
@@ -632,6 +685,10 @@ export const ViroARAnchorContainer: FC = () => {
         isSaving={isSaving}
         originLabel={originLabel}
         heading={geo.userTrueHeading}
+        accuracyMeters={
+          geospatial.isFresh ? (geospatial.pose?.horizontalAccuracy ?? null) : null
+        }
+        maxAccuracyMeters={CREATE_MAX_ACCURACY_M}
         pendingDistance={pendingDistance}
         onAdjustDistance={handleAdjustDistance}
         anchorName={anchorName}
@@ -714,6 +771,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     zIndex: 30,
     elevation: 30,
+  },
+  navHudStack: {
+    alignItems: "center",
+    gap: 8,
+  },
+  arrivedPill: {
+    backgroundColor: "rgba(6, 78, 59, 0.95)",
+    borderColor: "#34D399",
   },
   navHudPill: {
     flexDirection: "row",

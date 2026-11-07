@@ -11,6 +11,8 @@ interface ARStatusHudProps {
   /** Nome curto do marco calibrado, ou null para exibir a precisão do GPS. */
   calibratedLabel: string | null;
   gpsAccuracyMeters: number;
+  /** Acurácia horizontal da pose VPS (Terra) — prioridade sobre o GPS. */
+  vpsAccuracyMeters?: number | null;
   onOpenCalibration: () => void;
   onRefresh: () => void;
 }
@@ -26,18 +28,21 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
   isFetching,
   calibratedLabel,
   gpsAccuracyMeters,
+  vpsAccuracyMeters,
   onOpenCalibration,
   onRefresh,
 }) => {
   const insets = useSafeAreaInsets();
   const trackingDotColor =
     trackingState === 3 ? '#34D399' : trackingState === 2 ? '#FBBF24' : '#EF4444';
+  // Origem exibida: marco calibrado > pose VPS (Terra) > GPS cru
+  const originLabel = calibratedLabel ?? (vpsAccuracyMeters != null ? `VPS ±${Math.round(vpsAccuracyMeters)}m` : `GPS ±${Math.round(gpsAccuracyMeters)}m`);
 
   return (
     <View
-      style={[styles.topHudBar, { top: Math.max(insets.top + 8, 48) }]}
+      style={[styles.topHudWrapper, { top: Math.max(insets.top + 8, 48) }]}
       pointerEvents="box-none">
-      <View style={styles.hudPillsRow}>
+      <View style={styles.topHudRow}>
         <View style={[styles.hudPill, styles.hudPillBlue]}>
           <View style={[styles.statusDot, { backgroundColor: trackingDotColor }]} />
           <Text style={styles.hudPillTextWhite}>{cloudStatus}</Text>
@@ -49,52 +54,82 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           style={[styles.hudPill, calibratedLabel ? styles.hudPillEmerald : styles.hudPillCyan]}>
           {calibratedLabel ? (
             <Ionicons name="location" size={13} color="#34D399" />
+          ) : vpsAccuracyMeters != null ? (
+            <Ionicons name="globe-outline" size={13} color="#67E8F9" />
           ) : (
             <Ionicons name="navigate-outline" size={13} color="#67E8F9" />
           )}
           <Text style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}>
-            {calibratedLabel ?? `GPS ±${Math.round(gpsAccuracyMeters)}m`}
+            {originLabel}
           </Text>
         </TouchableOpacity>
+
+        <View style={styles.hudActionsRow}>
+          <TouchableOpacity onPress={onOpenCalibration} activeOpacity={0.75} style={styles.hudIconBtn}>
+            <Ionicons name="location-outline" size={18} color="#67E8F9" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={onRefresh}
+            disabled={isFetching}
+            activeOpacity={0.75}
+            style={styles.hudIconBtn}>
+            {isFetching ? (
+              <ActivityIndicator size="small" color="#60A5FA" />
+            ) : (
+              <Ionicons name="refresh" size={18} color="#67E8F9" />
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <View style={styles.hudActionsRow}>
-        <TouchableOpacity onPress={onOpenCalibration} activeOpacity={0.75} style={styles.hudIconBtn}>
-          <Ionicons name="location-outline" size={18} color="#67E8F9" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={onRefresh}
-          disabled={isFetching}
-          activeOpacity={0.75}
-          style={styles.hudIconBtn}>
-          {isFetching ? (
-            <ActivityIndicator size="small" color="#60A5FA" />
-          ) : (
-            <Ionicons name="refresh" size={18} color="#67E8F9" />
-          )}
-        </TouchableOpacity>
-      </View>
+      {/* Banner de tracking: sem ancoragem visual estável (state 3), o quadro
+          do mundo do ARCore não fica rígido e nenhum ponto AR pode ficar
+          cravado — aviso prominente em vez de apenas o pontinho colorido. */}
+      {trackingState !== 3 ? (
+        <View style={styles.trackingBanner}>
+          <Ionicons name="warning" size={13} color="#FCD34D" />
+          <Text style={styles.trackingBannerText}>
+            {trackingState === 2
+              ? 'SLAM limitado: aponte para objetos com textura e mova devagar'
+              : 'Rastreamento indisponível: ambiente sem ancoragem visual'}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  topHudBar: {
+  topHudWrapper: {
     position: 'absolute',
     top: 50,
     left: 16,
     right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     zIndex: 20,
     elevation: 20,
   },
-  hudPillsRow: {
+  topHudRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    flexShrink: 1,
+    justifyContent: 'space-between',
+  },
+  trackingBanner: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(69, 26, 3, 0.88)',
+    borderColor: '#B45309',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  trackingBannerText: {
+    color: '#FDE68A',
+    fontSize: 11,
+    fontWeight: '600',
   },
   hudActionsRow: {
     flexDirection: 'row',

@@ -66,6 +66,35 @@ export class RoutingService implements OnModuleInit {
       throw new Error('Tipo de destino não suportado ainda (placeId em roadmap).');
     }
 
+    // MODO DIRETO: se origem OU destino está fora do bbox do campus,
+    // retorna linha reta (sem obstáculos — ex: navegação em quintal/casa)
+    const bbox = CAMPUS_FIXTURE.bbox;
+    const originInCampus =
+      origin.latitude >= bbox.minLat && origin.latitude <= bbox.maxLat &&
+      origin.longitude >= bbox.minLng && origin.longitude <= bbox.maxLng;
+    const targetInCampus =
+      targetLat >= bbox.minLat && targetLat <= bbox.maxLat &&
+      targetLng >= bbox.minLng && targetLng <= bbox.maxLng;
+
+    if (!originInCampus || !targetInCampus) {
+      const dist = haversine(origin.latitude, origin.longitude, targetLat, targetLng);
+      console.log(
+        `[Routing] Fora do campus (origin: ${originInCampus}, target: ${targetInCampus}) — caminho direto de ${dist.toFixed(1)}m`,
+      );
+      return {
+        path: [
+          { latitude: origin.latitude, longitude: origin.longitude },
+          { latitude: targetLat, longitude: targetLng },
+        ],
+        distanceMeters: Math.round(dist * 10) / 10,
+        segments: [
+          { instruction: 'straight', meters: Math.round(dist) },
+          { instruction: 'arrive', meters: 0 },
+        ],
+      };
+    }
+
+    // MODO GRID: A* sobre a malha caminhável do campus
     const path = findRoute(this.grid, origin.latitude, origin.longitude, targetLat, targetLng);
     if (!path) {
       throw new Error('Não foi possível encontrar um caminho caminhável.');

@@ -12,6 +12,8 @@ import {
 } from '@reactvision/react-viro';
 import type { Anchor } from 'shared';
 import { isUsablePoint } from 'shared';
+import type { RouteChevron } from '@/features/ar/hooks/use-ar-navigation';
+import type { GeospatialPose } from './hooks/use-geospatial-pose';
 
 // Registra materiais vivos com Constant lighting para visualização 3D garantida em qualquer iluminação
 ViroMaterials.createMaterials({
@@ -43,8 +45,18 @@ ViroMaterials.createMaterials({
     diffuseColor: '#3B82F633', // Azul translúcido para superfícies rastreadas
     lightingModel: 'Constant',
   },
-  routeArrow: {
-    diffuseColor: '#34D399',
+  // Rota de navegação (estilo Google Live View): chevrons azuis de textura no chão
+  routeChevron: {
+    diffuseTexture: require('../../../assets/images/ar/route-chevron.png'),
+    lightingModel: 'Constant',
+  },
+  // Postes de diagnóstico (dev): cravados em coordenadas FIXAS do mundo AR
+  diagPost: {
+    diffuseColor: '#F472B6',
+    lightingModel: 'Constant',
+  },
+  diagOrigin: {
+    diffuseColor: '#FBBF24',
     lightingModel: 'Constant',
   },
   anchorHitArea: {
@@ -55,7 +67,14 @@ ViroMaterials.createMaterials({
 
 export interface ViroARAnchorSceneProps {
   anchors?: Anchor[];
-  routeArPath?: Array<[number, number, number]>;
+  /** Janela de chevrons da sessão de navegação (keys = arco em metros). */
+  routeChevrons?: RouteChevron[];
+  /** Status do modo Geospatial (suporte no device / erros de key). */
+  onGeospatialStatus?: (supported: boolean, error?: string) => void;
+  /** Pose geoespacial da câmera (poll 1Hz, ancorada na Terra via VPS). */
+  onGeospatialPose?: (pose: Omit<GeospatialPose, 'timestamp'>) => void;
+  /** Passa o arSceneNavigator para o container (criar âncoras nativas). */
+  onNavigatorReady?: (navigator: any) => void;
   onSelectAnchor?: (anchor: Anchor) => void;
   onPlaneTapped?: (anchorId: string, position: [number, number, number]) => void;
   onCameraUpdate?: (pos: [number, number, number], fwd: [number, number, number]) => void;
@@ -81,11 +100,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
   const onPlanesUpdated = viroProps.onPlanesUpdated;
-  const routeArPath = viroProps.routeArPath || [];
-  // Debug: verificar se a cena recebe o path da rota
-  if (routeArPath.length > 0) {
-    console.log('[ViroScene] routeArPath RECEBIDO:', routeArPath.length, 'pts, primeiro:', routeArPath[0]?.map((v) => v.toFixed(1)));
-  }
+  const routeChevrons = viroProps.routeChevrons || [];
   // onPlaneTapped removido: planos NÃO devem ter onClick (interceptam taps nos pins).
   // onSelectAnchor removido: tap vem do RNGH Exclusive(Tap, Pinch) no container,
   // não mais do onClick da GLSurfaceView do Viro.
@@ -101,6 +116,113 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       onRegisterSceneRef(arSceneRef.current);
     }
   }, [onRegisterSceneRef]);
+
+  // ── Modo Geospatial (ARCore/VPS): habilita e faz poll da pose da câmera ──
+  // A pose é ANCORADA NA TERRA (GPS + VPS + SLAM fundidos pelo ARCore) e se
+  // auto-corrige — é a fonte da verdade que substitui GPS+bússola no client.
+  // Callbacks em refs: o interval não re-cria a cada viroAppProps.
+  const geoStatusRef = useRef(viroProps.onGeospatialStatus);
+  const geoPoseRef = useRef(viroProps.onGeospatialPose);
+  geoStatusRef.current = viroProps.onGeospatialStatus;
+  geoPoseRef.current = viroProps.onGeospatialPose;
+  const geoEnabledRef = useRef(false);
+  const navigatorReadyRef = useRef(viroProps.onNavigatorReady);
+  navigatorReadyRef.current = viroProps.onNavigatorReady;
+
+  useEffect(() => {
+    // sceneNavigator/arSceneNavigator vivem nos PROPS crus da cena (o mesmo
+    // objeto de onde lemos viroAppProps) — não dentro de viroProps/viroAppProps.
+    const nav = (props.arSceneNavigator ?? props.sceneNavigator) as any;
+    if (nav) {
+      navigatorReadyRef.current?.(nav);
+    }
+    if (!nav?.isGeospatialModeSupported || !nav?.getCameraGeospatialPose) {
+      console.warn(
+        '[ARGeo] métodos geospatial ausentes no arSceneNavigator —',
+        'arSceneNavigator?', Boolean(props.arSceneNavigator),
+        '| sceneNavigator?', Boolean(props.sceneNavigator),
+        '| keys:', nav ? Object.keys(nav).filter((k) => k.toLowerCase().includes('geo')).join(',') || 'nenhuma' : 'nav indefinido',
+      );
+      geoStatusRef.current?.(false, 'Geospatial não disponível nesta build');
+      return;
+    }
+
+    // Timeout: se a chamada nativa pendurar (ex.: key ausente no manifest),
+    // revela em vez de ficar mudo para sempre.
+    const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+      return await Promise.race<T>([
+        promise,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`${label}: sem resposta nativa em ${ms}ms`)), ms),
+        ),
+      ]);
+    };
+
+    const maxAttempts = 6;
+    let attempts = 0;
+    const tryEnable = async (): Promise<void> => {
+      attempts++;
+      try {
+        const support = (await withTimeout(
+          nav.isGeospatialModeSupported() as Promise<{ supported?: boolean; error?: string }>,
+          8000,
+          'isGeospatialModeSupported',
+        )) as { supported?: boolean; error?: string };
+        if (support?.supported) {
+          await nav.setGeospatialModeEnabled(true);
+          geoEnabledRef.current = true;
+          console.log('[ARGeo] modo Geospatial habilitado (provider arcore)');
+          geoStatusRef.current?.(true, undefined);
+          return;
+        }
+        // Diagnóstico granular: qual gate falhou (key, location, play-services)?
+        let setup: unknown = null;
+        if (nav.getGeospatialSetupStatus) {
+          try {
+            setup = await withTimeout(nav.getGeospatialSetupStatus(), 8000, 'getGeospatialSetupStatus');
+          } catch {
+            // diagnóstico é best-effort
+          }
+        }
+        console.warn(
+          `[ARGeo] não suportado (tentativa ${attempts}/${maxAttempts}):`,
+          support?.error ?? 'sem mensagem',
+          '| setup:',
+          JSON.stringify(setup),
+        );
+        geoStatusRef.current?.(false, support?.error);
+        if (attempts < maxAttempts) {
+          setTimeout(() => void tryEnable(), 5000);
+        }
+        return;
+      } catch (err) {
+        // "Invalid view type" etc. podem ser transições da interop no mount — retry
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[ARGeo] falha (tentativa ${attempts}/${maxAttempts}):`, message);
+        if (attempts < maxAttempts) {
+          setTimeout(() => void tryEnable(), 5000);
+          return;
+        }
+        geoStatusRef.current?.(false, message);
+      }
+    };
+    void tryEnable();
+
+    const timer = setInterval(async () => {
+      if (!geoEnabledRef.current) return;
+      try {
+        const result = await nav.getCameraGeospatialPose();
+        if (result?.success && result.pose) {
+          geoPoseRef.current?.(result.pose);
+        }
+      } catch {
+        // poll silencioso: erros persistentes aparecem no status/habilitação
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Filtra âncoras cujo arPosition foi resolvido e projetado no espaço tridimensional
   const visibleAnchors = useMemo(() => {
@@ -185,39 +307,42 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       <ViroAmbientLight color="#FFFFFF" intensity={800} />
       <ViroDirectionalLight color="#FFFFFF" direction={[0, -1, -0.4]} />
 
-      {/* Rota de navegação: setas chevron no chão apontando para o próximo waypoint (C4).
-          O y de cada waypoint vem da projeção geodésica (relativo à câmera) —
-          desloca para o chão estimado (-1.5m da câmera) apenas se o y do path for ~0. */}
-      {routeArPath.length > 1
-        ? routeArPath.slice(0, -1).map((pos, i) => {
-            const next = routeArPath[i + 1]!;
-            // Bearing no plano XZ para rotacionar a seta
-            const dx = next[0] - pos[0];
-            const dz = next[2] - pos[2];
-            const angleDeg = (Math.atan2(dx, -dz) * 180) / Math.PI;
-            // Y: usa o y do path + offset do chão (câmera está ~1.5m acima do solo)
-            const groundY = pos[1] - 1.5;
-            return (
-              <ViroNode key={`route-${i}`} position={[pos[0], groundY, pos[2]]} rotation={[0, angleDeg, 0]}>
-                <ViroQuad
-                  width={2.5}
-                  height={1.5}
-                  rotation={[-90, 0, 0]}
-                  materials={['routeArrow']}
-                />
-              </ViroNode>
-            );
-          })
+      {/* POSTES DE DIAGNÓSTICO (dev-only): coordenadas FIXAS do mundo AR —
+          0/3/6/9m à frente de onde a sessão iniciou. Não passam por GPS,
+          bússola ou projeção: se ESTES postes seguirem o celular ao andar,
+          o problema está no ARCore/Viro (pose ou render), não na projeção. */}
+      {__DEV__
+        ? [-0.01, -3, -6, -9].map((z, i) => (
+            <ViroNode key={`diag-post-${i}`} position={[0, -1.5, z]}>
+              <ViroBox
+                scale={i === 0 ? [0.5, 0.06, 0.5] : [0.1, 1.3, 0.1]}
+                position={i === 0 ? [0, 0, 0] : [0, 0.65, 0]}
+                materials={i === 0 ? ['diagOrigin'] : ['diagPost']}
+              />
+            </ViroNode>
+          ))
         : null}
-      {/* Bandeira/pilar no destino */}
-      {routeArPath.length > 0 ? (
+
+      {/* Rota de navegação estilo Google Live View: janela de chevrons azuis
+          achatados no chão, enviada pronta pela sessão de navegação (useARNavigation).
+          Keys = arco em metros -> React reaproveita os nós ao deslizar a janela.
+          O Y vem do floorY do World Anchor (nível do chão da sessão). */}
+      {routeChevrons.map((chevron) => (
         <ViroNode
-          key="route-dest"
-          position={[routeArPath[routeArPath.length - 1]![0], routeArPath[routeArPath.length - 1]![1] - 1.0, routeArPath[routeArPath.length - 1]![2]]}>
-          <ViroBox scale={[0.3, 2.5, 0.3]} position={[0, 1.2, 0]} materials={['routeArrow']} />
-          <ViroQuad width={1.5} height={1.0} position={[0.9, 2.0, 0]} rotation={[0, 90, 0]} materials={['routeArrow']} />
+          key={`route-chevron-${chevron.key}`}
+          position={chevron.pos}
+          rotation={[0, chevron.angleDeg, 0]}>
+          {/* Achatado no chão (rot X -90°); +3cm contra z-fighting com
+              planos detectados. Topo da textura = -Z = frente. */}
+          <ViroQuad
+            width={1.25}
+            height={1.0}
+            rotation={[-90, 0, 0]}
+            position={[0, 0.03, 0]}
+            materials={['routeChevron']}
+          />
         </ViroNode>
-      ) : null}
+      ))}
 
       {/* Visualização das Maiores Superfícies Físicas Detectadas pelo ARCore.
           SEM onClick — planos interceptam o raycast de taps nos pins (o chão
@@ -273,7 +398,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
 
             {/* Cubo 3D representando a âncora com escala dinâmica adaptativa */}
             <ViroBox
-              scale={[0.28 * scaleFactor, 0.28 * scaleFactor, 0.28 * scaleFactor]}
+              scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
               materials={[materialName]}
             />
 
@@ -284,11 +409,11 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
               materials={['pinStem']}
             />
 
-            {/* Rótulo de texto flutuante estabilizado no eixo Y com distância métrica */}
+            {/* Rótulo de texto FLUTUANTE — grande e legível com distância */}
             <ViroText
               text={labelText}
-              scale={[0.14 * scaleFactor, 0.14 * scaleFactor, 0.14 * scaleFactor]}
-              position={[0, 0.32 * scaleFactor, 0]}
+              scale={[0.5 * scaleFactor, 0.5 * scaleFactor, 0.5 * scaleFactor]}
+              position={[0, 0.55 * scaleFactor, 0]}
               transformBehaviors={['billboardY']}
               style={styles.viroText}
             />
@@ -302,7 +427,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
 const styles = StyleSheet.create({
   viroText: {
     fontFamily: 'Arial',
-    fontSize: 18,
+    fontSize: 28,
     color: '#FFFFFF',
     textAlignVertical: 'center',
     textAlign: 'center',
