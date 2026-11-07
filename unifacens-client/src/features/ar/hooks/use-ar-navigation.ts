@@ -2,6 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { calculateRelativeARPosition, type Anchor } from 'shared';
 import { requestRoute } from '../services/routing-api';
 import { createNavigationRequest } from '../services/navigation-request';
+import {
+  NavigationOriginError,
+  validateNavigationOrigin,
+} from '../services/navigation-origin';
 
 export interface ARRouteState {
   active: boolean;
@@ -16,6 +20,7 @@ export interface ARRouteState {
 }
 
 interface UseARNavigationParams {
+  isLocationAvailable: () => boolean;
   /** Coordenadas atuais do usuário (GPS/calibrado). */
   userCoordsRef: React.MutableRefObject<{
     latitude: number;
@@ -49,6 +54,7 @@ const EMPTY_ROUTE: ARRouteState = {
  * reativo para o HUD e a cena Viro.
  */
 export function useARNavigation({
+  isLocationAvailable,
   userCoordsRef,
   referenceHeadingRef,
   projectionOrigin,
@@ -77,30 +83,10 @@ export function useARNavigation({
 
       await navigationRequest.run(
         async (signal) => {
-          // Usa a posição CALIBRADA (não GPS bruto) como origem. Se estiver
-          // muito longe do campus (>1km, ex: testando de casa), usa o centro
-          // do campus como fallback para permitir navegação remota.
-          const CAMPUS_CENTER = { latitude: -23.4699, longitude: -47.4297 };
-          const originCoords = projectionOrigin();
-          let origin = {
-            latitude: originCoords.latitude,
-            longitude: originCoords.longitude,
-          };
-
-          const distFromCampus = Math.hypot(
-            (origin.latitude - CAMPUS_CENTER.latitude) * 111000,
-            (origin.longitude - CAMPUS_CENTER.longitude) *
-              111000 *
-              Math.cos((origin.latitude * Math.PI) / 180),
+          const origin = validateNavigationOrigin(
+            projectionOrigin(),
+            isLocationAvailable(),
           );
-          if (distFromCampus > 1000) {
-            console.log(
-              '[AR Nav] Origem fora do campus (' +
-                Math.round(distFromCampus) +
-                'm) — usando centro do campus como fallback',
-            );
-            origin = CAMPUS_CENTER;
-          }
 
           console.log(
             '[AR Nav] origin:',
@@ -139,20 +125,17 @@ export function useARNavigation({
             JSON.stringify(response.path[response.path.length - 1]),
           );
 
-          // Projeta cada waypoint WGS84 → AR local usando a MESMA origem da rota
           const heading = referenceHeadingRef.current ?? 0;
-          const projOrigin = projectionOrigin();
-          // Se origin foi fallback para campus center, usa campus center na projeção também
-          const projLat =
-            distFromCampus > 1000 ? origin.latitude : projOrigin.latitude;
-          const projLng =
-            distFromCampus > 1000 ? origin.longitude : projOrigin.longitude;
+          const projOrigin = validateNavigationOrigin(
+            projectionOrigin(),
+            isLocationAvailable(),
+          );
 
           const arPath: Array<[number, number, number]> = response.path.map(
             (point) =>
               calculateRelativeARPosition(
-                projLat,
-                projLng,
+                projOrigin.latitude,
+                projOrigin.longitude,
                 projOrigin.altitude,
                 heading,
                 point.latitude,
@@ -187,15 +170,22 @@ export function useARNavigation({
           setRoute({
             ...EMPTY_ROUTE,
             error:
-              err instanceof Error &&
-              err.message === 'Sessão expirada. Faça login novamente.'
+              err instanceof NavigationOriginError ||
+              (err instanceof Error &&
+                err.message === 'Sessão expirada. Faça login novamente.')
                 ? err.message
                 : 'Não foi possível calcular a rota. Confira a conexão e selecione o destino novamente.',
           });
         },
       );
     },
-    [navigationRequest, userCoordsRef, referenceHeadingRef, projectionOrigin],
+    [
+      navigationRequest,
+      userCoordsRef,
+      referenceHeadingRef,
+      projectionOrigin,
+      isLocationAvailable,
+    ],
   );
 
   /** Encerra a navegação. */

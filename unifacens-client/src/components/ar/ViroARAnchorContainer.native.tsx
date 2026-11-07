@@ -120,6 +120,8 @@ export const ViroARAnchorContainer: FC = () => {
     startNavigation,
     stopNavigation,
   } = useARNavigation({
+    isLocationAvailable: () =>
+      geo.hasLocationRef.current || projection.calibratedLandmark != null,
     userCoordsRef: geo.userCoordsRef,
     referenceHeadingRef: projection.referenceHeadingRef,
     projectionOrigin: () => ({
