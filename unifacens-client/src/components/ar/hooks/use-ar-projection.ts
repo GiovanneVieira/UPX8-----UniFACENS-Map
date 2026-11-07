@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { geodeticToENU, type Anchor } from 'shared';
 import type { NativeAnchorEntry } from './use-native-anchors';
 import type { GeospatialPose } from './use-geospatial-pose';
@@ -29,7 +29,9 @@ function fallbackProject(
 }
 
 /** Acurácia máxima da pose para o FALLBACK projetar pins (m). */
-const FALLBACK_MAX_ACCURACY_M = 10;
+const FALLBACK_MAX_ACCURACY_M = 15;
+/** Sem pins visíveis por este tempo → usa qualquer pose (best-effort). */
+const FALLBACK_TIMEOUT_MS = 15_000;
 
 /** Posição é utilizável (finita, não colapsada na origem)? */
 function isValidPosition(pos: [number, number, number]): boolean {
@@ -57,10 +59,13 @@ export function useARProjection({
   cameraPosRef,
 }: UseARProjectionParams) {
   const [anchors, setAnchors] = useState<Anchor[]>([]);
+  /** Momento em que o primeiro serverAnchor chegou sem pin visível. */
+  const waitingSinceRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!serverAnchors) {
       setAnchors([]);
+      waitingSinceRef.current = null;
       return;
     }
     const camPos = cameraPosRef.current;
@@ -77,8 +82,7 @@ export function useARProjection({
         continue;
       }
 
-      // 1. Âncora nativa (ARCore mantém) — se válida, usa SEMPRE (a âncora
-      //    nativa já foi validada pelo ARCore contra a Terra)
+      // 1. Âncora nativa (ARCore mantém) — se válida, usa SEMPRE
       const native = nativeEntries.get(anchor.id);
       if (native && isValidPosition(native.position)) {
         const dist = Math.hypot(
@@ -94,9 +98,11 @@ export function useARProjection({
         continue;
       }
 
-      // 2. FALLBACK: projeção via pose geospatial — SÓ quando a acurácia
-      //    é boa o suficiente (pins não devem nascer em posição errada)
-      if (pose && pose.horizontalAccuracy <= FALLBACK_MAX_ACCURACY_M) {
+      // 2. FALLBACK: projeção via pose geospatial — quando acurácia é boa
+      //    OU quando já esperou demais (best-effort: melhor impreciso que invisível)
+      const now = Date.now();
+      const timedOut = waitingSinceRef.current !== null && now - waitingSinceRef.current >= FALLBACK_TIMEOUT_MS;
+      if (pose && (pose.horizontalAccuracy <= FALLBACK_MAX_ACCURACY_M || timedOut)) {
         const fbPos = fallbackProject(pose, camPos, anchor.latitude, anchor.longitude);
         if (isValidPosition(fbPos)) {
           const dist = Math.hypot(
@@ -111,7 +117,13 @@ export function useARProjection({
           });
         }
       }
-      // 3. Sem âncora nativa E pose ruim → invisível (calibrando)
+    }
+
+    // Rastreia se há pins esperando (para o timeout best-effort)
+    if (projected.length === 0 && serverAnchors.length > 0) {
+      if (waitingSinceRef.current === null) waitingSinceRef.current = Date.now();
+    } else {
+      waitingSinceRef.current = null;
     }
 
     setAnchors(projected);
