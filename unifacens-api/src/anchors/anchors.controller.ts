@@ -50,7 +50,7 @@ export class AnchorsController {
 
   @Post()
   @ApiBearerAuth('admin-bearer')
-  @ApiOperation({ summary: 'Cadastrar nova âncora com Cloud Anchor ID gerado pelo ARCore' })
+  @ApiOperation({ summary: 'Cadastrar nova âncora com coordenadas WGS84 (id local sintético gerado pelo app)' })
   async createAnchor(
     @Body(new ZodValidationPipe(createAnchorSchema)) dto: CreateAnchorDto,
   ): Promise<Anchor> {

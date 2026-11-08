@@ -65,8 +65,19 @@ ViroMaterials.createMaterials({
   },
 });
 
-export interface ViroARAnchorSceneProps {
-  anchors?: Anchor[];
+/**
+ * Visualização dos planos detectados (quads azuis translúcidos) — DESLIGADA.
+ *
+ * ⚠️ Lição de device (2026-11-08): um plano horizontal grande (cômodo inteiro)
+ * renderizado como ViroQuad translúcido #3B82F633 visto de dentro ocupa o
+ * frustum INTEIRO abaixo da sua borda distante — parecia um "artefato azul /
+ * estar dentro do pin" cobrindo ~90% da tela e ocluindo os pins reais.
+ * Detecção de planos permanece ATIVA (hit-tests dependem dela); só o RENDER
+ * visual fica fora. Flipar aqui apenas para depuração.
+ */
+const SHOW_DETECTED_PLANES = false;
+
+export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
   /** Janela de chevrons da sessão de navegação (keys = arco em metros). */
   routeChevrons?: RouteChevron[];
   /** Status do modo Geospatial (suporte no device / erros de key). */
@@ -77,7 +88,11 @@ export interface ViroARAnchorSceneProps {
   onNavigatorReady?: (navigator: any) => void;
   onSelectAnchor?: (anchor: Anchor) => void;
   onPlaneTapped?: (anchorId: string, position: [number, number, number]) => void;
-  onCameraUpdate?: (pos: [number, number, number], fwd: [number, number, number]) => void;
+  onCameraUpdate?: (
+    pos: [number, number, number],
+    fwd: [number, number, number],
+    yawDeg: number,
+  ) => void;
   onTrackingUpdate?: (state: number, reason: number) => void;
   onRegisterSceneRef?: (sceneRef: any) => void;
   onPlanesUpdated?: (count: number, planes: any[]) => void;
@@ -325,8 +340,11 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         const cam = event.cameraTransform || event;
         const pos: [number, number, number] = cam.position || [0, 0, 0];
         const fwd: [number, number, number] = cam.forward || [0, 0, -1];
+        // rotation[1] = yaw da câmera no MUNDO AR (graus, euler) — fonte mais
+        // robusta que o vetor forward (sem ambiguidade de frame/normalização).
+        const yawDeg: number = Array.isArray(cam.rotation) ? Number(cam.rotation[1]) || 0 : 0;
         if (onCameraUpdate) {
-          onCameraUpdate(pos, fwd);
+          onCameraUpdate(pos, fwd, yawDeg);
         }
       }}>
       {/* Iluminação ambiente e direcional otimizada para GPU mobile */}
@@ -352,7 +370,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       {/* Rota de navegação estilo Google Live View: janela de chevrons azuis
           achatados no chão, enviada pronta pela sessão de navegação (useARNavigation).
           Keys = arco em metros -> React reaproveita os nós ao deslizar a janela.
-          O Y vem do floorY do World Anchor (nível do chão da sessão). */}
+          O Y é o FLOOR_Y da sessão (chão do mundo AR, câmera ~1.5m acima). */}
       {routeChevrons.map((chevron) => (
         <ViroNode
           key={`route-chevron-${chevron.key}`}
@@ -371,27 +389,31 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       ))}
 
       {/* Visualização das Maiores Superfícies Físicas Detectadas pelo ARCore.
+          DESLIGADA por padrão (ver SHOW_DETECTED_PLANES acima) — o quad azul
+          translúcido de um plano do tamanho do cômodo cobria a tela toda.
           SEM onClick — planos interceptam o raycast de taps nos pins (o chão
           está fisicamente entre a câmera e qualquer pin a nível do solo).
           O botão "Marcar Ponto" já abre o modal via hit test do retículo. */}
-      {visiblePlanes.map((plane) => {
-        const extentWidth = plane.width || 0.5;
-        const extentHeight = plane.height || 0.5;
-        const isHorizontal = !plane.alignment || plane.alignment.includes('Horizontal');
-        const planePos: [number, number, number] = plane.center || plane.position || [0, 0, 0];
-        const planeId = String(plane.anchorId);
+      {SHOW_DETECTED_PLANES
+        ? visiblePlanes.map((plane) => {
+            const extentWidth = plane.width || 0.5;
+            const extentHeight = plane.height || 0.5;
+            const isHorizontal = !plane.alignment || plane.alignment.includes('Horizontal');
+            const planePos: [number, number, number] = plane.center || plane.position || [0, 0, 0];
+            const planeId = String(plane.anchorId);
 
-        return (
-          <ViroNode key={`plane-${planeId}`} position={planePos}>
-            <ViroQuad
-              width={Math.max(0.4, extentWidth)}
-              height={Math.max(0.4, extentHeight)}
-              rotation={isHorizontal ? [-90, 0, 0] : [0, 0, 0]}
-              materials={['detectedPlaneSurface']}
-            />
-          </ViroNode>
-        );
-      })}
+            return (
+              <ViroNode key={`plane-${planeId}`} position={planePos}>
+                <ViroQuad
+                  width={Math.max(0.4, extentWidth)}
+                  height={Math.max(0.4, extentHeight)}
+                  rotation={isHorizontal ? [-90, 0, 0] : [0, 0, 0]}
+                  materials={['detectedPlaneSurface']}
+                />
+              </ViroNode>
+            );
+          })
+        : null}
 
       {/* ÂNCORAS GEODÉSICAS E ESPACIAIS COM ESCALA DINÂMICA (WGS84 -> ENU -> AR Frustum) */}
       {visibleAnchors.map((anchor, index) => {
@@ -408,12 +430,18 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         // scaleFactor = clamp(1.0, 6.0, sqrt(dist) * 0.45)
         const scaleFactor = Math.max(1.0, Math.min(6.0, Math.sqrt(Math.max(1, dist)) * 0.45));
         const distLabel = Math.round(dist);
-        const labelText = `${anchor.name}\n${distLabel} m`;
+        // Estimativa (sem âncora nativa): selo honesto com envelope de erro.
+        const estimateSuffix =
+          anchor.estimated && typeof anchor.estimateAccuracyM === 'number'
+            ? ` ±${Math.round(anchor.estimateAccuracyM)}m`
+            : '';
+        const labelText = `${anchor.name}\n${distLabel} m${estimateSuffix}`;
 
         return (
           <ViroNode
             key={anchor.id || `anchor-${index}`}
-            position={renderPos}>
+            position={renderPos}
+            opacity={anchor.estimated ? 0.6 : 1}>
             {/* HIT AREA visual reduzida (debug): só um pouco maior que o pin
                 para validar que a seleção é pela retícula, não pela hitbox. */}
             <ViroBox

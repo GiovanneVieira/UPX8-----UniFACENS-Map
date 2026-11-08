@@ -142,6 +142,9 @@ export class AnchorsService implements OnModuleInit {
       const existing = await this.db.select().from(anchors).limit(1);
       if (existing.length === 0) {
         console.log('[AnchorsService] Inserindo Cloud Anchors de exemplo para o campus...');
+        // altitude NULL de propósito: seeds não têm altitude elipsoidal real
+        // (ARCore/WGS84). Nulos roteiam para createTerrainAnchor(+1.5m acima
+        // do terreno) — nunca para createGeospatialAnchor com datum errado.
         await this.db.insert(anchors).values([
           {
             name: 'Ponto Central (Origem Facens)',
@@ -149,7 +152,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Praça central do campus Facens',
             latitude: -23.4699,
             longitude: -47.4297,
-            altitude: 605,
+            altitude: null,
             heading: 0,
           },
           {
@@ -158,7 +161,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Prédio das engenharias e salas de aula',
             latitude: -23.47035,
             longitude: -47.4294,
-            altitude: 606,
+            altitude: null,
             heading: 135,
           },
           {
@@ -167,7 +170,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Laboratórios práticos e oficinas',
             latitude: -23.4695,
             longitude: -47.42995,
-            altitude: 605,
+            altitude: null,
             heading: 315,
           },
           {
@@ -176,7 +179,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Centro de estudos e acervo acadêmico',
             latitude: -23.4701,
             longitude: -47.4302,
-            altitude: 605,
+            altitude: null,
             heading: 225,
           },
         ]);
