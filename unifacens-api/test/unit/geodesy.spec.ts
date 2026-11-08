@@ -3,6 +3,9 @@ import {
   calculateDistance,
   calculateBearing,
   geodeticToENU,
+  enuToGeodetic,
+  enuToArXZ,
+  arXZToEnu,
   magneticToTrueHeading,
   calculateRelativeARPosition,
   CircularLowPassFilter,
@@ -131,5 +134,61 @@ describe('Geodesy Utility (Motor Geodésico de Projeção AR)', () => {
     // No filtro circular vetorial, deve ficar suavemente em torno de 359° ou 0°.
     expect(h2).toBeGreaterThanOrEqual(358);
     expect(h2).toBeLessThanOrEqual(360);
+  });
+
+  // ── Roundtrip de criação de pins (2026-11-08): tap SLAM → WGS84 → reload ──
+
+  it('enuToGeodetic deve ser a inversa EXATA de geodeticToENU (roundtrip < 2cm no campus)', () => {
+    const offsets = [
+      { east: 0, north: 0, up: 0 },
+      { east: 12.5, north: -30.2, up: -1.4 }, // tap típico no chão
+      { east: -45.7, north: 88.1, up: 2.3 }, // prédio distante
+      { east: 150, north: 150, up: 10 }, // extremo de alcance
+    ];
+
+    for (const { east, north, up } of offsets) {
+      const target = enuToGeodetic(
+        facensOrigin.lat,
+        facensOrigin.lon,
+        facensOrigin.alt,
+        east,
+        north,
+        up,
+      );
+      // geodeticToENU arredonda para 2 casas — a volta deve caber na mesma tolerância
+      const back = geodeticToENU(
+        facensOrigin.lat,
+        facensOrigin.lon,
+        facensOrigin.alt,
+        target.latitude,
+        target.longitude,
+        target.altitude,
+      );
+      expect(Math.abs(back.east - east)).toBeLessThan(0.02);
+      expect(Math.abs(back.north - north)).toBeLessThan(0.02);
+      expect(Math.abs(back.up - up)).toBeLessThan(0.02);
+    }
+  });
+
+  it('arXZToEnu deve ser a inversa de enuToArXZ para QUALQUER Δ (matriz involutiva, M² = I)', () => {
+    for (const delta of [0, 21.3, 90, 137.5, 180, 270, 338.7, 359.9]) {
+      const east = 25.4;
+      const north = -13.7;
+      const ar = enuToArXZ(east, north, delta);
+      const back = arXZToEnu(ar.x, ar.z, delta);
+      expect(Math.abs(back.east - east)).toBeLessThan(1e-9);
+      expect(Math.abs(back.north - north)).toBeLessThan(1e-9);
+    }
+  });
+
+  it('rotação por Δ: Δ=0 mantém ENU; Δ=90 gira pins 90° em torno da câmera', () => {
+    const { x: x0, z: z0 } = enuToArXZ(10, 0, 0); // alvo a Leste, mundo alinhado ao Norte
+    expect(x0).toBeCloseTo(10, 6);
+    expect(z0).toBeCloseTo(0, 6);
+
+    // Mundo girado 90°: o mesmo alvo a Leste deve projetar à FRENTE (-Z)
+    const { x: x90, z: z90 } = enuToArXZ(10, 0, 90);
+    expect(x90).toBeCloseTo(0, 6);
+    expect(z90).toBeCloseTo(-10, 6);
   });
 });

@@ -45,8 +45,8 @@ function sanitizeAltitude(altitude?: number | null): number {
  * (alpha = 0.15) para eliminação de jitter na transição 0° <-> 360°.
  *
  * Gating de qualidade: fixes com acurácia pior que MAX_GPS_ACCURACY_M são
- * descartadas, e `hasFix`/`hasHeading` sinalizam a existência da primeira
- * leitura confiável de cada sensor (consumidos pelo World Anchor).
+ * descartados. Hoje alimenta APENAS o HUD e o NavInstruction — a projeção
+ * AR usa a pose geospatial (Terra-ancorada) + Δ do motor de alinhamento.
  *
  * Efeito de sincronização com sensores de hardware (caso legítimo de
  * `useEffect` conforme AGENTS.MD §7), com cleanup obrigatório.
