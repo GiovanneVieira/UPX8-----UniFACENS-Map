@@ -13,6 +13,15 @@ Write-Host "[ADB] Verificando conexao..." -ForegroundColor Cyan
 # Limpa sessoes antigas
 adb disconnect 2>$null | Out-Null
 
+# 0. Mata qualquer emulador (sempre preferimos o dispositivo fisico)
+$emuList = adb devices | Select-Object -Skip 1 | Where-Object { $_ -match "emulator.*device$" }
+foreach ($emu in $emuList) {
+    $emuId = ($emu -split "`t")[0]
+    Write-Host "[..] Matando emulador $emuId..." -ForegroundColor Yellow
+    adb -s $emuId emu kill 2>$null
+}
+Start-Sleep -Milliseconds 500
+
 # 1. Verifica se ha dispositivo USB conectado
 $devices = adb devices | Select-Object -Skip 1 | Where-Object { $_ -match "device$" }
 $usbDevice = $devices | Where-Object { $_ -notmatch "emulator" -and $_ -notmatch "^\d+\.\d+" }

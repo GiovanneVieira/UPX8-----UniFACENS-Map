@@ -54,6 +54,27 @@ export function useNativeAnchors({ serverAnchors }: UseNativeAnchorsParams) {
   const nativeIdsRef = useRef<Set<string>>(new Set());
   /** Geospatial habilitado (só cria quando ativo). */
   const geoEnabledRef = useRef(false);
+  /** Guarda: hook vivo (SIGSEGV se chamarmos nativo após unmount). */
+  const aliveRef = useRef(true);
+
+  /** Cleanup no unmount: marca morto + remove âncoras + desarma interval. */
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      geoEnabledRef.current = false;
+      const nav = navigatorRef.current;
+      if (nav?.removeGeospatialAnchor) {
+        for (const id of nativeIdsRef.current) {
+          try {
+            nav.removeGeospatialAnchor(id);
+          } catch {
+            // cleanup best-effort
+          }
+        }
+      }
+    };
+  }, []);
 
   const handleNavigatorReady = useCallback((nav: any) => {
     navigatorRef.current = nav;
@@ -96,14 +117,19 @@ export function useNativeAnchors({ serverAnchors }: UseNativeAnchorsParams) {
   /** Processador: cria âncoras nativas em lotes (quando geospatial ativo). */
   useEffect(() => {
     const timer = setInterval(async () => {
-      if (!geoEnabledRef.current || !navigatorRef.current?.createGeospatialAnchor) return;
+      if (!aliveRef.current || !geoEnabledRef.current) return;
+      if (!navigatorRef.current?.createTerrainAnchor) return;
       if (pendingRef.current.length === 0) return;
 
       const batch = pendingRef.current.splice(0, CREATIONS_PER_TICK);
       for (const req of batch) {
         createdRef.current.add(req.pinId);
         try {
-          // createTerrainAnchor: Google resolve altitude contra terreno REAL
+          // Guarda anti-SIGSEGV: navigator pode ter sido destruído (troca de tab)
+          if (!navigatorRef.current?.createTerrainAnchor) {
+            console.warn(`[ARNative] navigator morto — abortando lote`);
+            return;
+          }
           const result = await navigatorRef.current.createTerrainAnchor(
             req.lat,
             req.lng,
@@ -136,22 +162,6 @@ export function useNativeAnchors({ serverAnchors }: UseNativeAnchorsParams) {
     }, TICK_MS);
 
     return () => clearInterval(timer);
-  }, []);
-
-  /** Cleanup: remove todas as âncoras nativas no unmount. */
-  useEffect(() => {
-    return () => {
-      const nav = navigatorRef.current;
-      if (nav?.removeGeospatialAnchor) {
-        for (const id of nativeIdsRef.current) {
-          try {
-            nav.removeGeospatialAnchor(id);
-          } catch {
-            // cleanup best-effort
-          }
-        }
-      }
-    };
   }, []);
 
   /** Remove um pin localmente (exclusão) e limpa a âncora nativa. */

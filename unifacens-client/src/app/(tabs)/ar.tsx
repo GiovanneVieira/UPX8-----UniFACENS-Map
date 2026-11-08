@@ -1,10 +1,32 @@
+import { useCallback, useState } from "react";
 import { StyleSheet, View } from "react-native";
+import { useFocusEffect } from "expo-router";
 import ViroARAnchorContainer from "@/components/ar/ViroARAnchorContainer";
 
+/**
+ * Tela AR — DESMONTA o container quando a tab perde foco.
+ *
+ * Motivo: o Tab Navigator mantém a tela montada mesmo em outra tab. A view
+ * nativa (GLSurfaceView) é removida da hierarquia, mas os intervals JS
+ * (pose poll, âncoras nativas, retry geospatial) continuam chamando o C++
+ * morto → SIGSEGV em libviro_renderer.so (nativeGetCameraGeospatialPose etc).
+ *
+ * Com useFocusEffect: sair da tab → container unmounta → intervals limpam →
+ * cena nativa destruída com segurança. Voltar à tab → remonta fresca.
+ */
 export default function ARScreen() {
+  const [isFocused, setIsFocused] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      setIsFocused(true);
+      return () => setIsFocused(false);
+    }, []),
+  );
+
   return (
     <View style={styles.container}>
-      <ViroARAnchorContainer />
+      {isFocused ? <ViroARAnchorContainer /> : null}
     </View>
   );
 }

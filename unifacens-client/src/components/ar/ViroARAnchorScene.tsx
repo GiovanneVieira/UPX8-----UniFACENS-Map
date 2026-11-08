@@ -128,6 +128,16 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const geoEnabledRef = useRef(false);
   const navigatorReadyRef = useRef(viroProps.onNavigatorReady);
   navigatorReadyRef.current = viroProps.onNavigatorReady;
+  /** Guarda de mount: SIGSEGV se chamarmos nativo após unmount da cena. */
+  const sceneAliveRef = useRef(true);
+
+  useEffect(() => {
+    sceneAliveRef.current = true; // mount
+    return () => {
+      sceneAliveRef.current = false; // unmount — intervals checam isto
+      geoEnabledRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     // sceneNavigator/arSceneNavigator vivem nos PROPS crus da cena (o mesmo
@@ -158,9 +168,15 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       ]);
     };
 
-    const maxAttempts = 6;
+    const maxAttempts = 10;
     let attempts = 0;
+    // Delay inicial: a interop Fabric precisa settle após o mount da cena
+    const INITIAL_DELAY_MS = 2000;
+    const RETRY_INTERVAL_MS = 3000;
+    let isTrying = false; // guarda local anti-reentrada
+
     const tryEnable = async (): Promise<void> => {
+      if (!sceneAliveRef.current) return; // cena morta → não tocar no nativo
       attempts++;
       try {
         const support = (await withTimeout(
@@ -190,26 +206,32 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           '| setup:',
           JSON.stringify(setup),
         );
+        // Retry é feito pelo retryInterval fora desta função
         geoStatusRef.current?.(false, support?.error);
-        if (attempts < maxAttempts) {
-          setTimeout(() => void tryEnable(), 5000);
-        }
         return;
       } catch (err) {
         // "Invalid view type" etc. podem ser transições da interop no mount — retry
         const message = err instanceof Error ? err.message : String(err);
         console.warn(`[ARGeo] falha (tentativa ${attempts}/${maxAttempts}):`, message);
-        if (attempts < maxAttempts) {
-          setTimeout(() => void tryEnable(), 5000);
-          return;
-        }
         geoStatusRef.current?.(false, message);
       }
     };
-    void tryEnable();
+    // Delay inicial para a interop Fabric settle + retry agressivo
+    const startTimer = setTimeout(() => void tryEnable(), INITIAL_DELAY_MS);
+
+    const retryInterval = setInterval(() => {
+      if (geoEnabledRef.current || attempts >= maxAttempts) {
+        clearInterval(retryInterval);
+        return;
+      }
+      if (!isTrying) {
+        isTrying = true;
+        void tryEnable().finally(() => { isTrying = false; });
+      }
+    }, RETRY_INTERVAL_MS);
 
     const timer = setInterval(async () => {
-      if (!geoEnabledRef.current) return;
+      if (!sceneAliveRef.current || !geoEnabledRef.current) return;
       try {
         const result = await nav.getCameraGeospatialPose();
         if (result?.success && result.pose) {
@@ -220,7 +242,11 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       }
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(startTimer);
+      clearInterval(retryInterval);
+      clearInterval(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
