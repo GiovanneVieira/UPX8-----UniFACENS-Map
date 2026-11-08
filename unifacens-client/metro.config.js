@@ -6,4 +6,16 @@ const { withNativeWind } = require('nativewind/metro');
 
 const config = getDefaultConfig(__dirname)
 
+// Modelos 3D dos pins AR (Viro3DObject): o default do Expo NÃO inclui
+// extensões 3D em assetExts — sem isto, require('...glb') não resolve.
+config.resolver.assetExts = [
+  ...config.resolver.assetExts,
+  'glb',
+  'gltf',
+  'obj',
+  'mtl',
+  'vrx',
+  'bin',
+];
+
 module.exports = withNativeWind(config, {input: './global.css'})

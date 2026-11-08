@@ -1,4 +1,4 @@
-import React, { FC, useState, useRef, useCallback, useMemo } from "react";
+import React, { FC, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -21,12 +21,14 @@ import {
   useDeleteAnchorMutation,
   anchorKeys,
 } from "@/features/anchors/queries/use-anchors-query";
+import { patchAnchor } from "@/services/api";
 import { useAuth } from "@/features/auth/hooks/use-auth";
 import { ViroARAnchorScene } from "./ViroARAnchorScene";
 import { useARGeolocation } from "./hooks/use-ar-geolocation";
 import { useARProjection } from "./hooks/use-ar-projection";
 import { useGeospatialPose, isPoseFresh } from "./hooks/use-geospatial-pose";
 import { useNativeAnchors } from "./hooks/use-native-anchors";
+import { useCloudAnchors, SCAN_GUIDE_MS } from "./hooks/use-cloud-anchors";
 import { useARWorldAlignment } from "./hooks/use-ar-world-alignment";
 import { useARZoom } from "./hooks/use-ar-zoom";
 import { ARStatusHud } from "./hud/ar-status-hud";
@@ -50,11 +52,15 @@ const HIT_TEST_PRIORITY = [
 const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
 
 /** P3 — Gate de precisão horizontal na criação de pins (média do buffer). */
-const CREATE_MAX_ACCURACY_M = 10;
+const CREATE_MAX_ACCURACY_M = 4;
 /** Gate vertical: bloqueia criação com acurácia vertical pior que isso (m). */
 const CREATE_MAX_VERTICAL_ACCURACY_M = 25;
 /** Gate de heading: sem heading confiável o Δ (e o pin) nasce rotacionado. */
 const CREATE_MAX_HEADING_ACCURACY_DEG = 15;
+/** Gate de estabilidade: spread posicional máximo do buffer (m). */
+const CREATE_MAX_POS_SPREAD_M = 2.5;
+/** Gate de estabilidade: spread de heading máximo do buffer (°). */
+const CREATE_MAX_HEADING_SPREAD_DEG = 10;
 /** Acurácia máxima da pose para CRIAR âncoras nativas (economia de quota). */
 const NATIVE_ANCHOR_MAX_POSE_ACCURACY_M = 20;
 /** Range de distância da mira (m) — custom input do modal. */
@@ -117,11 +123,27 @@ export const ViroARAnchorContainer: FC = () => {
     poseReady: nativeAnchorGateReady,
   });
 
+  // ── Âncoras de NUVEM VISUAIS — precisão centimétrica perto do pin ────────
+  const cloudAnchors = useCloudAnchors({
+    serverAnchors: anchorsQuery.data,
+    geoPoseRef: geospatial.poseRef,
+    trackingState,
+  });
+
+  /** Entradas unificadas: visual (nuvem) tem prioridade sobre geospatial. */
+  const mergedNativeEntries = useMemo(() => {
+    const merged = new Map(nativeAnchors.entries);
+    for (const [id, entry] of cloudAnchors.entries) {
+      merged.set(id, entry);
+    }
+    return merged;
+  }, [nativeAnchors.entries, cloudAnchors.entries]);
+
   const [reprojectNonce, setReprojectNonce] = useState(0);
 
   const projection = useARProjection({
     serverAnchors: anchorsQuery.data,
-    nativeEntries: nativeAnchors.entries,
+    nativeEntries: mergedNativeEntries,
     geoPoseRef: geospatial.poseRef,
     cameraPosRef,
     delta: alignment.delta,
@@ -153,11 +175,26 @@ export const ViroARAnchorContainer: FC = () => {
   const rayDirectionRef = useRef<[number, number, number]>([0, 0, -1]);
 
   // ── Status do HUD ─────────────────────────────────────────────────────────
+  // Fases da ancoragem visual (cloud) no HUD
+  useEffect(() => {
+    const phase = cloudAnchors.hosting.phase;
+    if (phase === 'hosting') setMutationStatus('Hospedando âncora visual…');
+    else if (phase === 'calibrating') setMutationStatus('Calibrando âncora visual…');
+    else if (phase === 'done') setMutationStatus(null);
+    else if (phase === 'failed') {
+      setMutationStatus('Ancoragem visual indisponível — usando GPS');
+      const t = setTimeout(() => setMutationStatus(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [cloudAnchors.hosting.phase]);
+
   const cloudStatusDerived = useMemo(() => {
     if (anchorsQuery.isPending) return "Carregando pontos...";
     if (anchorsQuery.isError) return "Erro de conexão";
     const total = anchorsQuery.data?.length ?? 0;
     if (total === 0) return "0 ponto(s)";
+    // Localização visual em andamento (SIFT ~30s — apontar a câmera ajuda)
+    if (cloudAnchors.resolving) return "Localizando âncora visual…";
     // Mundo AR ainda não alinhado com o Norte → projeção aguardando Δ
     if (alignment.status === "aligning") return "Alinhando AR…";
     // Pins do servidor existem mas nenhum projetado → calibrando
@@ -177,6 +214,7 @@ export const ViroARAnchorContainer: FC = () => {
     projection.anchors.length,
     geospatial.pose,
     alignment.status,
+    cloudAnchors.resolving,
   ]);
   const cloudStatus = mutationStatus ?? cloudStatusDerived;
 
@@ -202,6 +240,11 @@ export const ViroARAnchorContainer: FC = () => {
   );
 
   const handleTrackingUpdate = useCallback((state: number) => {
+    if (state !== 3 && trackingStateRef.current === 3) {
+      console.warn(`[ARTrack] tracking degradou (3 → ${state}) — mundo não-rígido, conteúdo AR será ocultado`);
+    } else if (state === 3 && trackingStateRef.current !== 3) {
+      console.log("[ARTrack] tracking estável (3) — mundo rígido novamente");
+    }
     trackingStateRef.current = state;
     setTrackingState(state);
   }, []);
@@ -372,6 +415,15 @@ export const ViroARAnchorContainer: FC = () => {
   );
 
   // ── Refresh REAL: refetch + retry de falhas + re-projeção + recalibra Δ ──
+  const handleNavigatorReady = useCallback(
+    (nav: any) => {
+      nativeAnchors.handleNavigatorReady(nav);
+      cloudAnchors.handleNavigatorReady(nav);
+    },
+    [nativeAnchors, cloudAnchors],
+  );
+
+  // ── Refresh REAL: refetch + retry de falhas + re-projeção + recalibra Δ ──
   const handleRefresh = useCallback(() => {
     void anchorsQuery.refetch();
     projection.clearFrozen();
@@ -447,15 +499,32 @@ export const ViroARAnchorContainer: FC = () => {
         return;
       }
 
+      // Gate de ESTABILIDADE: buffer espalhado = pose ainda convergindo —
+      // criar agora grava coordenadas erradas E invalida o uso da média.
+      // Estável (spread baixo) = ruído independente → média segura (÷√N).
+      const stability = geospatial.stability();
+      if (
+        stability.sampleCount < 4 ||
+        stability.posSpreadM > CREATE_MAX_POS_SPREAD_M ||
+        stability.headingSpreadDeg > CREATE_MAX_HEADING_SPREAD_DEG
+      ) {
+        setMutationStatus(null);
+        Alert.alert(
+          "Sinal instável",
+          `A posição ainda está se estabilizando (dispersão de ${stability.posSpreadM.toFixed(1)}m). Fique parado, aponte para o horizonte e aguarde alguns segundos antes de salvar.`,
+        );
+        return;
+      }
+
       // Conversão tap SLAM → WGS84:
       // 1. offset no frame AR → ENU (rotação involutiva por Δ)
       // 2. ENU → graus com raios de curvatura WGS84 (inversa exata da projeção)
       // 3. componente vertical do tap ENTRA na altitude (altura de criação)
       //
-      // ⚠️ Origem ENU = pose INSTANTÂNEA (pareada 1:1 com o camPos instantâneo
-      // do mesmo tick) — usar a média aqui introduz erro sistemático quando a
-      // pose ainda converge (a média atrasa a origem vs o offset SLAM atual).
-      // A média fica só nos gates acima (acurácias) e no heading (estável).
+      // Origem ENU = pose MÉDIA do buffer — SEGURA porque o gate de
+      // estabilidade acima garante que as amostras não estão derivando
+      // (ruído independente em torno do valor verdadeiro). CamPos é
+      // instantâneo e pareado com o Δ congelado da sessão.
       const camPos = cameraPosRef.current;
       const offset: [number, number, number] = [
         pendingCoords[0] - camPos[0],
@@ -465,9 +534,9 @@ export const ViroARAnchorContainer: FC = () => {
       const { east, north } = arXZToEnu(offset[0], offset[2], delta);
       const up = offset[1];
       const { latitude, longitude, altitude: targetAlt } = enuToGeodetic(
-        pose.latitude,
-        pose.longitude,
-        pose.altitude,
+        avgPose.latitude,
+        avgPose.longitude,
+        avgPose.altitude,
         east,
         north,
         up,
@@ -499,10 +568,33 @@ export const ViroARAnchorContainer: FC = () => {
       setAnchorDescription("");
       setModalVisible(false);
 
+      // ── ANCORAGEM VISUAL (Cloud Anchor) — scan guiado do ambiente ──────
+      // O scan captura o ambiente ao redor do ponto; hospedado no Google,
+      // vira a "cobertura VPS privada" deste local. No retorno, o resolve
+      // visual posiciona o pin com precisão CENTIMÉTRICA — independente de
+      // GPS/heading (a cura para "pin nasce com relação ao celular").
       Alert.alert(
         "Ponto Registrado!",
-        `Nome: ${saved.name}\nCoordenadas: [${targetLat}, ${targetLon}]\nAltitude: ${targetAlt.toFixed(1)}m\n\nÂncora nativa será criada automaticamente.`,
+        `Nome: ${saved.name}\nCoordenadas: [${targetLat}, ${targetLon}]\nAltitude: ${targetAlt.toFixed(1)}m\n\nAgora ESCANEIE: aponte a câmera lentamente ao redor do ponto por ~25s para ancoragem visual de precisão.`,
       );
+
+      if (cloudAnchors.beginScan()) {
+        setMutationStatus("Escaneie ao redor do ponto (ancoragem visual)…");
+        const pinId = saved.id;
+        const pinPos: [number, number, number] = [...pendingCoords];
+        setTimeout(() => {
+          void cloudAnchors.finishScanAndCalibrate(pinId, pinPos, async ({ cloudAnchorId, frameOffset }) => {
+            try {
+              const updated = await patchAnchor(pinId, { cloudAnchorId, frameOffset });
+              queryClient.setQueryData<Anchor[]>(anchorKeys.lists(), (old) =>
+                old ? old.map((a) => (a.id === pinId ? updated : a)) : old,
+              );
+            } catch (patchErr) {
+              console.warn("[ARCloud] PATCH do cloudAnchorId falhou:", patchErr);
+            }
+          });
+        }, SCAN_GUIDE_MS);
+      }
     } catch (err: unknown) {
       Alert.alert(
         "Erro ao Salvar",
@@ -529,10 +621,11 @@ export const ViroARAnchorContainer: FC = () => {
   const viroAppProps = useMemo(
     () => ({
       anchors: visibleAnchors,
+      trackingHealthy: trackingState === 3,
       routeChevrons: arRoute.active && !arRoute.arrived ? arRoute.chevrons : [],
       onGeospatialStatus: nativeAnchors.handleGeospatialStatus,
       onGeospatialPose: geospatial.handlePose,
-      onNavigatorReady: nativeAnchors.handleNavigatorReady,
+      onNavigatorReady: handleNavigatorReady,
       onSelectAnchor: handleTapByReticle,
       onPlaneTapped: handlePlaneTapped,
       onCameraUpdate: handleCameraUpdate,
@@ -542,11 +635,12 @@ export const ViroARAnchorContainer: FC = () => {
     }),
     [
       visibleAnchors,
+      trackingState,
       arRoute.active,
       arRoute.arrived,
       arRoute.chevrons,
       nativeAnchors.handleGeospatialStatus,
-      nativeAnchors.handleNavigatorReady,
+      handleNavigatorReady,
       geospatial.handlePose,
       handleTapByReticle,
       handlePlaneTapped,
@@ -683,6 +777,7 @@ export const ViroARAnchorContainer: FC = () => {
                             setIsSaving(true);
                             await deleteAnchorMutation.mutateAsync(anchor.id);
                             nativeAnchors.removeLocal(anchor.id);
+                            cloudAnchors.removeLocal(anchor.id);
                           } catch {
                             Alert.alert("Erro", "Não foi possível excluir o ponto.");
                           } finally {

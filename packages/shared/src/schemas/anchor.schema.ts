@@ -37,6 +37,12 @@ export const anchorSchema = z.object({
   estimated: z.boolean().optional(),
   /** Runtime-only (client): envelope de erro da estimativa (m). */
   estimateAccuracyM: z.number().optional(),
+  /**
+   * Offset do pin no frame da âncora de NUVEM visual (Cloud Anchor). Ao
+   * contrário do antigo `position` (session-relative, lixo entre sessões),
+   * o frame da cloud anchor é estável — o offset persiste com significado.
+   */
+  frameOffset: vector3Schema.optional().nullable(),
 });
 export type Anchor = z.infer<typeof anchorSchema>;
 
@@ -57,4 +63,19 @@ export const createAnchorSchema = z.object({
   heading: headingRange.optional().nullable(),
 });
 export type CreateAnchorDto = z.infer<typeof createAnchorSchema>;
+
+/**
+ * Atualização parcial de âncora — usada pelo fluxo de ancoragem visual:
+ * após hospedar o Cloud Anchor (scan do ambiente), o app grava o ID real
+ * da nuvem + o offset do pin no frame da âncora.
+ */
+export const updateAnchorSchema = z
+  .object({
+    cloudAnchorId: z.string().trim().min(1).optional(),
+    frameOffset: vector3Schema.optional().nullable(),
+  })
+  .refine((dto) => dto.cloudAnchorId !== undefined || dto.frameOffset !== undefined, {
+    message: 'Informe ao menos um campo para atualizar',
+  });
+export type UpdateAnchorDto = z.infer<typeof updateAnchorSchema>;
 
