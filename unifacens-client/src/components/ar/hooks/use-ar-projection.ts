@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { enuToArXZ, geodeticToENU, type Anchor } from 'shared';
 import type { NativeAnchorEntry } from './use-native-anchors';
-import type { GeospatialPose } from './use-geospatial-pose';
+import { isPoseFresh, type GeospatialPose } from './use-geospatial-pose';
 
 /**
  * ── Projeção de âncoras pós-WorldAnchor — DUAS fontes ──────────────────────
@@ -17,13 +17,13 @@ import type { GeospatialPose } from './use-geospatial-pose';
  */
 
 /** Acurácia máxima da pose para o fallback projetar pins (m). */
-const FALLBACK_MAX_ACCURACY_M = 15;
+const FALLBACK_MAX_ACCURACY_M = 10;
 /** Sem pins visíveis por este tempo → usa qualquer pose (best-effort). */
-const FALLBACK_TIMEOUT_MS = 15_000;
+const FALLBACK_TIMEOUT_MS = 25_000;
 /** Acurácia de pose que congela a estimativa de vez (m). */
 const FREEZE_ACCURACY_M = 6;
-/** Ticks de low-pass após os quais a estimativa congela (~8s @1Hz). */
-const MAX_ESTIMATING_TICKS = 8;
+/** Ticks SEM melhora de acurácia após os quais a estimativa congela (platô). */
+const PLATEAU_TICKS = 10;
 /** Fator de suavização por tick (25% do erro — desliza, não salta). */
 const SMOOTHING_ALPHA = 0.25;
 /** Pin congelado re-abre se a pose melhorar para menos que alvo×fator. */
@@ -49,6 +49,8 @@ interface FallbackState {
   targetAccM: number;
   /** Ticks de suavização já aplicados. */
   ticks: number;
+  /** Ticks consecutivos sem melhora de acurácia (platô → congelar). */
+  ticksSinceImprovement: number;
   /** Congelado (SLAM-stable) até nativo resolver ou refresh. */
   frozen: boolean;
 }
@@ -140,8 +142,15 @@ export function useARProjection({
     const now = Date.now();
     const timedOut =
       waitingSinceRef.current !== null && now - waitingSinceRef.current >= FALLBACK_TIMEOUT_MS;
+    // ⚠️ Frescor OBRIGATÓRIO: pos = camPos(agora) + R(Δ)·ENU(pose→pin) — se a
+    // pose estiver STALE, o camPos avança com o usuário e o ENU fica congelado
+    // no valor velho => o pin anda JUNTO com o usuário 1:1 (bug de device
+    // 2026-11-08: "os pontos saíram junto comigo" ao sair de casa).
     const fallbackAllowed =
-      delta !== null && pose !== null && (pose.horizontalAccuracy <= FALLBACK_MAX_ACCURACY_M || timedOut);
+      delta !== null &&
+      pose !== null &&
+      isPoseFresh(pose) &&
+      (pose.horizontalAccuracy <= FALLBACK_MAX_ACCURACY_M || timedOut);
 
     const projected: Anchor[] = [];
     const seen = new Set<string>();
@@ -164,6 +173,21 @@ export function useARProjection({
 
       if (native && isValidPosition(native.position)) {
         // 1. Âncora nativa — ARCore mantém Terra-ancorada. Sempre vence.
+        // Telemetria: quão longe a nativa resolveu da estimativa congelada?
+        // (diz empiricamente qual fonte está carregando o erro)
+        const estimate = fallbackRef.current.get(anchor.id);
+        if (estimate && native.nativeAnchorId) {
+          const gap = Math.hypot(
+            native.position[0] - estimate.pos[0],
+            native.position[1] - estimate.pos[1],
+            native.position[2] - estimate.pos[2],
+          );
+          if (gap > 0.5) {
+            console.log(
+              `[ARProj] "${anchor.name}" âncora nativa resolveu a ${gap.toFixed(1)}m da estimativa (est. ±${estimate.targetAccM.toFixed(0)}m) — nativa vence`,
+            );
+          }
+        }
         renderPos = native.position;
         const prev = renderedRef.current.get(anchor.id);
         if (
@@ -211,24 +235,37 @@ export function useARProjection({
         let fb = fallbackRef.current.get(anchor.id);
         if (!fb) {
           // O pin nasce UMA vez — no melhor lugar que sabemos agora.
-          fb = { pos: target, targetPos: target, targetAccM: acc, ticks: 0, frozen: false };
+          fb = {
+            pos: target,
+            targetPos: target,
+            targetAccM: acc,
+            ticks: 0,
+            ticksSinceImprovement: 0,
+            frozen: false,
+          };
           fallbackRef.current.set(anchor.id, fb);
         } else if (!fb.frozen || acc <= fb.targetAccM * LATE_IMPROVEMENT_FACTOR) {
           // Alvo só melhora com acurácia MELHOR (convergência monótona).
           if (acc < fb.targetAccM) {
-            // VPS converge ENQUANTO o usuário escaneia (padrão do sample
-            // oficial) — pin congelado com acurácia 2× pior re-abre suavemente.
+            // VPS converge ENQUANTO o usuário escaneia — pin congelado com
+            // acurácia 2× pior re-abre suavemente.
             if (fb.frozen) {
               fb.frozen = false;
               fb.ticks = 0;
             }
             fb.targetPos = target;
             fb.targetAccM = acc;
+            fb.ticksSinceImprovement = 0;
+          } else {
+            fb.ticksSinceImprovement += 1;
           }
           // Low-pass: desliza em direção ao alvo, jamais salta.
           fb.pos = lerpPos(fb.pos, fb.targetPos, SMOOTHING_ALPHA);
           fb.ticks += 1;
-          if (fb.targetAccM <= FREEZE_ACCURACY_M || fb.ticks >= MAX_ESTIMATING_TICKS) {
+          // Congela em acurácia boa OU em PLATÔ (sem melhora por N ticks) —
+          // nunca por tempo fixo: pins nasciam cravados na pose ainda ruim
+          // dos primeiros segundos da sessão.
+          if (fb.targetAccM <= FREEZE_ACCURACY_M || fb.ticksSinceImprovement >= PLATEAU_TICKS) {
             fb.frozen = true;
           }
         }

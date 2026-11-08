@@ -77,7 +77,14 @@ ViroMaterials.createMaterials({
  */
 const SHOW_DETECTED_PLANES = false;
 
-export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
+export interface ViroARAnchorSceneProps {
+  anchors?: Anchor[];
+  /**
+   * Tracking do ARCore saudável (estado 3)? Com tracking degradado o quadro
+   * do mundo NÃO é rígido — TODO conteúdo AR "anda" com o aparelho (§12.8).
+   * Conteúdo é OCULTADO em vez de mentir visualmente (padrão Live View).
+   */
+  trackingHealthy?: boolean;
   /** Janela de chevrons da sessão de navegação (keys = arco em metros). */
   routeChevrons?: RouteChevron[];
   /** Status do modo Geospatial (suporte no device / erros de key). */
@@ -111,6 +118,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
     props;
 
   const anchors = viroProps.anchors || [];
+  const trackingHealthy = viroProps.trackingHealthy !== false;
   const onCameraUpdate = viroProps.onCameraUpdate;
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
@@ -265,10 +273,13 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Filtra âncoras cujo arPosition foi resolvido e projetado no espaço tridimensional
+  // Filtra âncoras cujo arPosition foi resolvido e projetado no espaço tridimensional.
+  // Tracking degradado (≠3) => conteúdo OCULTO: o mundo não é rígido e tudo
+  // renderizaria "colado" ao aparelho (§12.8) — melhor sumir que mentir.
   const visibleAnchors = useMemo(() => {
+    if (!trackingHealthy) return [];
     return anchors.filter((a) => isUsablePoint(a.arPosition));
-  }, [anchors]);
+  }, [anchors, trackingHealthy]);
 
   // Notifica o componente pai e atualiza planos visíveis de forma agendada fora do render
   const schedulePlanesUpdate = useCallback(() => {
@@ -370,23 +381,26 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       {/* Rota de navegação estilo Google Live View: janela de chevrons azuis
           achatados no chão, enviada pronta pela sessão de navegação (useARNavigation).
           Keys = arco em metros -> React reaproveita os nós ao deslizar a janela.
-          O Y é o FLOOR_Y da sessão (chão do mundo AR, câmera ~1.5m acima). */}
-      {routeChevrons.map((chevron) => (
-        <ViroNode
-          key={`route-chevron-${chevron.key}`}
-          position={chevron.pos}
-          rotation={[0, chevron.angleDeg, 0]}>
-          {/* Achatado no chão (rot X -90°); +3cm contra z-fighting com
-              planos detectados. Topo da textura = -Z = frente. */}
-          <ViroQuad
-            width={1.25}
-            height={1.0}
-            rotation={[-90, 0, 0]}
-            position={[0, 0.03, 0]}
-            materials={['routeChevron']}
-          />
-        </ViroNode>
-      ))}
+          O Y é o FLOOR_Y da sessão (chão do mundo AR, câmera ~1.5m acima).
+          Ocultos quando o tracking degrada (mundo não-rígido, §12.8). */}
+      {trackingHealthy
+        ? routeChevrons.map((chevron) => (
+            <ViroNode
+              key={`route-chevron-${chevron.key}`}
+              position={chevron.pos}
+              rotation={[0, chevron.angleDeg, 0]}>
+              {/* Achatado no chão (rot X -90°); +3cm contra z-fighting com
+                  planos detectados. Topo da textura = -Z = frente. */}
+              <ViroQuad
+                width={1.25}
+                height={1.0}
+                rotation={[-90, 0, 0]}
+                position={[0, 0.03, 0]}
+                materials={['routeChevron']}
+              />
+            </ViroNode>
+          ))
+        : null}
 
       {/* Visualização das Maiores Superfícies Físicas Detectadas pelo ARCore.
           DESLIGADA por padrão (ver SHOW_DETECTED_PLANES acima) — o quad azul
