@@ -178,6 +178,7 @@ export const ViroARAnchorContainer: FC = () => {
   // ── Estado de UI local ────────────────────────────────────────────────────
   const [radiusFilter, setRadiusFilter] = useState<number>(0);
   const [planeCount, setPlaneCount] = useState<number>(0);
+  const [previewMode, setPreviewMode] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [anchorName, setAnchorName] = useState("");
   const [anchorDescription, setAnchorDescription] = useState("");
@@ -682,6 +683,7 @@ export const ViroARAnchorContainer: FC = () => {
       setAnchorName("");
       setAnchorDescription("");
       setModalVisible(false);
+      setPreviewMode(false);
 
       // ── ANCORAGEM VISUAL (Cloud Anchor ARCore) — escaneio guiado ───────
       // O hostCloudAnchor empacota os features visuais que a câmera capturou
@@ -740,6 +742,7 @@ export const ViroARAnchorContainer: FC = () => {
     () => ({
       anchors: visibleAnchors,
       trackingHealthy: trackingState === 3,
+      previewPosition: previewMode && modalVisible ? pendingCoords : null,
       routeChevrons: arRoute.active && !arRoute.arrived ? arRoute.chevrons : [],
       onGeospatialStatus: nativeAnchors.handleGeospatialStatus,
       onGeospatialPose: geospatial.handlePose,
@@ -754,6 +757,9 @@ export const ViroARAnchorContainer: FC = () => {
     [
       visibleAnchors,
       trackingState,
+      previewMode,
+      modalVisible,
+      pendingCoords,
       arRoute.active,
       arRoute.arrived,
       arRoute.chevrons,
@@ -875,6 +881,66 @@ export const ViroARAnchorContainer: FC = () => {
               {planeCount === 0 ? "Aguardando superfície…" : "Marcar Ponto no Espaço"}
             </Text>
           </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {/* ══ MODO PREVIEW: barra flutuante compacta ═════════════════════════
+          Substitui o modal quando o preview está ativo — o usuário vê o
+          pin fantasma em AR e ajusta a distância em tempo real. */}
+      {previewMode && modalVisible ? (
+        <View
+          style={[
+            styles.previewBar,
+            { bottom: Math.max(insets.bottom + 80, 100) },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={styles.previewBarInner}>
+            {/* Distância + ajustes rápidos */}
+            <View style={styles.previewDistRow}>
+              <Text style={styles.previewDistLabel}>Dist:</Text>
+              <Text style={styles.previewDistValue}>
+                {pendingDistance.toFixed(2)} m
+              </Text>
+              <TouchableOpacity
+                onPress={() => handleAdjustDistance(-0.5)}
+                style={styles.previewAdjBtn}>
+                <Text style={styles.previewAdjNeg}>−</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => handleAdjustDistance(0.5)}
+                style={styles.previewAdjBtn}>
+                <Text style={styles.previewAdjPos}>+</Text>
+              </TouchableOpacity>
+            </View>
+            {/* Ações */}
+            <View style={styles.previewActionsRow}>
+              <TouchableOpacity
+                onPress={() => setPreviewMode(false)}
+                style={styles.previewBackBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Voltar ao formulário"
+              >
+                <Ionicons name="eye-off" size={18} color="#94A3B8" />
+                <Text style={styles.previewBackText}>Editar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setPreviewMode(false);
+                  void handleCreate();
+                }}
+                disabled={isSaving}
+                style={styles.previewSaveBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Salvar ponto"
+              >
+                <Ionicons name="checkmark-circle" size={18} color="#34D399" />
+                <Text style={styles.previewSaveText}>
+                  {isSaving ? "Salvando…" : "Salvar"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       ) : null}
 
@@ -1010,12 +1076,17 @@ export const ViroARAnchorContainer: FC = () => {
         onSetDistance={handleSetDistance}
         minDistanceMeters={MIN_PLACE_DISTANCE_M}
         maxDistanceMeters={MAX_PLACE_DISTANCE_M}
+        previewMode={previewMode}
+        onTogglePreview={() => setPreviewMode((v) => !v)}
         anchorName={anchorName}
         onAnchorNameChange={setAnchorName}
         anchorDescription={anchorDescription}
         onAnchorDescriptionChange={setAnchorDescription}
         onCreate={handleCreate}
-        onClose={() => setModalVisible(false)}
+        onClose={() => {
+          setModalVisible(false);
+          setPreviewMode(false);
+        }}
       />
     </View>
   );
@@ -1101,6 +1172,104 @@ const styles = StyleSheet.create({
   placeAnchorButtonText: {
     color: "#FFFFFF",
     fontSize: 16,
+    fontWeight: "700",
+  },
+  // ══ MODO PREVIEW ════════════════════════════════════════════════════════
+  previewBar: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    zIndex: 40,
+    elevation: 40,
+  },
+  previewBarInner: {
+    backgroundColor: "rgba(15, 23, 42, 0.92)",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#F59E0B",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 10,
+    shadowColor: "#F59E0B",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 15,
+  },
+  previewDistRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  previewDistLabel: {
+    color: "#94A3B8",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  previewDistValue: {
+    color: "#FCD34D",
+    fontSize: 18,
+    fontWeight: "800",
+    minWidth: 70,
+    textAlign: "center",
+  },
+  previewAdjBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#1E293B",
+    borderWidth: 1,
+    borderColor: "#334155",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  previewAdjNeg: {
+    color: "#F87171",
+    fontSize: 22,
+    fontWeight: "800",
+  },
+  previewAdjPos: {
+    color: "#4ADE80",
+    fontSize: 22,
+    fontWeight: "800",
+  },
+  previewActionsRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  previewBackBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#1E293B",
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#334155",
+  },
+  previewBackText: {
+    color: "#94A3B8",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  previewSaveBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#052e16",
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#34D399",
+  },
+  previewSaveText: {
+    color: "#D1FAE5",
+    fontSize: 13,
     fontWeight: "700",
   },
   navHud: {

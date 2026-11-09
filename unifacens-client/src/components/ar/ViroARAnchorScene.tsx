@@ -63,6 +63,15 @@ ViroMaterials.createMaterials({
     diffuseColor: '#FFFFFF00', // Invisível — seleção é por retícula, não por raycast
     lightingModel: 'Constant',
   },
+  // MODO PREVIEW: âmbar vibrante — inconfundível com os pins regulares
+  previewPin: {
+    diffuseColor: '#F59E0B',
+    lightingModel: 'Constant',
+  },
+  previewStem: {
+    diffuseColor: '#FBBF24',
+    lightingModel: 'Constant',
+  },
 });
 
 /**
@@ -85,6 +94,13 @@ export interface ViroARAnchorSceneProps {
    * Conteúdo é OCULTADO em vez de mentir visualmente (padrão Live View).
    */
   trackingHealthy?: boolean;
+  /**
+   * MODO PREVIEW: posição do pin que está sendo criado. Quando definido,
+   * todos os pins regulares são OCULTADOS e apenas o preview aparece —
+   * o usuário vê em tempo real onde o ponto será persistido conforme
+   * ajusta a distância da mira.
+   */
+  previewPosition?: [number, number, number] | null;
   /** Janela de chevrons da sessão de navegação (keys = arco em metros). */
   routeChevrons?: RouteChevron[];
   /** Status do modo Geospatial (suporte no device / erros de key). */
@@ -119,6 +135,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
 
   const anchors = viroProps.anchors || [];
   const trackingHealthy = viroProps.trackingHealthy !== false;
+  const previewPosition = viroProps.previewPosition ?? null;
   const onCameraUpdate = viroProps.onCameraUpdate;
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
@@ -276,10 +293,11 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   // Filtra âncoras cujo arPosition foi resolvido e projetado no espaço tridimensional.
   // Tracking degradado (≠3) => conteúdo OCULTO: o mundo não é rígido e tudo
   // renderizaria "colado" ao aparelho (§12.8) — melhor sumir que mentir.
+  // MODO PREVIEW: pins regulares ocultos — apenas o preview aparece.
   const visibleAnchors = useMemo(() => {
-    if (!trackingHealthy) return [];
+    if (!trackingHealthy || previewPosition) return [];
     return anchors.filter((a) => isUsablePoint(a.arPosition));
-  }, [anchors, trackingHealthy]);
+  }, [anchors, trackingHealthy, previewPosition]);
 
   // Notifica o componente pai e atualiza planos visíveis de forma agendada fora do render
   const schedulePlanesUpdate = useCallback(() => {
@@ -488,6 +506,41 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           </ViroNode>
         );
       })}
+
+      {/* ══ MODO PREVIEW: pin fantasma no ponto de criação ═════════════════
+          Diamante âmbar + haste — visualmente DISTINTO dos pins regulares
+          (cubos coloridos). Atualiza em tempo real conforme o usuário
+          ajusta a distância da mira no modal minimizado. */}
+      {previewPosition ? (
+        <ViroNode position={previewPosition}>
+          {/* Diamante âmbar flutuante (rotaciona 45° nos 3 eixos) */}
+          <ViroBox
+            scale={[0.28, 0.28, 0.28]}
+            rotation={[45, 45, 0]}
+            materials={['previewPin']}
+          />
+          {/* Haste vertical fina até o "chão" */}
+          <ViroBox
+            position={[0, -0.35, 0]}
+            scale={[0.015, 0.7, 0.015]}
+            materials={['previewStem']}
+          />
+          {/* Base circular no chão */}
+          <ViroBox
+            position={[0, -0.7, 0]}
+            scale={[0.15, 0.02, 0.15]}
+            materials={['previewStem']}
+          />
+          {/* Label flutuante */}
+          <ViroText
+            text="NOVO PONTO"
+            scale={[0.4, 0.4, 0.4]}
+            position={[0, 0.45, 0]}
+            transformBehaviors={['billboardY']}
+            style={styles.previewText}
+          />
+        </ViroNode>
+      ) : null}
     </ViroARScene>
   );
 };
@@ -497,6 +550,14 @@ const styles = StyleSheet.create({
     fontFamily: 'Arial',
     fontSize: 28,
     color: '#FFFFFF',
+    textAlignVertical: 'center',
+    textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  previewText: {
+    fontFamily: 'Arial',
+    fontSize: 24,
+    color: '#FCD34D',
     textAlignVertical: 'center',
     textAlign: 'center',
     fontWeight: 'bold',

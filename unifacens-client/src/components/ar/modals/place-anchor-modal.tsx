@@ -31,6 +31,9 @@ interface PlaceAnchorModalProps {
   /** Range permitido de distância (m) — hint do input customizado. */
   minDistanceMeters: number;
   maxDistanceMeters: number;
+  /** Ativa/desativa o modo preview (olho) — o modal minimiza. */
+  previewMode: boolean;
+  onTogglePreview: () => void;
   anchorName: string;
   onAnchorNameChange: (value: string) => void;
   anchorDescription: string;
@@ -72,6 +75,8 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   onSetDistance,
   minDistanceMeters,
   maxDistanceMeters,
+  previewMode,
+  onTogglePreview,
   anchorName,
   onAnchorNameChange,
   anchorDescription,
@@ -107,7 +112,7 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   const saveBlocked = isSaving || !accuracyOk;
   return (
     <Modal
-      visible={visible}
+      visible={visible && !previewMode}
       transparent
       animationType="fade"
       onRequestClose={() => !isSaving && onClose()}>
@@ -118,7 +123,18 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
           contentContainerStyle={styles.modalScrollContent}
           keyboardShouldPersistTaps="handled">
           <View style={styles.modalCard}>
+          <View className="flex-row items-center justify-between mb-1">
             <Text style={styles.modalTitle}>Marcar Ponto no Espaço</Text>
+            <TouchableOpacity
+              onPress={onTogglePreview}
+              disabled={isSaving}
+              style={styles.previewToggleBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Ver preview do ponto em AR"
+            >
+              <Ionicons name="eye" size={20} color="#FCD34D" />
+            </TouchableOpacity>
+          </View>
             <Text style={styles.modalSubtitle}>
               O ponto será registrado nas coordenadas geográficas apontadas pela mira.
             </Text>
@@ -267,6 +283,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#F8FAFC',
     marginBottom: 4,
+    flex: 1,
+  },
+  previewToggleBtn: {
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
   },
   modalSubtitle: {
     fontSize: 12,
