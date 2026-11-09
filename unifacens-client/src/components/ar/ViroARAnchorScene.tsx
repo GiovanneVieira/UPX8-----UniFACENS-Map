@@ -90,11 +90,14 @@ const SHOW_DETECTED_PLANES = false;
 export interface ViroARAnchorSceneProps {
   anchors?: Anchor[];
   /**
-   * Pins com cloud anchor REAL (ID do Google, não sintético) + frameOffset
-   * calibrado. Cada um vira um <ViroARCloudAnchor> que resolve visualmente
-   * e entrega posição em COORDENADAS DA SESSÃO AR via onLocalized.
+   * Sensores cloud anchor MEMOIZADOS (source criado 1× por sessão).
+   * Sem memo, cada re-render do container recria cloudAnchorFrameSource
+   * → ViroSharedFrame componentDidUpdate pode re-adquirir.
    */
-  cloudAnchorPins?: Anchor[];
+  cloudAnchorSensors?: Array<{
+    pin: Anchor;
+    source: ReturnType<typeof cloudAnchorFrameSource>;
+  }>;
   /** Callback quando um cloud anchor localiza (posição em sessão AR). */
   onCloudAnchorLocalized?: (
     pinId: string,
@@ -157,7 +160,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const anchors = viroProps.anchors || [];
   const trackingHealthy = viroProps.trackingHealthy !== false;
   const previewPosition = viroProps.previewPosition ?? null;
-  const cloudAnchorPins = viroProps.cloudAnchorPins || [];
+  const cloudAnchorSensors = viroProps.cloudAnchorSensors || [];
   const onCloudAnchorLocalized = viroProps.onCloudAnchorLocalized;
   const onCloudAnchorError = viroProps.onCloudAnchorError;
   const onCameraUpdate = viroProps.onCameraUpdate;
@@ -541,14 +544,13 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           resolve e o ARCore responde "already in progress" → nunca completa.
           O gate de tracking aplica à RENDERIZAÇÃO dos pins (projeção),
           não aos sensores. */}
-      {cloudAnchorPins.map((pin) => {
+      {cloudAnchorSensors.map(({ pin, source }) => {
         if (!pin.cloudAnchorId || !Array.isArray(pin.frameOffset)) return null;
         const nav = (props.arSceneNavigator ?? props.sceneNavigator) as any;
-        console.log(`[ARCloud] montando sensor para "${pin.name}" (${pin.cloudAnchorId.slice(0, 12)}…) nav=${nav ? 'OK' : 'NULL'}`);
         return (
           <ViroSharedFrame
             key={`cloud-${pin.id}`}
-            source={cloudAnchorFrameSource(pin.cloudAnchorId)}
+            source={source}
             arSceneNavigator={nav}
             onLocalized={(event) => {
               console.log(`[ARCloud] "${pin.name}" LOCALIZADA — pos=[${event.position.map((v: number) => v.toFixed(2)).join(', ')}]`);

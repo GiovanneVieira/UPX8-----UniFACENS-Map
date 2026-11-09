@@ -65,9 +65,6 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
         </TouchableOpacity>
 
         <View style={styles.hudActionsRow}>
-          <TouchableOpacity onPress={onOpenCalibration} activeOpacity={0.75} style={styles.hudIconBtn}>
-            <Ionicons name="location-outline" size={18} color="#67E8F9" />
-          </TouchableOpacity>
           <TouchableOpacity
             onPress={onRefresh}
             disabled={isFetching}

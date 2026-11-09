@@ -30,6 +30,7 @@ import { useARProjection } from "./hooks/use-ar-projection";
 import { useGeospatialPose, isPoseFresh } from "./hooks/use-geospatial-pose";
 import { useNativeAnchors } from "./hooks/use-native-anchors";
 import { useCloudAnchors, SCAN_GUIDE_MS, isRealCloudAnchorId } from "./hooks/use-cloud-anchors";
+import { cloudAnchorFrameSource } from "@reactvision/react-viro";
 import { useARWorldAlignment } from "./hooks/use-ar-world-alignment";
 import { useARZoom } from "./hooks/use-ar-zoom";
 import { ARStatusHud } from "./hud/ar-status-hud";
@@ -150,12 +151,21 @@ export const ViroARAnchorContainer: FC = () => {
     return merged;
   }, [nativeAnchors.entries, cloudAnchors.entries]);
 
-  // ── Cloud anchor pins (com ID real do Google) para a cena resolver ────
   const cloudAnchorPins = useMemo(() => {
     return (anchorsQuery.data ?? []).filter(
       (a) => isRealCloudAnchorId(a.cloudAnchorId) && Array.isArray(a.frameOffset),
     );
   }, [anchorsQuery.data]);
+
+  // Sensores memoizados: source criado UMA vez (cloudAnchorFrameSource
+  // retorna novo objeto a cada chamada — sem memo, cada re-render do
+  // container recria o source e o ViroSharedFrame pode re-adquirir).
+  const cloudAnchorSensors = useMemo(() => {
+    return cloudAnchorPins.map((pin) => ({
+      pin,
+      source: cloudAnchorFrameSource(pin.cloudAnchorId!),
+    }));
+  }, [cloudAnchorPins]); // eslint-disable-line react-hooks/exhaustive-deps -- cloudAnchorFrameSource é estável por cloudAnchorId
 
   // Pins que falharam ao localizar (rastreados para não deixar o HUD
   // preso em "Localizando âncora visual…" quando já deu erro).
@@ -203,6 +213,25 @@ export const ViroARAnchorContainer: FC = () => {
     },
     [cloudAnchorPins],
   );
+
+  // ── TIMEOUT: resolve que pendura >45s = falha (não trava o HUD) ──────
+  useEffect(() => {
+    if (cloudAnchorPins.length === 0) return;
+    const timer = setTimeout(() => {
+      setCloudFailedPins((prev) => {
+        const next = new Set(prev);
+        for (const pin of cloudAnchorPins) {
+          if (!cloudAnchors.entries.has(pin.id) && !next.has(pin.id)) {
+            console.warn(`[ARCloud] "${pin.name}" TIMEOUT 45s — marcando como falho`);
+            next.add(pin.id);
+          }
+        }
+        return next.size === prev.size ? prev : next;
+      });
+    }, 45_000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- timeout de segurança
+  }, [cloudAnchorPins.length]);
 
   const [reprojectNonce, setReprojectNonce] = useState(0);
 
@@ -880,6 +909,7 @@ export const ViroARAnchorContainer: FC = () => {
       anchors: visibleAnchors,
       trackingHealthy: trackingState === 3,
       cloudAnchorPins,
+      cloudAnchorSensors,
       onCloudAnchorLocalized: handleCloudAnchorLocalized,
       onCloudAnchorError: handleCloudAnchorError,
       surfaceAvailable,
@@ -899,6 +929,7 @@ export const ViroARAnchorContainer: FC = () => {
       visibleAnchors,
       trackingState,
       cloudAnchorPins,
+      cloudAnchorSensors,
       handleCloudAnchorLocalized,
       handleCloudAnchorError,
       surfaceAvailable,
