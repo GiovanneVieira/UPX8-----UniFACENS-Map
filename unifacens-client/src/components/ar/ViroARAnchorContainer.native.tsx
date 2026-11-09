@@ -2,6 +2,7 @@ import React, { FC, useState, useRef, useEffect, useCallback, useMemo } from "re
 import {
   ActivityIndicator,
   Alert,
+  PixelRatio,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -337,88 +338,89 @@ export const ViroARAnchorContainer: FC = () => {
     const centerY = screenHeight / 2;
     let targetCoords: [number, number, number] | null = null;
     let bestHit: unknown = null;
-
-    // ── Hit-test com RETRY (3x com 600ms) + fallback RAIO ───────────────
-    // O ARCore precisa de tempo para detectar planos: um único disparo no
-    // centro da tela falha se o plano ainda não se formou naquele pixel.
-    // O raio frontal pega feature points mesmo sem plano detectado.
     let bestAnchorableHit: unknown = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+
+    // ── CORREÇÃO CRÍTICA (2026-11-09): unidades dp vs px ─────────────────
+    // useWindowDimensions() retorna DIPs; o nativo espera PIXELS físicos.
+    // No POCO X7 Pro (1220×2712 px, density 2.625): centro em dp = (232,517)
+    // mas o centro real em px = (610,1356) — o raio ia pro canto SUP-ESQ!
+    // Fix: performARHitTestWithPosition como PRIMÁRIO (mundo 3D, sem
+    // conversão de tela — foi o que funcionou no único sucesso), e o
+    // point-based com PixelRatio.get() como secundário.
+    const pixelRatio = PixelRatio.get();
+    const centerXpx = Math.round(centerX * pixelRatio);
+    const centerYpx = Math.round(centerY * pixelRatio);
+
+    // Helper: extrai o melhor hit de uma lista (por prioridade de tipo)
+    const extractBest = (hits: any[]) => {
+      let foundBest: unknown = null;
+      let foundAnchorable: unknown = null;
+      for (const type of HIT_TEST_PRIORITY) {
+        const match = hits.find(
+          (h: any) => h.type === type && isUsablePoint(h.transform?.position),
+        );
+        if (match) {
+          foundBest = match;
+          if (ANCHORABLE_HIT_TYPES.has(match.type)) {
+            foundAnchorable = match;
+          }
+          break;
+        }
+      }
+      if (foundBest && !foundAnchorable) {
+        foundAnchorable = hits.find(
+          (h: any) => ANCHORABLE_HIT_TYPES.has(h.type) && isUsablePoint(h.transform?.position),
+        ) ?? null;
+      }
+      return { foundBest, foundAnchorable };
+    };
+
+    // ── PRIMÁRIO: posição 3D à frente da câmera (contorna o bug de dp) ──
+    if (arSceneRef.current?.performARHitTestWithPosition) {
       try {
-        if (arSceneRef.current?.performARHitTestWithPoint) {
-          const hits = await arSceneRef.current.performARHitTestWithPoint(centerX, centerY);
+        const fwd = cameraFwdRef.current;
+        const cam = cameraPosRef.current;
+        const ahead: [number, number, number] = [
+          cam[0] + fwd[0] * 2.5,
+          cam[1] + fwd[1] * 2.5,
+          cam[2] + fwd[2] * 2.5,
+        ];
+        const posHits = await arSceneRef.current.performARHitTestWithPosition(ahead);
+        if (Array.isArray(posHits) && posHits.length > 0) {
+          console.log(`[ARCloud] primário (posição 3D): ${posHits.map((h: any) => h.type).join(', ')}`);
+          const { foundBest, foundAnchorable } = extractBest(posHits);
+          if (foundBest) {
+            bestHit = foundBest;
+            bestAnchorableHit = foundAnchorable;
+            const m = foundBest as any;
+            targetCoords = [m.transform.position[0], m.transform.position[1], m.transform.position[2]];
+          }
+        }
+      } catch (posErr) {
+        console.warn('[ARCloud] hit primário (posição 3D) falhou:', posErr);
+      }
+    }
+
+    // ── SECUNDÁRIO: point-based com correção de PIXELS ───────────────────
+    if (!bestHit && arSceneRef.current?.performARHitTestWithPoint) {
+      for (let attempt = 1; attempt <= 2 && !bestHit; attempt++) {
+        try {
+          const hits = await arSceneRef.current.performARHitTestWithPoint(centerXpx, centerYpx);
           if (Array.isArray(hits) && hits.length > 0) {
-            // Diagnóstico: quais tipos o ARCore está devolvendo?
-            console.log(`[ARCloud] hits (tentativa ${attempt}): ${hits.map((h: any) => h.type).join(', ')}`);
-            for (const type of HIT_TEST_PRIORITY) {
-              const match = hits.find(
-                (h: any) => h.type === type && isUsablePoint(h.transform?.position),
-              );
-              if (match) {
-                targetCoords = [
-                  match.transform.position[0],
-                  match.transform.position[1],
-                  match.transform.position[2],
-                ];
-                bestHit = match;
-                // Guarda o primeiro hit ANCHORABLE (para createAnchoredNode)
-                if (ANCHORABLE_HIT_TYPES.has(match.type)) {
-                  bestAnchorableHit = match;
-                }
-                break;
-              }
+            console.log(`[ARCloud] secundário (point ${centerXpx},${centerYpx}px tentativa ${attempt}): ${hits.map((h: any) => h.type).join(', ')}`);
+            const { foundBest, foundAnchorable } = extractBest(hits);
+            if (foundBest) {
+              bestHit = foundBest;
+              bestAnchorableHit = foundAnchorable;
+              const m = foundBest as any;
+              targetCoords = [m.transform.position[0], m.transform.position[1], m.transform.position[2]];
             }
-            // Se o melhor hit não é anchorable, procura um anchorable na lista
-            if (bestHit && !bestAnchorableHit) {
-              const anchorable = hits.find(
-                (h: any) => ANCHORABLE_HIT_TYPES.has(h.type) && isUsablePoint(h.transform?.position),
-              );
-              if (anchorable) bestAnchorableHit = anchorable;
-            }
-            if (bestHit) break;
           }
+          if (!bestHit && attempt < 2) await new Promise((r) => setTimeout(r, 400));
+        } catch (hitErr) {
+          console.warn(`[AR] Hit test point aviso (tentativa ${attempt}):`, hitErr);
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 400));
         }
-        // Fallback: posição 3D à frente da câmera pega feature points
-        // (performARHitTestWithRay espera formato de array não documentado
-        // — ViroRay = any — e lança exceção de tipo; REMOVIDO por bug de
-        // device 2026-11-09. Position-based é mais confiável.)
-        if (attempt === 3 && !bestAnchorableHit && arSceneRef.current?.performARHitTestWithPosition) {
-          const fwd = cameraFwdRef.current;
-          const cam = cameraPosRef.current;
-          const ahead: [number, number, number] = [
-            cam[0] + fwd[0] * 3,
-            cam[1] + fwd[1] * 3,
-            cam[2] + fwd[2] * 3,
-          ];
-          try {
-            const posHits = await arSceneRef.current.performARHitTestWithPosition(ahead);
-            if (Array.isArray(posHits) && posHits.length > 0) {
-              console.log(`[ARCloud] hits via posição 3D: ${posHits.map((h: any) => h.type).join(', ')}`);
-              const anchorable = posHits.find(
-                (h: any) => ANCHORABLE_HIT_TYPES.has(h.type) && isUsablePoint(h.transform?.position),
-              );
-              if (anchorable) {
-                if (!bestHit) {
-                  targetCoords = [
-                    anchorable.transform.position[0],
-                    anchorable.transform.position[1],
-                    anchorable.transform.position[2],
-                  ];
-                  bestHit = anchorable;
-                }
-                bestAnchorableHit = anchorable;
-              }
-            }
-          } catch (posErr) {
-            console.warn('[ARCloud] performARHitTestWithPosition falhou:', posErr);
-          }
-        }
-        if (!bestHit && attempt < 3) {
-          await new Promise((r) => setTimeout(r, 600));
-        }
-      } catch (hitErr) {
-        console.warn(`[AR] Hit test aviso (tentativa ${attempt}):`, hitErr);
-        if (attempt < 3) await new Promise((r) => setTimeout(r, 600));
       }
     }
 
