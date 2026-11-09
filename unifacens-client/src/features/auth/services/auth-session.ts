@@ -15,11 +15,17 @@ function mapSessionUser(user: SessionUserShape): AuthUser {
 
 async function issueAndStoreJwt(): Promise<string> {
   // GET /auth/token: o client anexa os cookies de sessão persistidos
-  // (expoClient/SecureStore no nativo; cookies do navegador na web).
+  // (expoClient/SecureStore no nativo; cookies do navegador na web — exige
+  // credentials:'include' no authClient, senão o navegador os descarta).
   const response = await authClient.$fetch<{ token?: string }>('/token');
   const token = response.data?.token;
   if (!token) {
-    throw new Error('Não foi possível obter o token de acesso. Tente novamente.');
+    // Detalhe técnico fica no console; o cliente vê mensagem humana.
+    console.warn(
+      '[auth] /auth/token não retornou token:',
+      JSON.stringify({ error: response.error ?? null, status: (response as { status?: number }).status ?? null }),
+    );
+    throw new Error('Não foi possível concluir o acesso. Tente entrar novamente.');
   }
   await saveJwt(token);
   return token;
@@ -67,8 +73,12 @@ export async function signInWithEmail(email: string, password: string): Promise<
     );
   }
   const { data: session } = await authClient.getSession();
+  if (!session?.user) {
+    console.warn('[auth] signIn ok, mas getSession sem usuário — cookie não persistiu?');
+    throw new Error('Não foi possível concluir o acesso. Tente entrar novamente.');
+  }
   const jwt = await issueAndStoreJwt();
-  const user = mapSessionUser(session?.user as SessionUserShape);
+  const user = mapSessionUser(session.user as SessionUserShape);
   useAuthStore.getState().setSession(jwt, user);
   return user;
 }
@@ -87,8 +97,12 @@ export async function signUpWithEmail(
     );
   }
   const { data: session } = await authClient.getSession();
+  if (!session?.user) {
+    console.warn('[auth] signUp ok, mas getSession sem usuário — cookie não persistiu?');
+    throw new Error('Não foi possível concluir o acesso. Tente novamente.');
+  }
   const jwt = await issueAndStoreJwt();
-  const user = mapSessionUser(session?.user as SessionUserShape);
+  const user = mapSessionUser(session.user as SessionUserShape);
   useAuthStore.getState().setSession(jwt, user);
   return user;
 }

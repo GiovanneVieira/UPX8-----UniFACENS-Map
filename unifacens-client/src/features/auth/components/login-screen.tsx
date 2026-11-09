@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import type { TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FormInputField } from '@/components/ui/form-field';
 import { useSignInForm } from '../hooks/use-sign-in-form';
@@ -57,6 +58,7 @@ function ErrorNotice({ message }: { message?: string }) {
 
 function SignInBody() {
   const { form, mutation } = useSignInForm(() => undefined);
+  const passwordRef = useRef<TextInput>(null);
   return (
     <View className="gap-3">
       <form.Field name="email">
@@ -68,6 +70,8 @@ function SignInBody() {
             autoCapitalize="none"
             autoCorrect={false}
             maxLength={255}
+            returnKeyType="next"
+            onSubmitEditing={() => passwordRef.current?.focus()}
             value={field.state.value}
             onChangeText={field.handleChange}
             onBlur={field.handleBlur}
@@ -78,11 +82,14 @@ function SignInBody() {
       <form.Field name="password">
         {(field) => (
           <FormInputField
+            ref={passwordRef}
             label="Senha"
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
             maxLength={128}
+            returnKeyType="go"
+            onSubmitEditing={() => void form.handleSubmit()}
             value={field.state.value}
             onChangeText={field.handleChange}
             onBlur={field.handleBlur}
@@ -107,6 +114,8 @@ function SignInBody() {
 
 function SignUpBody() {
   const { form, mutation } = useSignUpForm(() => undefined);
+  const emailRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
   return (
     <View className="gap-3">
       <form.Field name="name">
@@ -116,6 +125,8 @@ function SignUpBody() {
             autoCapitalize="words"
             autoCorrect={false}
             maxLength={120}
+            returnKeyType="next"
+            onSubmitEditing={() => emailRef.current?.focus()}
             value={field.state.value}
             onChangeText={field.handleChange}
             onBlur={field.handleBlur}
@@ -126,11 +137,14 @@ function SignUpBody() {
       <form.Field name="email">
         {(field) => (
           <FormInputField
+            ref={emailRef}
             label="E-mail"
             keyboardType="email-address"
             autoCapitalize="none"
             autoCorrect={false}
             maxLength={255}
+            returnKeyType="next"
+            onSubmitEditing={() => passwordRef.current?.focus()}
             value={field.state.value}
             onChangeText={field.handleChange}
             onBlur={field.handleBlur}
@@ -141,11 +155,14 @@ function SignUpBody() {
       <form.Field name="password">
         {(field) => (
           <FormInputField
+            ref={passwordRef}
             label="Senha"
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
             maxLength={128}
+            returnKeyType="go"
+            onSubmitEditing={() => void form.handleSubmit()}
             value={field.state.value}
             onChangeText={field.handleChange}
             onBlur={field.handleBlur}

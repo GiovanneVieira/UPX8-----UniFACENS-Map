@@ -21,6 +21,15 @@ export const authClient = createAuthClient({
   // O handler better-auth da API é montado em /auth (ver better-auth.ts no
   // servidor); sem isto o client chamaria o default /api/auth → 404.
   basePath: '/auth',
+  // ⚠️ WEB (bug do merge, 2026-11-09): sem credentials:'include' o navegador
+  // DESCARTA o Set-Cookie da resposta do login em requisições cross-origin
+  // (app :8081 → API :8000 = origens diferentes por PORTA) — o signIn
+  // "succeede", mas o cookie de sessão nunca é armazenado e o GET /auth/token
+  // sai sem cookie → 401 → "Não foi possível obter o token de acesso".
+  // No nativo é inócuo (o expoClient gerencia cookies via SecureStore).
+  fetchOptions: {
+    credentials: 'include',
+  },
   plugins: [
     expoClient({
       scheme: 'unifacensclient',
