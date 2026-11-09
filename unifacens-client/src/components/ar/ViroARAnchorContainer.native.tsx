@@ -48,6 +48,17 @@ const HIT_TEST_PRIORITY = [
   "FeaturePoint",
 ];
 
+/**
+ * Tipos de hit que suportam criação de ÂNCORA no Android (createAnchoredNode).
+ * DepthPoint e EstimatedHorizontalPlane FALHAM com ANCHOR_CREATION_FAILED
+ * (erro de device, 2026-11-09) — posicionam a mira mas não hospedam âncora.
+ */
+const ANCHORABLE_HIT_TYPES = new Set([
+  "ExistingPlaneUsingExtent",
+  "ExistingPlane",
+  "FeaturePoint",
+]);
+
 // Constante estática da cena inicial para nunca recriar a instância nativa do ViroARSceneNavigator
 const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
 
@@ -330,6 +341,7 @@ export const ViroARAnchorContainer: FC = () => {
     // O ARCore precisa de tempo para detectar planos: um único disparo no
     // centro da tela falha se o plano ainda não se formou naquele pixel.
     // O raio frontal pega feature points mesmo sem plano detectado.
+    let bestAnchorableHit: unknown = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         if (arSceneRef.current?.performARHitTestWithPoint) {
@@ -346,8 +358,19 @@ export const ViroARAnchorContainer: FC = () => {
                   match.transform.position[2],
                 ];
                 bestHit = match;
+                // Guarda o primeiro hit ANCHORABLE (para createAnchoredNode)
+                if (ANCHORABLE_HIT_TYPES.has(match.type)) {
+                  bestAnchorableHit = match;
+                }
                 break;
               }
+            }
+            // Se o melhor hit não é anchorable, procura um anchorable na lista
+            if (bestHit && !bestAnchorableHit) {
+              const anchorable = hits.find(
+                (h: any) => ANCHORABLE_HIT_TYPES.has(h.type) && isUsablePoint(h.transform?.position),
+              );
+              if (anchorable) bestAnchorableHit = anchorable;
             }
             if (bestHit) break;
           }
@@ -371,6 +394,9 @@ export const ViroARAnchorContainer: FC = () => {
                   match.transform.position[2],
                 ];
                 bestHit = match;
+                if (ANCHORABLE_HIT_TYPES.has(match.type)) {
+                  bestAnchorableHit = match;
+                }
                 console.log(`[ARCloud] hit via raio (type: ${match.type})`);
                 break;
               }
@@ -389,34 +415,36 @@ export const ViroARAnchorContainer: FC = () => {
     // Âncora LOCAL para a ancoragem visual (Cloud Anchor): criada AGORA
     // porque o resultado do hit expira em 30s — a âncora não expira. Será
     // hospedada após o save (hostCloudAnchor, caminho ARCore nativo).
+    // Usa bestAnchorableHit (ExistingPlane/FeaturePoint) — DepthPoint e
+    // EstimatedHorizontalPlane FALHAM com ANCHOR_CREATION_FAILED no Android.
     // Retry ×2: a interop Fabric pode rejeitar a 1ª chamada no settle do
     // mount (mesmo padrão do setGeospatialModeEnabled — §12.4).
-    if (bestHit && arSceneRef.current?.createAnchoredNode) {
+    if (bestAnchorableHit && arSceneRef.current?.createAnchoredNode) {
       let anchorId: string | null = null;
-      let lastErr: unknown = null;
       for (let attempt = 1; attempt <= 2 && !anchorId; attempt++) {
         try {
-          const nodeRef = await arSceneRef.current.createAnchoredNode(bestHit);
+          const nodeRef = await arSceneRef.current.createAnchoredNode(bestAnchorableHit);
           anchorId = (nodeRef as { anchorId?: string } | null)?.anchorId ?? null;
           if (!anchorId) {
             console.warn(`[ARCloud] createAnchoredNode sem anchorId (tentativa ${attempt})`);
+          } else {
+            console.log(`[ARCloud] âncora local criada: ${anchorId.slice(0, 16)}…`);
           }
         } catch (anchorErr) {
-          lastErr = anchorErr;
           console.warn(`[ARCloud] createAnchoredNode falhou (tentativa ${attempt}):`, anchorErr);
         }
       }
       cloudAnchors.setPendingLocalAnchor(anchorId);
-      if (!anchorId && lastErr === null) {
-        // hit existia mas nodeRef sem anchorId — registrado acima
-      }
-    } else if (bestHit) {
-      console.warn("[ARCloud] createAnchoredNode indisponível no ref da cena");
+    } else if (bestHit && !bestAnchorableHit) {
+      console.warn(
+        "[ARCloud] hit não-anchorable (DepthPoint/Estimated) — GPS-only para este pin",
+      );
+      cloudAnchors.setPendingLocalAnchor(null);
+    } else if (!bestHit) {
+      console.warn("[ARCloud] hit-test sem resultado utilizável — pin será GPS-only se salvo assim");
       cloudAnchors.setPendingLocalAnchor(null);
     } else {
-      // Sem hit físico: retícula não encontrou superfície (parede lisa,
-      // espaço vazio) — modal abre no fallback 2m à frente, sem âncora visual.
-      console.warn("[ARCloud] hit-test sem resultado utilizável — pin será GPS-only se salvo assim");
+      console.warn("[ARCloud] createAnchoredNode indisponível no ref da cena");
       cloudAnchors.setPendingLocalAnchor(null);
     }
 
