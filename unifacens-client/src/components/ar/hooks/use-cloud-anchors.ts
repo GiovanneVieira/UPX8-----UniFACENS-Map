@@ -4,28 +4,30 @@ import type { NativeAnchorEntry } from './use-native-anchors';
 import type { GeospatialPose } from './use-geospatial-pose';
 
 /**
- * ── Âncoras de Nuvem VISUAIS (Cloud Anchors) — precisão centimétrica ────────
+ * ── Âncoras de Nuvem VISUAIS (ARCore Cloud Anchors) — precisão centimétrica ──
  *
  * O Geospatial (GPS/VPS) não distingue ambientes internos: a pose indoor é
  * lixo e pins "nascem com relação ao celular". A âncora de nuvem visual
- * resolve pela CÂMERA contra um mapa do ambiente hospedado no servidor do
- * Google — o scan do SEU ambiente vira a cobertura VPS privada.
+ * resolve pela CÂMERA contra um mapa visual hospedado no servidor do Google
+ * — o entorno do SEU ponto vira a cobertura VPS privada.
  *
- * Ciclo:
- * 1. CRIAÇÃO: startScan() → usuário escaneia ~20-30s ao redor do ponto →
- *    finishScan(ttl=1) → cloudAnchorId.
- * 2. AUTO-CALIBRAÇÃO: resolveCloudAnchor NA MESMA SESSÃO revela a origem do
- *    frame (centróide das posições da câmera, §doc ViroCloudAnchor) →
- *    frameOffset = pin − origem, rotacionado para o frame → PATCH no banco
- *    (colunas positionX/Y/Z renascidas com semântica estável).
- * 3. RETORNO: resolveNearby() resolve o ID → posição mundial do frame →
- *    pin = origem + R(yaw)·frameOffset → entra no pipeline como âncora
- *    nativa de PRIORIDADE MÁXIMA (geospatial vira fallback de longa
- *    distância).
+ * ⚠️ LIÇÃO (2026-11-09): startScan/finishScan são APIs do provider
+ * REACTVISION (prefixo rv*, backend próprio) — com provider="arcore" elas
+ * falham SEMPRE ("Ancoragem visual indisponível"). O caminho ARCore nativo é:
+ *
+ * 1. hit-test (retícula) → arScene.createAnchoredNode(hit) → âncora LOCAL
+ *    na posição do tap (válida por 30s após o hit — criar logo).
+ * 2. Usuário escaneia o entorno do ponto ~15s (features visuais p/ o mapa).
+ * 3. navigator.hostCloudAnchor(anchorId, ttl=1) → cloudAnchorId no Google.
+ * 4. Calibração: resolveCloudAnchor na MESMA sessão → posição mundial da
+ *    âncora → frameOffset = pinPos − anchorPos (o pin pode ter sido ajustado
+ *    ao longo do raio depois do hit) → PATCH no banco.
+ * 5. RETORNO: resolveNearby (1 por vez, SIFT ~30s) → pin = anchorPos +
+ *    R(yaw)·frameOffset → entrada de PRIORIDADE MÁXIMA na projeção.
  *
  * TTL: via API key = 24h (limite do ARCore). Para 365 dias: autorização
- * keyless (JWT assinado pelo backend) + renovação via Management API —
- * roadmap documentado no AGENTS.MD.
+ * keyless (JWT por service account) OU renovação via Management API —
+ * roadmap no AGENTS.MD.
  */
 
 /** Prefixos de IDs sintéticos que NÃO são cloud anchors reais. */
@@ -34,10 +36,10 @@ const SYNTHETIC_ID_PREFIXES = ['coord-', 'ua-'];
 const RESOLVE_RANGE_M = 40;
 /** TTL do host em dias (API key = máx 1). */
 const HOST_TTL_DAYS = 1;
-/** Timeout JS por resolve — SIFT roda numa janela de ~30s. */
-const RESOLVE_TIMEOUT_MS = 75_000;
-/** Duração típica do scan guiado antes do finishScan (ms). */
-export const SCAN_GUIDE_MS = 25_000;
+/** Timeout JS por host/resolve. */
+const OP_TIMEOUT_MS = 75_000;
+/** Janela de escaneio guiado antes de hospedar (ms). */
+export const SCAN_GUIDE_MS = 15_000;
 
 /** Um cloud anchor é real (hospedado no Google) e não sintético local? */
 export function isRealCloudAnchorId(id: string | null | undefined): boolean {
@@ -68,6 +70,20 @@ interface CloudAnchorShape {
   rotation?: [number, number, number];
 }
 
+interface HostResultShape {
+  success?: boolean;
+  cloudAnchorId?: string;
+  error?: string;
+  state?: string;
+}
+
+interface ResolveResultShape {
+  success?: boolean;
+  anchor?: CloudAnchorShape;
+  error?: string;
+  state?: string;
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race<T>([
     promise,
@@ -85,22 +101,6 @@ export type CloudHostingState =
   | { phase: 'done'; cloudAnchorId: string }
   | { phase: 'failed'; error: string };
 
-/** Resultado do host (finishScan / hostCloudAnchor) do Viro. */
-interface HostResultShape {
-  success?: boolean;
-  cloudAnchorId?: string;
-  error?: string;
-  state?: string;
-}
-
-/** Resultado do resolve (resolveCloudAnchor) do Viro. */
-interface ResolveResultShape {
-  success?: boolean;
-  anchor?: CloudAnchorShape;
-  error?: string;
-  state?: string;
-}
-
 export function useCloudAnchors({
   serverAnchors,
   geoPoseRef,
@@ -115,6 +115,8 @@ export function useCloudAnchors({
   const entriesRef = useRef<Map<string, NativeAnchorEntry>>(new Map());
   const navigatorRef = useRef<any>(null);
   const aliveRef = useRef(true);
+  /** Âncora LOCAL criada do hit-test do modal (aguardando host pós-save). */
+  const pendingLocalAnchorRef = useRef<string | null>(null);
   /** Resolve sequencial (SIFT = um por vez). */
   const resolvingRef = useRef(false);
   /** Pins já tentados nesta sessão (sucesso OU falha — sem retry automático). */
@@ -149,63 +151,92 @@ export function useCloudAnchors({
     setEntries(new Map(entriesRef.current));
   }, []);
 
-  // ── FASE 2/3: host com scan + auto-calibração ────────────────────────────
+  // ── FASE 1: âncora local a partir do hit-test do modal ───────────────────
+  /** Registra a âncora local criada pelo container (createAnchoredNode). */
+  const setPendingLocalAnchor = useCallback((anchorId: string | null) => {
+    pendingLocalAnchorRef.current = anchorId;
+  }, []);
+
+  /** Existe âncora local pronta para hospedar? */
+  const hasPendingLocalAnchor = useCallback(
+    () => pendingLocalAnchorRef.current !== null,
+    [],
+  );
+
+  /** Inicia a janela de escaneio guiado (fase 2 — features visuais). */
+  const beginScanGuide = useCallback(() => {
+    setHosting({ phase: 'scanning', startedAt: Date.now() });
+  }, []);
+
+  // ── FASE 3: hospeda a âncora local + calibra o offset do pin ─────────────
   /**
-   * Conclui o scan iniciado por `beginScan`, hospeda a cloud anchor e
-   * calibra o offset do pin no frame (resolve na MESMA sessão revela a
-   * origem). Retorna os dados para PATCH ou null em falha (pin continua
-   * pelo caminho geospatial).
+   * Hospeda a âncora local (hostCloudAnchor — caminho ARCore nativo) e
+   * calibra o offset do pin (resolve na MESMA sessão). Retorna os dados para
+   * PATCH via callback, ou falha (pin segue pelo caminho geospatial).
    */
-  const finishScanAndCalibrate = useCallback(
+  const hostPendingAnchor = useCallback(
     async (
       pinId: string,
       pinLocalPos: [number, number, number],
       onHosted: (data: { cloudAnchorId: string; frameOffset: [number, number, number] }) => void,
     ): Promise<void> => {
       const nav = navigatorRef.current;
-      if (!nav?.finishScan || !nav?.resolveCloudAnchor) {
-        setHosting({ phase: 'failed', error: 'Cloud anchors não disponíveis nesta build' });
+      const localAnchorId = pendingLocalAnchorRef.current;
+      pendingLocalAnchorRef.current = null;
+      if (!localAnchorId) {
+        setHosting({ phase: 'failed', error: 'sem âncora local do hit-test' });
+        return;
+      }
+      if (!nav?.hostCloudAnchor || !nav?.resolveCloudAnchor) {
+        setHosting({ phase: 'failed', error: 'cloud anchors não disponíveis nesta build' });
         return;
       }
       try {
         setHosting({ phase: 'hosting' });
         const hostResult = (await withTimeout(
-          nav.finishScan(HOST_TTL_DAYS) as Promise<HostResultShape>,
-          60_000,
-          'finishScan',
+          nav.hostCloudAnchor(localAnchorId, HOST_TTL_DAYS) as Promise<HostResultShape>,
+          OP_TIMEOUT_MS,
+          'hostCloudAnchor',
         )) as HostResultShape;
         if (!hostResult?.success || !hostResult.cloudAnchorId) {
-          throw new Error(hostResult?.error ?? `state=${hostResult?.state ?? '?'}`);
+          throw new Error(
+            `${hostResult?.error ?? hostResult?.state ?? 'sem detalhe'}`,
+          );
         }
         const cloudAnchorId = hostResult.cloudAnchorId;
 
-        // Auto-calibração: resolve na MESMA sessão — o mapa está fresco, o
-        // match é rápido — para descobrir a origem do frame em coordenadas
-        // mundiais da sessão de criação.
+        // Calibração: resolve na MESMA sessão (mapa fresco → match rápido)
+        // revela a posição mundial da âncora; o offset cobre o caso do pin
+        // ter sido ajustado ao longo do raio DEPOIS do hit.
         setHosting({ phase: 'calibrating' });
         const resolveResult = (await withTimeout(
           nav.resolveCloudAnchor(cloudAnchorId) as Promise<ResolveResultShape>,
-          RESOLVE_TIMEOUT_MS,
+          OP_TIMEOUT_MS,
           'resolveCloudAnchor(calibração)',
         )) as ResolveResultShape;
         const anchor = resolveResult?.anchor;
         if (!resolveResult?.success || !anchor?.position) {
-          throw new Error(resolveResult?.error ?? 'calibração sem posição do frame');
+          // Host OK mas calibração falhou: offset [0,0,0] é a melhor aposta
+          // (a âncora nasceu NA posição do hit).
+          onHosted({ cloudAnchorId, frameOffset: [0, 0, 0] });
+          setEntry({ pinId, nativeAnchorId: cloudAnchorId, position: pinLocalPos });
+          setHosting({ phase: 'done', cloudAnchorId });
+          console.warn(
+            '[ARCloud] hospedada sem calibração (offset 0) — resolve falhou:',
+            resolveResult?.error ?? resolveResult?.state,
+          );
+          return;
         }
-        const origin = anchor.position as [number, number, number];
+        const anchorPos = anchor.position as [number, number, number];
         const yawDeg = anchor.rotation?.[1] ?? 0;
-        // offset no frame = rotação INVERSA aplicada ao offset mundial
         const worldOffset: [number, number, number] = [
-          pinLocalPos[0] - origin[0],
-          pinLocalPos[1] - origin[1],
-          pinLocalPos[2] - origin[2],
+          pinLocalPos[0] - anchorPos[0],
+          pinLocalPos[1] - anchorPos[1],
+          pinLocalPos[2] - anchorPos[2],
         ];
         const frameOffset = rotateY(worldOffset, -yawDeg);
 
-        // Render imediato: pin já está na posição SLAM do tap — registra a
-        // entrada para a projeção tratar como âncora de nuvem desde já.
         setEntry({ pinId, nativeAnchorId: cloudAnchorId, position: pinLocalPos });
-
         onHosted({ cloudAnchorId, frameOffset });
         setHosting({ phase: 'done', cloudAnchorId });
         console.log(
@@ -213,32 +244,14 @@ export function useCloudAnchors({
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[ARCloud] hospedagem falhou: ${message}`);
+        console.warn('[ARCloud] hospedagem falhou:', message);
         setHosting({ phase: 'failed', error: message });
       }
     },
     [setEntry],
   );
 
-  /** Inicia o scan guiado (fase 1) — chamado ao criar o pin. */
-  const beginScan = useCallback(() => {
-    const nav = navigatorRef.current;
-    if (!nav?.startScan) {
-      setHosting({ phase: 'failed', error: 'startScan não disponível' });
-      return false;
-    }
-    try {
-      nav.startScan();
-      setHosting({ phase: 'scanning', startedAt: Date.now() });
-      return true;
-    } catch (err) {
-      console.warn('[ARCloud] startScan falhou:', err);
-      setHosting({ phase: 'failed', error: String(err) });
-      return false;
-    }
-  }, []);
-
-  // ── FASE 4: resolve dos pins próximos (uma por vez) ──────────────────────
+  // ── FASE 5: resolve dos pins próximos (uma por vez) ──────────────────────
   useEffect(() => {
     if (!serverAnchors || trackingState !== 3 || resolvingRef.current) return;
     const nav = navigatorRef.current;
@@ -247,7 +260,7 @@ export function useCloudAnchors({
     const pose = geoPoseRef.current;
     if (!pose) return;
 
-    // Candidatos: cloud anchor real + offset calibrado + perto + não tentado
+    // Candidatos: cloud anchor real + perto + não resolvido/não tentado
     const candidates = serverAnchors
       .filter(
         (a) =>
@@ -260,7 +273,12 @@ export function useCloudAnchors({
       )
       .map((a) => ({
         anchor: a,
-        distM: calculateDistance(pose.latitude, pose.longitude, a.latitude as number, a.longitude as number),
+        distM: calculateDistance(
+          pose.latitude,
+          pose.longitude,
+          a.latitude as number,
+          a.longitude as number,
+        ),
       }))
       .filter((c) => c.distM <= RESOLVE_RANGE_M)
       .sort((x, y) => x.distM - y.distM);
@@ -280,7 +298,7 @@ export function useCloudAnchors({
       try {
         const result = (await withTimeout(
           nav.resolveCloudAnchor(anchor.cloudAnchorId) as Promise<ResolveResultShape>,
-          RESOLVE_TIMEOUT_MS,
+          OP_TIMEOUT_MS,
           `resolveCloudAnchor(${anchor.name})`,
         )) as ResolveResultShape;
         const resolved = result?.anchor;
@@ -317,8 +335,10 @@ export function useCloudAnchors({
     /** Um resolve visual está em andamento (UI "localizando…"). */
     resolving,
     handleNavigatorReady,
-    beginScan,
-    finishScanAndCalibrate,
+    setPendingLocalAnchor,
+    hasPendingLocalAnchor,
+    beginScanGuide,
+    hostPendingAnchor,
     removeLocal,
   };
 }

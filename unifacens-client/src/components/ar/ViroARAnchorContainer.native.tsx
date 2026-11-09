@@ -318,6 +318,7 @@ export const ViroARAnchorContainer: FC = () => {
     const centerX = screenWidth / 2;
     const centerY = screenHeight / 2;
     let targetCoords: [number, number, number] | null = null;
+    let bestHit: unknown = null;
 
     if (arSceneRef.current?.performARHitTestWithPoint) {
       try {
@@ -333,6 +334,7 @@ export const ViroARAnchorContainer: FC = () => {
                 match.transform.position[1],
                 match.transform.position[2],
               ];
+              bestHit = match;
               break;
             }
           }
@@ -340,6 +342,23 @@ export const ViroARAnchorContainer: FC = () => {
       } catch (hitErr) {
         console.warn("[AR] Hit test aviso:", hitErr);
       }
+    }
+
+    // Âncora LOCAL para a ancoragem visual (Cloud Anchor): criada AGORA
+    // porque o resultado do hit expira em 30s — a âncora não expira. Será
+    // hospedada após o save (hostCloudAnchor, caminho ARCore nativo).
+    if (bestHit && arSceneRef.current?.createAnchoredNode) {
+      try {
+        const nodeRef = await arSceneRef.current.createAnchoredNode(bestHit);
+        const anchorId = (nodeRef as { anchorId?: string } | null)?.anchorId ?? null;
+        cloudAnchors.setPendingLocalAnchor(anchorId);
+        if (!anchorId) console.warn("[ARCloud] createAnchoredNode sem anchorId");
+      } catch (anchorErr) {
+        console.warn("[ARCloud] createAnchoredNode falhou:", anchorErr);
+        cloudAnchors.setPendingLocalAnchor(null);
+      }
+    } else {
+      cloudAnchors.setPendingLocalAnchor(null);
     }
 
     const camPos = cameraPosRef.current || [0, 0, 0];
@@ -568,22 +587,20 @@ export const ViroARAnchorContainer: FC = () => {
       setAnchorDescription("");
       setModalVisible(false);
 
-      // ── ANCORAGEM VISUAL (Cloud Anchor) — scan guiado do ambiente ──────
-      // O scan captura o ambiente ao redor do ponto; hospedado no Google,
-      // vira a "cobertura VPS privada" deste local. No retorno, o resolve
-      // visual posiciona o pin com precisão CENTIMÉTRICA — independente de
-      // GPS/heading (a cura para "pin nasce com relação ao celular").
-      Alert.alert(
-        "Ponto Registrado!",
-        `Nome: ${saved.name}\nCoordenadas: [${targetLat}, ${targetLon}]\nAltitude: ${targetAlt.toFixed(1)}m\n\nAgora ESCANEIE: aponte a câmera lentamente ao redor do ponto por ~25s para ancoragem visual de precisão.`,
-      );
-
-      if (cloudAnchors.beginScan()) {
-        setMutationStatus("Escaneie ao redor do ponto (ancoragem visual)…");
+      // ── ANCORAGEM VISUAL (Cloud Anchor ARCore) — escaneio guiado ───────
+      // O hostCloudAnchor empacota os features visuais que a câmera capturou
+      // ao redor da âncora — escanear o entorno ANTES melhora o resolve no
+      // retorno (precisão centimétrica, independe de GPS/heading).
+      if (cloudAnchors.hasPendingLocalAnchor()) {
+        cloudAnchors.beginScanGuide();
+        setMutationStatus(
+          "Escaneie: aponte para o PONTO e para o entorno dele, movendo o celular devagar em várias direções (~15s)",
+        );
         const pinId = saved.id;
         const pinPos: [number, number, number] = [...pendingCoords];
         setTimeout(() => {
-          void cloudAnchors.finishScanAndCalibrate(pinId, pinPos, async ({ cloudAnchorId, frameOffset }) => {
+          setMutationStatus("Hospedando âncora visual…");
+          void cloudAnchors.hostPendingAnchor(pinId, pinPos, async ({ cloudAnchorId, frameOffset }) => {
             try {
               const updated = await patchAnchor(pinId, { cloudAnchorId, frameOffset });
               queryClient.setQueryData<Anchor[]>(anchorKeys.lists(), (old) =>
@@ -594,6 +611,9 @@ export const ViroARAnchorContainer: FC = () => {
             }
           });
         }, SCAN_GUIDE_MS);
+      } else {
+        setMutationStatus("Sem hit físico no ponto — pin salvo apenas com GPS");
+        setTimeout(() => setMutationStatus(null), 4000);
       }
     } catch (err: unknown) {
       Alert.alert(
