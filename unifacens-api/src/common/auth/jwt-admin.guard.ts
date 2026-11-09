@@ -11,7 +11,7 @@ import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import type { Request } from 'express';
 import type { ApiEnvironment } from 'shared';
 import { API_CONFIG } from '../../config/runtime-config.js';
-import { ADMIN_ONLY, PUBLIC } from './access.decorators.js';
+import { ADMIN_ONLY, AUTHENTICATED_READ, PUBLIC } from './access.decorators.js';
 
 export interface AuthenticatedUser {
   id: string;
@@ -37,6 +37,8 @@ const MUTATION_METHODS = ['POST', 'PATCH', 'PUT', 'DELETE'];
  * - Toda outra rota exige `Authorization: Bearer <JWT>` válido — em qualquer
  *   ambiente (sem bypass em dev), para leituras e mutations;
  * - Mutations (POST/PATCH/PUT/DELETE) e `@AdminOnly()` exigem `role === 'admin'`;
+ * - `@AuthenticatedRead()` permite consultas POST para qualquer role autenticada;
+ *   `@AdminOnly()` sempre prevalece sobre essa exceção;
  * - O JWT é emitido pelo plugin `jwt` do better-auth e validado localmente
  *   contra o JWKS de `/auth/jwks` (jose com cache e rotação automáticos).
  */
@@ -87,7 +89,13 @@ export class JwtAdminGuard implements CanActivate {
     const adminOnly =
       this.reflector.getAllAndOverride<boolean>(ADMIN_ONLY, targets) ?? false;
     const isMutation = MUTATION_METHODS.includes(request.method);
-    if ((isMutation || adminOnly) && payload.role !== 'admin') {
+    const authenticatedRead =
+      this.reflector.getAllAndOverride<boolean>(AUTHENTICATED_READ, targets) ??
+      false;
+    if (
+      (adminOnly || (isMutation && !authenticatedRead)) &&
+      payload.role !== 'admin'
+    ) {
       throw new ForbiddenException('Operação exclusiva de administradores.');
     }
 

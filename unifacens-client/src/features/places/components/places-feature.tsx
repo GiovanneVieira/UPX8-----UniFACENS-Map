@@ -13,6 +13,7 @@ import { PlaceCard } from "./place-card";
 import { PlaceDetails } from "./place-details";
 import { PlacesSearch } from "./places-search";
 import { useAuth } from "@/features/auth/hooks/use-auth";
+import { Link } from "expo-router";
 
 export function PlacesFeature() {
   const explorer = usePlacesExplorer();
@@ -50,6 +51,12 @@ export function PlacesFeature() {
               </Pressable>
             ) : null}
           </View>
+          <Link href="/planejar" asChild>
+            <Pressable accessibilityRole="link" className="min-h-[48px] justify-center rounded-xl border border-sky-400 bg-blue-700 px-5 py-4 active:opacity-80">
+              <Text className="text-lg font-semibold text-white">Planejar percurso</Text>
+              <Text className="mt-1 text-sm text-slate-100">Escolher partida, prédio e necessidades de locomoção</Text>
+            </Pressable>
+          </Link>
           {explorer.notice ? (
             <Text
               accessibilityLiveRegion="polite"

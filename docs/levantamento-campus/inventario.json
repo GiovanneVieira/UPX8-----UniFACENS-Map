@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "purpose": "documentary_survey_inventory",
+  "createdOn": "2026-11-08",
+  "scopeConfirmedBy": "user",
+  "scopeConfirmedOn": "2026-11-08",
+  "firstMilestone": {
+    "confirmedBy": "user",
+    "confirmedOn": "2026-11-08",
+    "destination": "identified_building_access_point",
+    "includesApproachBarriersAndLevelChanges": true,
+    "requiresClassroomArrival": false,
+    "requiresInternalNavigation": false,
+    "arrivalFloorAssumption": null,
+    "arrivalPointSurveyStatus": "pending"
+  },
+  "surveyStatus": "field_survey_pending",
+  "routingEnabled": false,
+  "sources": [
+    {
+      "id": "FACENS-MAPA",
+      "url": "https://facens.br/",
+      "section": "Mapa da Facens",
+      "consultedOn": "2026-11-08",
+      "supports": ["place_codes", "place_names"],
+      "doesNotEstablish": ["geographic_coordinates", "physical_accesses", "path_connectivity", "current_accessibility"]
+    },
+    {
+      "id": "FACENS-PORTARIAS",
+      "url": "https://blog.facens.br/facens-me-ajuda-onde-comer-e-como-se-locomover-para-a-faculdade/",
+      "publishedOn": "2025-01-16",
+      "consultedOn": "2026-11-08",
+      "supports": ["two_campus_gates", "gate_2_iguatemi"],
+      "doesNotEstablish": ["pedestrian_gate_geometry", "opening_hours", "current_accessibility"]
+    },
+    {
+      "id": "FACENS-PDI-HISTORICO",
+      "url": "https://pergamum.facens.br/pergamumweb/download/CA4FCEBE-2759-401C-BEE5-B447BF20DACE.pdf",
+      "documentPeriod": "2018-2022",
+      "documentCoverYear": 2021,
+      "printedPages": [183, 184],
+      "consultedOn": "2026-11-08",
+      "supports": ["historical_institutional_accessibility_context"],
+      "doesNotEstablish": ["current_equipment_locations", "current_availability", "verified_routes_for_pilot"]
+    },
+    {
+      "id": "RELATO-USUARIO-P1-A-001",
+      "kind": "user_report",
+      "file": "relatos/p1-a.md",
+      "recordedOn": "2026-11-08",
+      "observationDate": null,
+      "supports": ["three_reported_path_alternatives", "reported_uphill_sidewalk_and_footbridge", "initial_interpretation_of_steps_sidewalk_ramp_and_footbridge_for_other_two_paths"],
+      "doesNotEstablish": ["difference_between_paths_2_and_3", "shared_physical_segments", "geographic_coordinates", "measured_dimensions", "current_accessibility", "return_path"]
+    },
+    {
+      "id": "RELATO-USUARIO-P1-A-002",
+      "kind": "user_report_clarification",
+      "file": "relatos/p1-a.md",
+      "recordedOn": "2026-11-08",
+      "observationDate": null,
+      "clarifiesSourceId": "RELATO-USUARIO-P1-A-001",
+      "supports": ["paths_2_and_3_diverge_at_a_branch_associated_with_building_a_lower_level", "reported_open_lower_level_without_classrooms"],
+      "doesNotEstablish": ["exact_branch_location_and_sequence", "left_and_right_branch_assignment", "branch_rejoining_point", "official_floor_number", "destination_entrance", "geographic_coordinates", "measured_dimensions", "current_accessibility"]
+    }
+  ],
+  "routeReports": [
+    {
+      "surveyTaskId": "LEV-P1-A",
+      "sourceId": "RELATO-USUARIO-P1-A-001",
+      "clarificationSourceIds": ["RELATO-USUARIO-P1-A-002"],
+      "reportedAlternativeCount": 3,
+      "alternativeReportIds": ["REL-P1-A-01", "REL-P1-A-02", "REL-P1-A-03"],
+      "status": "reported_pending_geometry_and_field_survey",
+      "branchReference": {
+        "appliesToAlternativeIds": ["REL-P1-A-02", "REL-P1-A-03"],
+        "localId": "PRED-A",
+        "reportedLevel": "andar inferior",
+        "reportedArea": "aberta sem salas de aula",
+        "officialFloorNumber": null,
+        "position": null,
+        "sequencePosition": null,
+        "rejoiningPoint": null,
+        "sourceId": "RELATO-USUARIO-P1-A-002"
+      },
+      "routingEnabled": false
+    }
+  ],
+  "places": [
+    {
+      "surveyId": "PORT-P1",
+      "officialCode": "P1",
+      "name": "Portaria 1 — Castelinho",
+      "kind": "campus_gate",
+      "sourceIds": ["FACENS-MAPA", "FACENS-PORTARIAS"],
+      "identityStatus": "documented",
+      "position": null,
+      "accessCount": null,
+      "accessibilityStatus": "unknown",
+      "fieldSurveyedAt": null
+    },
+    {
+      "surveyId": "PORT-P2",
+      "officialCode": "P2",
+      "name": "Portaria 2 — Iguatemi",
+      "kind": "campus_gate",
+      "sourceIds": ["FACENS-MAPA", "FACENS-PORTARIAS"],
+      "identityStatus": "documented",
+      "position": null,
+      "accessCount": null,
+      "accessibilityStatus": "unknown",
+      "fieldSurveyedAt": null
+    },
+    {
+      "surveyId": "PRED-A",
+      "officialCode": "A",
+      "name": "Prédio A",
+      "kind": "building",
+      "sourceIds": ["FACENS-MAPA"],
+      "identityStatus": "documented",
+      "position": null,
+      "accessCount": null,
+      "accessibilityStatus": "unknown",
+      "fieldSurveyedAt": null
+    },
+    {
+      "surveyId": "PRED-B",
+      "officialCode": "B",
+      "name": "Prédio B",
+      "kind": "building",
+      "sourceIds": ["FACENS-MAPA"],
+      "identityStatus": "documented",
+      "position": null,
+      "accessCount": null,
+      "accessibilityStatus": "unknown",
+      "fieldSurveyedAt": null
+    },
+    {
+      "surveyId": "PRED-C",
+      "officialCode": "C",
+      "name": "Prédio C",
+      "kind": "building",
+      "sourceIds": ["FACENS-MAPA"],
+      "identityStatus": "documented",
+      "position": null,
+      "accessCount": null,
+      "accessibilityStatus": "unknown",
+      "fieldSurveyedAt": null
+    },
+    {
+      "surveyId": "PRED-D",
+      "officialCode": "D",
+      "name": "Prédio D",
+      "kind": "building",
+      "sourceIds": ["FACENS-MAPA"],
+      "identityStatus": "documented",
+      "position": null,
+      "accessCount": null,
+      "accessibilityStatus": "unknown",
+      "fieldSurveyedAt": null
+    },
+    {
+      "surveyId": "PRED-L",
+      "officialCode": "L",
+      "name": "Prédio L",
+      "kind": "building",
+      "sourceIds": ["FACENS-MAPA"],
+      "identityStatus": "documented",
+      "position": null,
+      "accessCount": null,
+      "accessibilityStatus": "unknown",
+      "fieldSurveyedAt": null
+    }
+  ]
+}

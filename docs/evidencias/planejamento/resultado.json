@@ -1,0 +1,18 @@
+{
+  "createdAt": "2026-11-09T00:36:59.664Z",
+  "environment": "Chromium headless; respostas sintéticas; sem GPS/AR/aparelho físico",
+  "results": [
+    "Sem restrição: 20 m pela escada.",
+    "Sem degraus: 70 m por calçada e rampa; prévia antiga retirada ao editar.",
+    "Vírgula decimal aceita; texto inválido bloqueado antes de chamar a API.",
+    "Dados insuficientes, sem rota e falha HTTP com recuperação e escolhas preservadas.",
+    "Resposta atrasada descartada mesmo ao retornar às escolhas anteriores.",
+    "360px: sem overflow, botões >=44px, axe sem violações WCAG A/AA detectadas.",
+    "768px: sem overflow, botões >=44px, axe sem violações WCAG A/AA detectadas.",
+    "1440px: sem overflow, botões >=44px, axe sem violações WCAG A/AA detectadas.",
+    "Seletor operável por teclado (Enter, busca, foco e Espaço).",
+    "Critério alternado por Espaço com foco visível e rótulo clicável >=44px.",
+    "Lista vazia oferece mensagem de percursos ainda não publicados.",
+    "Falha ao listar áreas permite nova tentativa."
+  ]
+}

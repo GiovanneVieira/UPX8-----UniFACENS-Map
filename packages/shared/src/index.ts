@@ -7,10 +7,15 @@ export type { ZodSchema, ZodError, ZodType } from 'zod';
 export * from './schemas/anchor.schema.js';
 export * from './schemas/place.schema.js';
 export * from './schemas/access.schema.js';
+export * from './schemas/navigation.schema.js';
+export * from './schemas/navigation-api.schema.js';
+export * from './schemas/navigation-plan-form.schema.js';
 
 // Motor Geodésico e Utilitários de Projeção Espacial
 export * from './utils/geodesy.js';
 export * from './utils/ar-points.js';
+export * from './utils/navigation-policy.js';
+export * from './utils/navigation-route.js';
 
 // Constantes Geográficas do Campus (SSOT API + Client)
 export * from './constants/campus.js';

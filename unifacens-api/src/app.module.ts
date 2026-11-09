@@ -9,6 +9,7 @@ import { RoutingModule } from './modules/routing/routing.module.js';
 import { RuntimeConfigModule } from './config/runtime-config.js';
 import { AccessModule } from './common/auth/access.module.js';
 import { HealthController } from './health/health.controller.js';
+import { NavigationModule } from './modules/navigation/navigation.module.js';
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
@@ -27,6 +28,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AnchorsModule,
     PlacesModule,
     RoutingModule,
+    NavigationModule,
     ...(hasObserveKeys
       ? [
           ObserveModule.forRoot({
