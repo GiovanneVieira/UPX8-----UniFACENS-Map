@@ -103,6 +103,69 @@ export function geodeticToENU(
 }
 
 /**
+ * Inversa exata de `geodeticToENU` (mesmos raios de curvatura WGS84):
+ * converte um deslocamento ENU em metros para deltas de lat/lng/alt.
+ * Garante roundtrip identidade na criação de pins (tap SLAM → WGS84).
+ */
+export function enuToGeodetic(
+  userLat: number,
+  userLon: number,
+  userAlt: number,
+  east: number,
+  north: number,
+  up: number,
+): { latitude: number; longitude: number; altitude: number } {
+  const phi0 = toRadians(userLat);
+  const sinPhi = Math.sin(phi0);
+  const cosPhi = Math.cos(phi0);
+
+  // Mesmos raios de curvatura do elipsoide WGS-84 usados em geodeticToENU
+  const rLat = (WGS84_A * (1 - WGS84_E2)) / Math.pow(1 - WGS84_E2 * sinPhi * sinPhi, 1.5);
+  const rLon = (WGS84_A * cosPhi) / Math.sqrt(1 - WGS84_E2 * sinPhi * sinPhi);
+
+  return {
+    latitude: userLat + toDegrees(north / rLat),
+    longitude: userLon + toDegrees(east / rLon),
+    altitude: userAlt + up,
+  };
+}
+
+/**
+ * Rotaciona um deslocamento ENU (East/North) para o frame AR (X/Z) dado o
+ * azimute Δ do mundo AR da sessão — o azimute verdadeiro do eixo -Z do mundo.
+ *
+ * x_AR = east·cos(Δ) − north·sin(Δ)
+ * z_AR = −(east·sin(Δ) + north·cos(Δ))
+ *
+ * A matriz de rotação do plano tangente é INVOLUTIVA (M² = I): a própria inversa.
+ */
+export function enuToArXZ(
+  east: number,
+  north: number,
+  deltaDeg: number,
+): { x: number; z: number } {
+  const rad = toRadians(deltaDeg);
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { x: east * cos - north * sin, z: -(east * sin + north * cos) };
+}
+
+/**
+ * Inversa de `enuToArXZ`: offset no frame AR da sessão → ENU local.
+ * Como M² = I, usa exatamente a MESMA forma da direta.
+ */
+export function arXZToEnu(
+  arX: number,
+  arZ: number,
+  deltaDeg: number,
+): { east: number; north: number } {
+  const rad = toRadians(deltaDeg);
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { east: arX * cos - arZ * sin, north: -(arX * sin + arZ * cos) };
+}
+
+/**
  * Converte o Heading Magnético lido pelos sensores do celular para o Norte Verdadeiro
  * aplicando a declinação de Sorocaba/SP.
  */

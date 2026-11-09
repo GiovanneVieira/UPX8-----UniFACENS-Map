@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
-import { anchorSchema, z, type Anchor, type CreateAnchorDto } from 'shared';
+import { anchorSchema, z, type Anchor, type CreateAnchorDto, type UpdateAnchorDto } from 'shared';
 import { getTeamAuthorization } from './team-authorization';
 import { useAuthStore } from '@/stores/use-auth-store';
 
@@ -112,6 +112,24 @@ export async function fetchAnchorById(id: string): Promise<Anchor> {
 export async function createAnchor(data: CreateAnchorDto): Promise<Anchor> {
   return request(`${getApiBaseUrl()}/anchors`, anchorSchema, {
     method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTeamAuthorization(),
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Vincula a âncora visual hospedada (Cloud Anchor real + offset no frame).
+ */
+export async function patchAnchor(
+  id: string,
+  data: UpdateAnchorDto,
+): Promise<Anchor> {
+  return request(`${getApiBaseUrl()}/anchors/${id}`, anchorSchema, {
+    method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
       ...getTeamAuthorization(),

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DRIZZLE } from '../db/database.module.js';
 import type { DrizzleDB } from '../db/database.module.js';
 import { anchors } from '../db/schema.js';
-import type { Anchor, AnchorDetail, CreateAnchorDto } from 'shared';
+import type { Anchor, AnchorDetail, CreateAnchorDto, UpdateAnchorDto } from 'shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS_ROOT = path.resolve(__dirname, '../../uploads');
@@ -70,6 +70,32 @@ export class AnchorsService implements OnModuleInit {
   }
 
   /**
+   * Atualização parcial — fluxo de ancoragem visual: após hospedar o Cloud
+   * Anchor (scan do ambiente), o app grava o ID da nuvem + o offset do pin
+   * no frame da âncora (estável entre sessões, ao contrário do antigo
+   * `position` session-relative — as colunas positionX/Y/Z voltam a viver
+   * com semântica correta: coordenadas no FRAME DA CLOUD ANCHOR).
+   */
+  async update(id: string, dto: UpdateAnchorDto): Promise<Anchor | null> {
+    const patch: Partial<typeof anchors.$inferInsert> = {};
+    if (dto.cloudAnchorId !== undefined) patch.cloudAnchorId = dto.cloudAnchorId;
+    if (dto.frameOffset !== undefined) {
+      patch.positionX = dto.frameOffset?.[0] ?? null;
+      patch.positionY = dto.frameOffset?.[1] ?? null;
+      patch.positionZ = dto.frameOffset?.[2] ?? null;
+    }
+    if (Object.keys(patch).length === 0) return this.findById(id) as Promise<AnchorDetail | null>;
+
+    const [updated] = await this.db
+      .update(anchors)
+      .set(patch)
+      .where(eq(anchors.id, id))
+      .returning();
+    if (!updated) return null;
+    return this.mapToAnchor(updated);
+  }
+
+  /**
    * Salva imagens em disco (/uploads/anchors/:id/) e atualiza o JSONB images.
    */
   async addImages(id: string, buffers: Buffer[], mimetypes: string[]): Promise<string[]> {
@@ -115,6 +141,10 @@ export class AnchorsService implements OnModuleInit {
   }
 
   private mapToAnchor(record: typeof anchors.$inferSelect): Anchor {
+    const hasFrameOffset =
+      record.positionX !== null &&
+      record.positionY !== null &&
+      record.positionZ !== null;
     return {
       id: record.id,
       name: record.name,
@@ -125,6 +155,11 @@ export class AnchorsService implements OnModuleInit {
       altitude: record.altitude ?? null,
       heading: record.heading ?? null,
       createdAt: record.createdAt.toISOString(),
+      // Colunas positionX/Y/Z renascidas: offset no frame da cloud anchor
+      // (estável entre sessões). Null quando o pin não tem âncora visual.
+      frameOffset: hasFrameOffset
+        ? [record.positionX as number, record.positionY as number, record.positionZ as number]
+        : null,
     };
   }
 
@@ -142,6 +177,9 @@ export class AnchorsService implements OnModuleInit {
       const existing = await this.db.select().from(anchors).limit(1);
       if (existing.length === 0) {
         console.log('[AnchorsService] Inserindo Cloud Anchors de exemplo para o campus...');
+        // altitude NULL de propósito: seeds não têm altitude elipsoidal real
+        // (ARCore/WGS84). Nulos roteiam para createTerrainAnchor(+1.5m acima
+        // do terreno) — nunca para createGeospatialAnchor com datum errado.
         await this.db.insert(anchors).values([
           {
             name: 'Ponto Central (Origem Facens)',
@@ -149,7 +187,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Praça central do campus Facens',
             latitude: -23.4699,
             longitude: -47.4297,
-            altitude: 605,
+            altitude: null,
             heading: 0,
           },
           {
@@ -158,7 +196,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Prédio das engenharias e salas de aula',
             latitude: -23.47035,
             longitude: -47.4294,
-            altitude: 606,
+            altitude: null,
             heading: 135,
           },
           {
@@ -167,7 +205,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Laboratórios práticos e oficinas',
             latitude: -23.4695,
             longitude: -47.42995,
-            altitude: 605,
+            altitude: null,
             heading: 315,
           },
           {
@@ -176,7 +214,7 @@ export class AnchorsService implements OnModuleInit {
             description: 'Centro de estudos e acervo acadêmico',
             latitude: -23.4701,
             longitude: -47.4302,
-            altitude: 605,
+            altitude: null,
             heading: 225,
           },
         ]);

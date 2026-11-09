@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Body,
   Param,
@@ -16,10 +17,12 @@ import { AnchorsService } from './anchors.service.js';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe.js';
 import {
   createAnchorSchema,
+  updateAnchorSchema,
   anchorDetailSchema,
   type Anchor,
   type AnchorDetail,
   type CreateAnchorDto,
+  type UpdateAnchorDto,
 } from 'shared';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { AdminOnly } from '../common/auth/access.decorators.js';
@@ -51,11 +54,28 @@ export class AnchorsController {
 
   @Post()
   @ApiBearerAuth('admin-bearer')
-  @ApiOperation({ summary: 'Cadastrar nova âncora com Cloud Anchor ID gerado pelo ARCore' })
+  @ApiOperation({ summary: 'Cadastrar nova âncora com coordenadas WGS84 (id local sintético gerado pelo app)' })
   async createAnchor(
     @Body(new ZodValidationPipe(createAnchorSchema)) dto: CreateAnchorDto,
   ): Promise<Anchor> {
     return this.anchorsService.create(dto);
+  }
+
+  @Patch(':id')
+  @ApiBearerAuth('admin-bearer')
+  @ApiOperation({
+    summary:
+      'Vincular âncora visual hospedada (Cloud Anchor ID real + offset no frame da âncora)',
+  })
+  async updateAnchor(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(updateAnchorSchema)) dto: UpdateAnchorDto,
+  ): Promise<Anchor> {
+    const anchor = await this.anchorsService.update(id, dto);
+    if (!anchor) {
+      throw new NotFoundException(`Âncora com ID ${id} não encontrada`);
+    }
+    return anchor;
   }
 
   @Post(':id/images')

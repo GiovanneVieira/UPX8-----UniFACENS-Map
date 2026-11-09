@@ -8,7 +8,6 @@ export interface Anchor {
   name: string;
   cloudAnchorId: string;
   description?: string | null;
-  position?: [number, number, number] | null;
   /** Coordenadas WGS84 globais para fixação absoluta no planeta Terra */
   latitude?: number | null;
   longitude?: number | null;
@@ -22,6 +21,10 @@ export interface Anchor {
   arPosition?: [number, number, number];
   /** Distância métrica horizontal até a câmera calculada em tempo real */
   distanceMeters?: number;
+  /** Runtime-only (client): pin sem âncora nativa — projeção estimada. */
+  estimated?: boolean;
+  /** Runtime-only (client): envelope de erro da estimativa (m). */
+  estimateAccuracyM?: number;
 }
 
 export type AnchorCoordinate = Anchor;
@@ -30,7 +33,6 @@ export interface CreateAnchorDto {
   name: string;
   cloudAnchorId: string;
   description?: string | null;
-  position?: [number, number, number] | null;
   latitude?: number | null;
   longitude?: number | null;
   altitude?: number | null;

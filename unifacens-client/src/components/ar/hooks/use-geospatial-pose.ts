@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { geodeticToENU } from 'shared';
 
 /** Pose geoespacial da câmera (ancorada na TERRA via VPS+GPS do ARCore). */
 export interface GeospatialPose {
@@ -43,6 +44,22 @@ function averagePoses(samples: GeospatialPose[]): GeospatialPose {
   };
 }
 
+/** Estatísticas de estabilidade das poses frescas do buffer. */
+export interface PoseStability {
+  /** Amostras frescas disponíveis. */
+  sampleCount: number;
+  /** Maior distância horizontal ao centroide (m) — ruído/deriva de posição. */
+  posSpreadM: number;
+  /** Maior desvio circular do heading médio (°) — ruído/deriva de orientação. */
+  headingSpreadDeg: number;
+}
+
+const UNSTABLE: PoseStability = {
+  sampleCount: 0,
+  posSpreadM: Number.POSITIVE_INFINITY,
+  headingSpreadDeg: Number.POSITIVE_INFINITY,
+};
+
 export function isPoseFresh(pose: GeospatialPose | null): pose is GeospatialPose {
   return pose !== null && Date.now() - pose.timestamp < GEO_POSE_FRESH_MS;
 }
@@ -86,6 +103,41 @@ export function useGeospatialPose() {
     return averagePoses(fresh);
   }, []);
 
+  /**
+   * Estabilidade do buffer: espalhamento posicional (m) e de heading (°) das
+   * poses frescas. Amostras ESTÁVEIS (spread baixo) = ruído independente em
+   * torno do valor verdadeiro → usar a média é seguro (÷√N). Spread alto =
+   * a pose ainda está CONVERGINDO/derivando → média seria sistemática-mente
+   * atrasada (nunca parear com camPos nesse estado).
+   */
+  const stability = useCallback((): PoseStability => {
+    const fresh = poseBufferRef.current.filter(isPoseFresh);
+    if (fresh.length === 0) return UNSTABLE;
+
+    const lat = fresh.reduce((a, p) => a + p.latitude, 0) / fresh.length;
+    const lng = fresh.reduce((a, p) => a + p.longitude, 0) / fresh.length;
+
+    let posSpreadM = 0;
+    for (const p of fresh) {
+      const { east, north } = geodeticToENU(lat, lng, 0, p.latitude, p.longitude, 0);
+      posSpreadM = Math.max(posSpreadM, Math.hypot(east, north));
+    }
+
+    const sinSum = fresh.reduce((a, p) => a + Math.sin((p.heading * Math.PI) / 180), 0);
+    const cosSum = fresh.reduce((a, p) => a + Math.cos((p.heading * Math.PI) / 180), 0);
+    const meanRad = Math.atan2(sinSum, cosSum);
+    let headingSpreadDeg = 0;
+    for (const p of fresh) {
+      const devRad = Math.atan2(
+        Math.sin((p.heading * Math.PI) / 180 - meanRad),
+        Math.cos((p.heading * Math.PI) / 180 - meanRad),
+      );
+      headingSpreadDeg = Math.max(headingSpreadDeg, Math.abs(devRad) * (180 / Math.PI));
+    }
+
+    return { sampleCount: fresh.length, posSpreadM, headingSpreadDeg };
+  }, []);
+
   return {
     pose,
     poseRef,
@@ -94,6 +146,7 @@ export function useGeospatialPose() {
     handleStatus,
     handlePose,
     averagedPose,
+    stability,
     isFresh: isPoseFresh(pose),
   };
 }
