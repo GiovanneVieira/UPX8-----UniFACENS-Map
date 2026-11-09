@@ -18,6 +18,10 @@ services:
         sync: false
       - key: DATABASE_MIGRATION_URL
         sync: false
+      - key: BETTER_AUTH_URL
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        generateValue: true
       - key: TEAM_ACCESS_TOKEN
         generateValue: true
       - key: CORS_ORIGINS

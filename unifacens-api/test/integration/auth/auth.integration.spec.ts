@@ -364,7 +364,7 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     ).toBe(403);
   });
 
-  it('permite preflight somente para a origem configurada, com Authorization', async () => {
+  it('permite preflight com credenciais somente para a origem configurada', async () => {
     const response = await fetch(`${baseUrl}/places`, {
       method: 'OPTIONS',
       headers: {
@@ -375,8 +375,32 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     });
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(response.headers.get('access-control-allow-credentials')).toBe('true');
     expect(response.headers.get('access-control-allow-headers')).toContain(
       'Authorization',
+    );
+
+    const authPreflight = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'OPTIONS',
+      headers: {
+        origin,
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type',
+      },
+    });
+    expect(authPreflight.status).toBe(204);
+    expect(authPreflight.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(
+      authPreflight.headers.get('access-control-allow-credentials'),
+    ).toBe('true');
+
+    const authSession = await fetch(`${baseUrl}/auth/get-session`, {
+      headers: { origin },
+    });
+    expect(authSession.status).toBe(200);
+    expect(authSession.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(authSession.headers.get('access-control-allow-credentials')).toBe(
+      'true',
     );
 
     const rejected = await fetch(`${baseUrl}/access`, {
@@ -384,6 +408,25 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     });
     expect(rejected.status).toBe(200);
     expect(rejected.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('emite cookies de sessão cross-site somente com atributos seguros em produção', async () => {
+    const response = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify(adminFixture),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(response.headers.get('access-control-allow-credentials')).toBe('true');
+
+    const sessionCookie = response.headers
+      .getSetCookie()
+      .find((cookie) => /session_token/i.test(cookie));
+    expect(sessionCookie).toBeDefined();
+    expect(sessionCookie).toMatch(/;\s*SameSite=None/i);
+    expect(sessionCookie).toMatch(/;\s*Secure(?:;|$)/i);
+    expect(sessionCookie).toMatch(/;\s*HttpOnly/i);
   });
 
   it('healthcheck consulta o PostgreSQL real', async () => {

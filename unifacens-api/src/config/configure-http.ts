@@ -12,6 +12,7 @@ export function configureHttp(
         : config.NODE_ENV === 'production'
           ? false
           : true,
+    credentials: true,
     methods: 'GET,HEAD,POST,PATCH,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization'],
   });

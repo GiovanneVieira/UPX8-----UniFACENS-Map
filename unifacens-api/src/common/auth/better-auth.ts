@@ -43,16 +43,29 @@ export function createBetterAuth(
     },
     // Em desenvolvimento, confia na origem do próprio request: o client
     // expo envia como Origin a URL do Metro (IP de LAN que muda com a rede),
-    // que de outra forma recebe 403 INVALID_ORIGIN. Em produção, apenas as
-    // origins de CORS_ORIGINS (+ o próprio baseURL) são aceitas.
+    // que de outra forma recebe 403 INVALID_ORIGIN. Em produção, somente a
+    // origem da API e as origens explicitamente listadas em CORS_ORIGINS são aceitas.
     trustedOrigins: (request?: Request) => {
-      const origins = [...config.CORS_ORIGINS];
+      const origins = [
+        new URL(config.BETTER_AUTH_URL).origin,
+        ...config.CORS_ORIGINS,
+      ];
       if (config.NODE_ENV !== 'production' && request) {
         const requestOrigin = request.headers.get('origin');
         if (requestOrigin) origins.push(requestOrigin);
       }
-      return origins;
+      return [...new Set(origins)];
     },
+    ...(config.NODE_ENV === 'production'
+      ? {
+          advanced: {
+            defaultCookieAttributes: {
+              sameSite: 'none' as const,
+              secure: true,
+            },
+          },
+        }
+      : {}),
     plugins: [
       admin({
         defaultRole: 'user',
