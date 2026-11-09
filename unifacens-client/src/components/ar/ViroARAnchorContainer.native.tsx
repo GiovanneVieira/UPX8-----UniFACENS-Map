@@ -375,39 +375,16 @@ export const ViroARAnchorContainer: FC = () => {
       return { foundBest, foundAnchorable };
     };
 
-    // ── PRIMÁRIO: posição 3D à frente da câmera (contorna o bug de dp) ──
-    if (arSceneRef.current?.performARHitTestWithPosition) {
-      try {
-        const fwd = cameraFwdRef.current;
-        const cam = cameraPosRef.current;
-        const ahead: [number, number, number] = [
-          cam[0] + fwd[0] * 2.5,
-          cam[1] + fwd[1] * 2.5,
-          cam[2] + fwd[2] * 2.5,
-        ];
-        const posHits = await arSceneRef.current.performARHitTestWithPosition(ahead);
-        if (Array.isArray(posHits) && posHits.length > 0) {
-          console.log(`[ARCloud] primário (posição 3D): ${posHits.map((h: any) => h.type).join(', ')}`);
-          const { foundBest, foundAnchorable } = extractBest(posHits);
-          if (foundBest) {
-            bestHit = foundBest;
-            bestAnchorableHit = foundAnchorable;
-            const m = foundBest as any;
-            targetCoords = [m.transform.position[0], m.transform.position[1], m.transform.position[2]];
-          }
-        }
-      } catch (posErr) {
-        console.warn('[ARCloud] hit primário (posição 3D) falhou:', posErr);
-      }
-    }
-
-    // ── SECUNDÁRIO: point-based com correção de PIXELS ───────────────────
-    if (!bestHit && arSceneRef.current?.performARHitTestWithPoint) {
+    // ── PRIMÁRIO: point-based com PIXELS CORRETOS (plane hits = âncoras estáveis)
+    // O fix dp→px faz o raio ir para onde o usuário realmente mira.
+    // Plano detectado (ExistingPlaneUsingExtent) é MUITO mais confiável
+    // para createAnchoredNode que FeaturePoint (posição 3D genérica).
+    if (arSceneRef.current?.performARHitTestWithPoint) {
       for (let attempt = 1; attempt <= 2 && !bestHit; attempt++) {
         try {
           const hits = await arSceneRef.current.performARHitTestWithPoint(centerXpx, centerYpx);
           if (Array.isArray(hits) && hits.length > 0) {
-            console.log(`[ARCloud] secundário (point ${centerXpx},${centerYpx}px tentativa ${attempt}): ${hits.map((h: any) => h.type).join(', ')}`);
+            console.log(`[ARCloud] primário (point ${centerXpx},${centerYpx}px tent. ${attempt}): ${hits.map((h: any) => h.type).join(', ')}`);
             const { foundBest, foundAnchorable } = extractBest(hits);
             if (foundBest) {
               bestHit = foundBest;
@@ -421,6 +398,34 @@ export const ViroARAnchorContainer: FC = () => {
           console.warn(`[AR] Hit test point aviso (tentativa ${attempt}):`, hitErr);
           if (attempt < 2) await new Promise((r) => setTimeout(r, 400));
         }
+      }
+    }
+
+    // ── FALLBACK: posição 3D à frente da câmera ───────────────────────────
+    // Se o point-based não achou nada (câmera muito próxima, ângulo ruim),
+    // uma posição 2.5m à frente pode pegar feature points.
+    if (!bestHit && arSceneRef.current?.performARHitTestWithPosition) {
+      try {
+        const fwd = cameraFwdRef.current;
+        const cam = cameraPosRef.current;
+        const ahead: [number, number, number] = [
+          cam[0] + fwd[0] * 2.5,
+          cam[1] + fwd[1] * 2.5,
+          cam[2] + fwd[2] * 2.5,
+        ];
+        const posHits = await arSceneRef.current.performARHitTestWithPosition(ahead);
+        if (Array.isArray(posHits) && posHits.length > 0) {
+          console.log(`[ARCloud] fallback (posição 3D): ${posHits.map((h: any) => h.type).join(', ')}`);
+          const { foundBest, foundAnchorable } = extractBest(posHits);
+          if (foundBest) {
+            bestHit = foundBest;
+            bestAnchorableHit = foundAnchorable;
+            const m = foundBest as any;
+            targetCoords = [m.transform.position[0], m.transform.position[1], m.transform.position[2]];
+          }
+        }
+      } catch (posErr) {
+        console.warn('[ARCloud] fallback (posição 3D) falhou:', posErr);
       }
     }
 
@@ -446,6 +451,36 @@ export const ViroARAnchorContainer: FC = () => {
           console.warn(`[ARCloud] createAnchoredNode falhou (tentativa ${attempt}):`, anchorErr);
         }
       }
+
+      // FALLBACK: se o primário achou FeaturePoint mas a âncora falhou,
+      // tenta o point-based (pode achar ExistingPlaneUsingExtent = mais estável)
+      if (!anchorId && arSceneRef.current?.performARHitTestWithPoint) {
+        try {
+          const retryHits = await arSceneRef.current.performARHitTestWithPoint(centerXpx, centerYpx);
+          if (Array.isArray(retryHits) && retryHits.length > 0) {
+            console.log(`[ARCloud] retry via point px: ${retryHits.map((h: any) => h.type).join(', ')}`);
+            const retryAnchorable = retryHits.find(
+              (h: any) =>
+                h.type === 'ExistingPlaneUsingExtent' &&
+                isUsablePoint(h.transform?.position),
+            );
+            if (retryAnchorable) {
+              try {
+                const nodeRef = await arSceneRef.current.createAnchoredNode(retryAnchorable);
+                anchorId = (nodeRef as { anchorId?: string } | null)?.anchorId ?? null;
+                if (anchorId) {
+                  console.log(`[ARCloud] âncora via retry plane: ${anchorId.slice(0, 16)}…`);
+                }
+              } catch (retryErr) {
+                console.warn('[ARCloud] retry createAnchoredNode também falhou:', retryErr);
+              }
+            }
+          }
+        } catch {
+          // best-effort
+        }
+      }
+
       cloudAnchors.setPendingLocalAnchor(anchorId);
     } else if (bestHit && !bestAnchorableHit) {
       console.warn(
