@@ -109,10 +109,12 @@ export type CloudHostingState =
 export function useCloudAnchors({
   serverAnchors,
   geoPoseRef,
+  cameraPosRef,
   trackingState,
 }: {
   serverAnchors: Anchor[] | undefined;
   geoPoseRef: React.MutableRefObject<GeospatialPose | null>;
+  cameraPosRef: React.MutableRefObject<[number, number, number]>;
   trackingState: number;
 }) {
   /** Mapa pinId -> entrada resolvida (mesma forma da âncora nativa). */
@@ -316,8 +318,32 @@ export function useCloudAnchors({
             origin[1] + world[1],
             origin[2] + world[2],
           ];
-          setEntry({ pinId: anchor.id, nativeAnchorId: anchor.cloudAnchorId, position: pinPos });
-          console.log(`[ARCloud] "${anchor.name}" localizada visualmente — prioridade máxima`);
+
+          // VALIDAÇÃO: coordenadas da sessão AR são metros (max ~±1000).
+          // Valores na casa de milhões = ECEF ou outro datum global —
+          // a âncora resolveu mas a posição é inútil (bug de device:
+          // 1490169.8m de distância, 2026-11-09). Rejeita e segue GPS.
+          const camPos = cameraPosRef.current;
+          const distFromCam = Math.hypot(
+            pinPos[0] - camPos[0],
+            pinPos[1] - camPos[1],
+            pinPos[2] - camPos[2],
+          );
+          if (distFromCam <= 1000 && Number.isFinite(distFromCam)) {
+            setEntry({ pinId: anchor.id, nativeAnchorId: anchor.cloudAnchorId, position: pinPos });
+            console.log(
+              `[ARCloud] "${anchor.name}" localizada visualmente — ` +
+              `origin=[${origin.map((v) => v.toFixed(2)).join(', ')}] ` +
+              `yaw=${yawDeg.toFixed(1)}° distFromCam=${distFromCam.toFixed(1)}m`,
+            );
+          } else {
+            console.warn(
+              `[ARCloud] "${anchor.name}" posição absurda rejeitada: ` +
+              `origin=[${origin.map((v) => v.toFixed(1)).join(', ')}] ` +
+              `distFromCam=${(distFromCam / 1000).toFixed(1)}km — ` +
+              `provável ECEF/coordenadas globais em vez de sessão AR. Segue GPS/fallback.`,
+            );
+          }
         } else {
           console.warn(
             `[ARCloud] "${anchor.name}" sem match visual (${result?.error ?? result?.state ?? 'sem detalhe'}) — segue geospatial/fallback`,
@@ -330,7 +356,7 @@ export function useCloudAnchors({
         setResolving(false);
       }
     })();
-  }, [serverAnchors, trackingState, geoPoseRef, setEntry]);
+  }, [serverAnchors, trackingState, geoPoseRef, cameraPosRef, setEntry]);
 
   return {
     /** Mapa pinId -> entrada resolvida visualmente (prioridade máxima). */

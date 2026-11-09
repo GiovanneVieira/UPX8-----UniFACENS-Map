@@ -139,6 +139,7 @@ export const ViroARAnchorContainer: FC = () => {
   const cloudAnchors = useCloudAnchors({
     serverAnchors: anchorsQuery.data,
     geoPoseRef: geospatial.poseRef,
+    cameraPosRef,
     trackingState,
   });
 
