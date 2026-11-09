@@ -543,6 +543,8 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           não aos sensores. */}
       {cloudAnchorPins.map((pin) => {
         if (!pin.cloudAnchorId || !Array.isArray(pin.frameOffset)) return null;
+        const nav = (props.arSceneNavigator ?? props.sceneNavigator) as any;
+        console.log(`[ARCloud] montando sensor para "${pin.name}" (${pin.cloudAnchorId.slice(0, 12)}…) nav=${nav ? 'OK' : 'NULL'}`);
         return (
           <ViroARCloudAnchor
             key={`cloud-${pin.id}`}
