@@ -347,17 +347,34 @@ export const ViroARAnchorContainer: FC = () => {
     // Âncora LOCAL para a ancoragem visual (Cloud Anchor): criada AGORA
     // porque o resultado do hit expira em 30s — a âncora não expira. Será
     // hospedada após o save (hostCloudAnchor, caminho ARCore nativo).
+    // Retry ×2: a interop Fabric pode rejeitar a 1ª chamada no settle do
+    // mount (mesmo padrão do setGeospatialModeEnabled — §12.4).
     if (bestHit && arSceneRef.current?.createAnchoredNode) {
-      try {
-        const nodeRef = await arSceneRef.current.createAnchoredNode(bestHit);
-        const anchorId = (nodeRef as { anchorId?: string } | null)?.anchorId ?? null;
-        cloudAnchors.setPendingLocalAnchor(anchorId);
-        if (!anchorId) console.warn("[ARCloud] createAnchoredNode sem anchorId");
-      } catch (anchorErr) {
-        console.warn("[ARCloud] createAnchoredNode falhou:", anchorErr);
-        cloudAnchors.setPendingLocalAnchor(null);
+      let anchorId: string | null = null;
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= 2 && !anchorId; attempt++) {
+        try {
+          const nodeRef = await arSceneRef.current.createAnchoredNode(bestHit);
+          anchorId = (nodeRef as { anchorId?: string } | null)?.anchorId ?? null;
+          if (!anchorId) {
+            console.warn(`[ARCloud] createAnchoredNode sem anchorId (tentativa ${attempt})`);
+          }
+        } catch (anchorErr) {
+          lastErr = anchorErr;
+          console.warn(`[ARCloud] createAnchoredNode falhou (tentativa ${attempt}):`, anchorErr);
+        }
       }
+      cloudAnchors.setPendingLocalAnchor(anchorId);
+      if (!anchorId && lastErr === null) {
+        // hit existia mas nodeRef sem anchorId — registrado acima
+      }
+    } else if (bestHit) {
+      console.warn("[ARCloud] createAnchoredNode indisponível no ref da cena");
+      cloudAnchors.setPendingLocalAnchor(null);
     } else {
+      // Sem hit físico: retícula não encontrou superfície (parede lisa,
+      // espaço vazio) — modal abre no fallback 2m à frente, sem âncora visual.
+      console.warn("[ARCloud] hit-test sem resultado utilizável — pin será GPS-only se salvo assim");
       cloudAnchors.setPendingLocalAnchor(null);
     }
 
@@ -612,8 +629,10 @@ export const ViroARAnchorContainer: FC = () => {
           });
         }, SCAN_GUIDE_MS);
       } else {
-        setMutationStatus("Sem hit físico no ponto — pin salvo apenas com GPS");
-        setTimeout(() => setMutationStatus(null), 4000);
+        setMutationStatus(
+          "Nenhuma superfície detectada no ponto — mirando chão/parede com textura, o pin ganha ancoragem visual",
+        );
+        setTimeout(() => setMutationStatus(null), 5000);
       }
     } catch (err: unknown) {
       Alert.alert(
