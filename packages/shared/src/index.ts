@@ -14,3 +14,5 @@ export * from './utils/ar-points.js';
 
 // Constantes Geográficas do Campus (SSOT API + Client)
 export * from './constants/campus.js';
+
+export * from './schemas/admin.schema.js';
