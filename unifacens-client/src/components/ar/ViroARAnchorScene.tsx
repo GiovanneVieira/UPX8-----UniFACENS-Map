@@ -10,7 +10,7 @@ import {
   ViroDirectionalLight,
   ViroMaterials,
 } from '@reactvision/react-viro';
-import { ViroARCloudAnchor } from '@reactvision/react-viro';
+import { ViroSharedFrame, cloudAnchorFrameSource } from '@reactvision/react-viro';
 import type { Anchor } from 'shared';
 import { isUsablePoint } from 'shared';
 import type { RouteChevron } from '@/features/ar/hooks/use-ar-navigation';
@@ -546,13 +546,12 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         const nav = (props.arSceneNavigator ?? props.sceneNavigator) as any;
         console.log(`[ARCloud] montando sensor para "${pin.name}" (${pin.cloudAnchorId.slice(0, 12)}…) nav=${nav ? 'OK' : 'NULL'}`);
         return (
-          <ViroARCloudAnchor
+          <ViroSharedFrame
             key={`cloud-${pin.id}`}
-            cloudAnchorId={pin.cloudAnchorId}
-            arSceneNavigator={
-              (props.arSceneNavigator ?? props.sceneNavigator) as any
-            }
+            source={cloudAnchorFrameSource(pin.cloudAnchorId)}
+            arSceneNavigator={nav}
             onLocalized={(event) => {
+              console.log(`[ARCloud] "${pin.name}" LOCALIZADA — pos=[${event.position.map((v: number) => v.toFixed(2)).join(', ')}]`);
               onCloudAnchorLocalized?.(
                 pin.id,
                 pin.cloudAnchorId,
@@ -560,8 +559,12 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
                 event.rotation?.[1] ?? 0,
               );
             }}
-            onLocalizeError={(error) => {
-              onCloudAnchorError?.(pin.id, error);
+            onLocalizeError={(error: string, state?: string) => {
+              console.warn(`[ARCloud] "${pin.name}" ERRO: ${error} (state=${state})`);
+              onCloudAnchorError?.(pin.id, `${error} (state=${state})`);
+            }}
+            onLocalizeProgress={(status: { message: string; attempt: number }) => {
+              console.log(`[ARCloud] "${pin.name}" progresso: ${status.message} (tentativa ${status.attempt})`);
             }}
           />
         );
