@@ -166,6 +166,7 @@ export const ViroARAnchorContainer: FC = () => {
 
   // ── Estado de UI local ────────────────────────────────────────────────────
   const [radiusFilter, setRadiusFilter] = useState<number>(0);
+  const [planeCount, setPlaneCount] = useState<number>(0);
   const [modalVisible, setModalVisible] = useState(false);
   const [anchorName, setAnchorName] = useState("");
   const [anchorDescription, setAnchorDescription] = useState("");
@@ -253,7 +254,12 @@ export const ViroARAnchorContainer: FC = () => {
     arSceneRef.current = scene;
   }, []);
 
-  const handlePlanesUpdated = useCallback((_count: number) => {}, []);
+  const handlePlanesUpdated = useCallback(
+    (count: number, _planes: any[]) => {
+      setPlaneCount(count);
+    },
+    [],
+  );
 
   // ── Seleção por retícula ──────────────────────────────────────────────────
   const handleTapByReticle = useCallback(() => {
@@ -320,27 +326,63 @@ export const ViroARAnchorContainer: FC = () => {
     let targetCoords: [number, number, number] | null = null;
     let bestHit: unknown = null;
 
-    if (arSceneRef.current?.performARHitTestWithPoint) {
+    // ── Hit-test com RETRY (3x com 600ms) + fallback RAIO ───────────────
+    // O ARCore precisa de tempo para detectar planos: um único disparo no
+    // centro da tela falha se o plano ainda não se formou naquele pixel.
+    // O raio frontal pega feature points mesmo sem plano detectado.
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const hits = await arSceneRef.current.performARHitTestWithPoint(centerX, centerY);
-        if (Array.isArray(hits) && hits.length > 0) {
-          for (const type of HIT_TEST_PRIORITY) {
-            const match = hits.find(
-              (h: any) => h.type === type && isUsablePoint(h.transform?.position),
-            );
-            if (match) {
-              targetCoords = [
-                match.transform.position[0],
-                match.transform.position[1],
-                match.transform.position[2],
-              ];
-              bestHit = match;
-              break;
+        if (arSceneRef.current?.performARHitTestWithPoint) {
+          const hits = await arSceneRef.current.performARHitTestWithPoint(centerX, centerY);
+          if (Array.isArray(hits) && hits.length > 0) {
+            for (const type of HIT_TEST_PRIORITY) {
+              const match = hits.find(
+                (h: any) => h.type === type && isUsablePoint(h.transform?.position),
+              );
+              if (match) {
+                targetCoords = [
+                  match.transform.position[0],
+                  match.transform.position[1],
+                  match.transform.position[2],
+                ];
+                bestHit = match;
+                break;
+              }
+            }
+            if (bestHit) break;
+          }
+        }
+        // Fallback: raio frontal pega feature points sem plano detectado
+        if (attempt === 3 && !bestHit && arSceneRef.current?.performARHitTestWithRay) {
+          const fwd = cameraFwdRef.current;
+          const rayHits = await arSceneRef.current.performARHitTestWithRay({
+            origin: cameraPosRef.current,
+            direction: fwd,
+          });
+          if (Array.isArray(rayHits) && rayHits.length > 0) {
+            for (const type of HIT_TEST_PRIORITY) {
+              const match = rayHits.find(
+                (h: any) => h.type === type && isUsablePoint(h.transform?.position),
+              );
+              if (match) {
+                targetCoords = [
+                  match.transform.position[0],
+                  match.transform.position[1],
+                  match.transform.position[2],
+                ];
+                bestHit = match;
+                console.log(`[ARCloud] hit via raio (type: ${match.type})`);
+                break;
+              }
             }
           }
         }
+        if (!bestHit && attempt < 3) {
+          await new Promise((r) => setTimeout(r, 600));
+        }
       } catch (hitErr) {
-        console.warn("[AR] Hit test aviso:", hitErr);
+        console.warn(`[AR] Hit test aviso (tentativa ${attempt}):`, hitErr);
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 600));
       }
     }
 
@@ -767,11 +809,22 @@ export const ViroARAnchorContainer: FC = () => {
           ]}
           pointerEvents="box-none"
         >
+          {/* Indicador de superfície: o hit-test precisa de plano/feature
+              detectado — sem isto, "Marcar Ponto" abre sem hit (GPS-only). */}
+          {planeCount === 0 ? (
+            <View style={styles.planeHint}>
+              <Text style={styles.planeHintText}>
+                Aponte para o chão para detectar superfícies…
+              </Text>
+            </View>
+          ) : null}
           <TouchableOpacity
             onPress={handleOpenPlaceModal}
             activeOpacity={0.85}
+            disabled={planeCount === 0}
             style={[
               styles.placeAnchorButton,
+              planeCount === 0 ? styles.placeAnchorButtonDisabled : {},
               {
                 flexDirection: "row",
                 alignItems: "center",
@@ -782,7 +835,7 @@ export const ViroARAnchorContainer: FC = () => {
           >
             <Ionicons name="location-outline" size={18} color="#FFFFFF" />
             <Text style={styles.placeAnchorButtonText}>
-              Marcar Ponto no Espaço
+              {planeCount === 0 ? "Aguardando superfície…" : "Marcar Ponto no Espaço"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -986,6 +1039,27 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 8,
     elevation: 10,
+  },
+  placeAnchorButtonDisabled: {
+    backgroundColor: "#1E3A5F",
+    borderColor: "#475569",
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  planeHint: {
+    backgroundColor: "rgba(69, 26, 3, 0.85)",
+    borderWidth: 1,
+    borderColor: "#B45309",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginBottom: 8,
+    alignSelf: "center",
+  },
+  planeHintText: {
+    color: "#FED7AA",
+    fontSize: 12,
+    fontWeight: "600",
   },
   placeAnchorButtonText: {
     color: "#FFFFFF",
