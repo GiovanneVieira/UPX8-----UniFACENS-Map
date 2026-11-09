@@ -26,6 +26,11 @@ interface PlaceAnchorModalProps {
   maxAccuracyMeters: number;
   pendingDistance: number;
   onAdjustDistance: (delta: number) => void;
+  /** Define distância ABSOLUTA da mira (input customizado, m). */
+  onSetDistance: (value: number) => void;
+  /** Range permitido de distância (m) — hint do input customizado. */
+  minDistanceMeters: number;
+  maxDistanceMeters: number;
   anchorName: string;
   onAnchorNameChange: (value: string) => void;
   anchorDescription: string;
@@ -34,11 +39,20 @@ interface PlaceAnchorModalProps {
   onClose: () => void;
 }
 
-const DISTANCE_STEPS = [
-  { label: '-0.5m', delta: -0.5, tone: 'neg' as const },
-  { label: '-10cm', delta: -0.1, tone: 'neg' as const },
-  { label: '+10cm', delta: 0.1, tone: 'pos' as const },
-  { label: '+0.5m', delta: 0.5, tone: 'pos' as const },
+/** Passos rápidos: finos para ajuste milimétrico, largos para alcance grande.
+ * Duas fileiras de 3 (negativos / positivos) — 6 numa fileira só quebra o
+ * label "-10cm"/"+10cm" em duas linhas (validado via a11y + screenshot). */
+const DISTANCE_STEP_ROWS: Array<Array<{ label: string; delta: number; tone: 'neg' | 'pos' }>> = [
+  [
+    { label: '-1m', delta: -1, tone: 'neg' },
+    { label: '-0.5m', delta: -0.5, tone: 'neg' },
+    { label: '-10cm', delta: -0.1, tone: 'neg' },
+  ],
+  [
+    { label: '+10cm', delta: 0.1, tone: 'pos' },
+    { label: '+0.5m', delta: 0.5, tone: 'pos' },
+    { label: '+1m', delta: 1, tone: 'pos' },
+  ],
 ];
 
 /**
@@ -55,6 +69,9 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   maxAccuracyMeters,
   pendingDistance,
   onAdjustDistance,
+  onSetDistance,
+  minDistanceMeters,
+  maxDistanceMeters,
   anchorName,
   onAnchorNameChange,
   anchorDescription,
@@ -62,13 +79,30 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   onCreate,
   onClose,
 }) => {
-  // Gate de precisão (P3): verde ≤5m, âmbar ≤limite, vermelho > limite
-  const accuracyOk = accuracyMeters === null || accuracyMeters <= maxAccuracyMeters;
+  const [customDistance, setCustomDistance] = React.useState('');
+
+  // Sincroniza o input customizado com a distância atual ao abrir o modal.
+  React.useEffect(() => {
+    if (visible) setCustomDistance(pendingDistance.toFixed(2));
+  }, [visible, pendingDistance]);
+
+  const commitCustomDistance = () => {
+    const parsed = parseFloat(customDistance.replace(',', '.'));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      onSetDistance(parsed);
+    } else {
+      setCustomDistance(pendingDistance.toFixed(2));
+    }
+  };
+  // Gate de precisão (P3): verde ≤5m, âmbar ≤limite, vermelho > limite.
+  // null = SEM leitura → botão bloqueado ("Aguardando GPS…") — alinhado ao
+  // gate do handleCreate (antes liberava a UI e barrava só ao tocar Salvar).
+  const accuracyOk = accuracyMeters !== null && accuracyMeters <= maxAccuracyMeters;
   const accuracyColor =
     accuracyMeters === null ? '#94A3B8' : accuracyMeters <= 5 ? '#34D399' : accuracyOk ? '#FBBF24' : '#EF4444';
   const accuracyLabel =
     accuracyMeters === null
-      ? 'indisponível'
+      ? 'aguardando GPS…'
       : `±${accuracyMeters.toFixed(1)}m${accuracyOk ? '' : ' — aguarde melhorar'}`;
   const saveBlocked = isSaving || !accuracyOk;
   return (
@@ -115,18 +149,45 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                 <Text style={styles.distanceLabel}>Distância da Mira:</Text>
                 <Text style={styles.distanceValue}>{pendingDistance.toFixed(2)} m</Text>
               </View>
-              <View style={styles.distanceButtonsRow}>
-                {DISTANCE_STEPS.map((step) => (
-                  <TouchableOpacity
-                    key={`dist-step-${step.label}`}
-                    onPress={() => onAdjustDistance(step.delta)}
-                    disabled={isSaving}
-                    style={styles.distanceStepButton}>
-                    <Text style={step.tone === 'neg' ? styles.distanceStepTextNeg : styles.distanceStepTextPos}>
-                      {step.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              {DISTANCE_STEP_ROWS.map((row, rowIndex) => (
+                <View key={`dist-row-${rowIndex}`} style={styles.distanceButtonsRow}>
+                  {row.map((step) => (
+                    <TouchableOpacity
+                      key={`dist-step-${step.label}`}
+                      onPress={() => onAdjustDistance(step.delta)}
+                      disabled={isSaving}
+                      style={styles.distanceStepButton}>
+                      <Text
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        style={step.tone === 'neg' ? styles.distanceStepTextNeg : styles.distanceStepTextPos}>
+                        {step.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ))}
+              <View style={styles.customDistanceRow}>
+                <TextInput
+                  value={customDistance}
+                  onChangeText={setCustomDistance}
+                  onEndEditing={commitCustomDistance}
+                  onSubmitEditing={commitCustomDistance}
+                  keyboardType="numeric"
+                  placeholder={`distância em m (${minDistanceMeters}–${maxDistanceMeters})`}
+                  placeholderTextColor="#64748B"
+                  editable={!isSaving}
+                  accessibilityLabel="Distância personalizada da mira em metros"
+                  style={styles.customDistanceInput}
+                />
+                <TouchableOpacity
+                  onPress={commitCustomDistance}
+                  disabled={isSaving}
+                  style={styles.customDistanceApplyButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="Aplicar distância personalizada">
+                  <Text style={styles.customDistanceApplyText}>Aplicar</Text>
+                </TouchableOpacity>
               </View>
             </View>
 
@@ -159,7 +220,13 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                 style={[styles.saveButton, !accuracyOk && styles.saveButtonBlocked]}>
                 {isSaving ? <ActivityIndicator size="small" color="#FFFFFF" /> : null}
                 <Text style={styles.saveButtonText}>
-                  {isSaving ? 'Salvando...' : !accuracyOk ? 'Precisão insuficiente' : 'Salvar Ponto'}
+                  {isSaving
+                    ? 'Salvando...'
+                    : accuracyMeters === null
+                      ? 'Aguardando GPS…'
+                      : !accuracyOk
+                        ? 'Precisão insuficiente'
+                        : 'Salvar Ponto'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -248,11 +315,13 @@ const styles = StyleSheet.create({
   distanceButtonsRow: {
     flexDirection: 'row',
     gap: 8,
+    marginTop: 8,
   },
   distanceStepButton: {
     flex: 1,
     backgroundColor: '#0F172A',
     paddingVertical: 7,
+    minHeight: 44,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -266,6 +335,39 @@ const styles = StyleSheet.create({
   },
   distanceStepTextPos: {
     color: '#4ADE80',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  customDistanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+  },
+  customDistanceInput: {
+    flex: 1,
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minHeight: 44,
+    color: '#F8FAFC',
+    fontSize: 13,
+  },
+  customDistanceApplyButton: {
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#38BDF8',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  customDistanceApplyText: {
+    color: '#38BDF8',
     fontSize: 12,
     fontWeight: '700',
   },

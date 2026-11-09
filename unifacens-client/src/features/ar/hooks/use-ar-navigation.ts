@@ -260,8 +260,11 @@ export function useARNavigation({ geoPoseRef, cameraPosRef }: UseARNavigationPar
       const pose = geoPoseRef.current;
       const camPos = cameraPosRef.current;
       if (!pose) return path.map(() => [0, FLOOR_Y, 0] as [number, number, number]);
+      // alt = pose.altitude → up = 0 → y = FLOOR_Y (chão). A subtração extra
+      // de 1.5m aqui DUPLICAVA o FLOOR_Y e enterrava os chevrons 1.5m abaixo
+      // do chão — removida.
       return path.map((p) =>
-        geoToArWorld(pose, camPos, p.latitude, p.longitude, pose.altitude - 1.5),
+        geoToArWorld(pose, camPos, p.latitude, p.longitude, pose.altitude),
       );
     },
     [geoPoseRef, cameraPosRef],

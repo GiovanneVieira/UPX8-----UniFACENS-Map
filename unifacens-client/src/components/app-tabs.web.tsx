@@ -1,3 +1,5 @@
+import { Link } from 'expo-router';
+import { useAuth } from '@/features/auth/hooks/use-auth';
 import {
   Tabs,
   TabList,
@@ -12,8 +14,16 @@ import { cssInterop } from "nativewind";
 cssInterop(TabSlot, { className: "style" });
 
 export default function AppTabs() {
+  const { isAdmin } = useAuth();
   return (
     <Tabs className="flex-1 bg-slate-950">
+      {isAdmin && (
+        <View className="items-end bg-slate-950 px-5 py-2">
+          <Link href="/admin" className="min-h-[44px] rounded-xl bg-blue-700 px-4 py-3 font-semibold text-white">
+            Painel administrativo
+          </Link>
+        </View>
+      )}
       <TabSlot className="h-full flex-1" />
       <TabList asChild>
         <View

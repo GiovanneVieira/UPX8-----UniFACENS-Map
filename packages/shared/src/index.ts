@@ -19,3 +19,5 @@ export * from './utils/navigation-route.js';
 
 // Constantes Geográficas do Campus (SSOT API + Client)
 export * from './constants/campus.js';
+
+export * from './schemas/admin.schema.js';
