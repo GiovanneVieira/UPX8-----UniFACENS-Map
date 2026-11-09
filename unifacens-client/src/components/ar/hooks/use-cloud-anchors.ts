@@ -30,8 +30,13 @@ import type { GeospatialPose } from './use-geospatial-pose';
  * roadmap no AGENTS.MD.
  */
 
-/** Prefixos de IDs sintéticos que NÃO são cloud anchors reais. */
-const SYNTHETIC_ID_PREFIXES = ['coord-', 'ua-'];
+/**
+ * Prefixos de IDs sintéticos que NÃO são cloud anchors reais.
+ * ⚠️ O ARCore gera cloud anchor IDs começando com "ua-" (formato
+ * ua-<hex-uuid>) — NÃO filtrar por "ua-" genérico! Os seeds de dev
+ * seguem o padrão "ua-facens-demo-*".
+ */
+const SYNTHETIC_ID_PREFIXES = ['coord-', 'ua-facens-'];
 /** Distância máxima para tentar resolve visual (m) — SIFT precisa proximidade. */
 const RESOLVE_RANGE_M = 40;
 /** TTL do host em dias (API key = máx 1). */
