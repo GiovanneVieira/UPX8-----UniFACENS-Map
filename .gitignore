@@ -30,3 +30,6 @@ output.css
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Artefatos do Playwright MCP (screenshots/snapshots de validação)
+.playwright-mcp/

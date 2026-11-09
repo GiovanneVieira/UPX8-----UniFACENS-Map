@@ -24,16 +24,20 @@ loadEnv({ path: path.resolve(__dirname, '../../../.env.api'), quiet: true });
  * Com isso, o `.env.api` é a fonte de verdade da senha de dev em qualquer
  * `docker compose up` / restart (C0/M1 do plano de navegação AR).
  */
-async function main() {
-  const parsed = apiEnvironmentSchema.safeParse(process.env);
-  if (!parsed.success) {
-    console.error(
-      '[SeedAdmin] Configuração de API inválida:',
-      parsed.error.issues.map((i) => i.path.join('.')).join(', '),
-    );
-    process.exit(1);
-  }
-  const config = parsed.data;
+export async function main(configFromBoot?: import('shared').ApiEnvironment): Promise<void> {
+  const config =
+    configFromBoot ??
+    (() => {
+      const parsed = apiEnvironmentSchema.safeParse(process.env);
+      if (!parsed.success) {
+        console.error(
+          '[SeedAdmin] Configuração de API inválida:',
+          parsed.error.issues.map((i) => i.path.join('.')).join(', '),
+        );
+        process.exit(1);
+      }
+      return parsed.data;
+    })();
 
   if (!config.ADMIN_EMAIL || !config.ADMIN_PASSWORD) {
     console.log(

@@ -13,8 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { AppModule, ObserveInstrument } from './app.module.js';
 import { API_CONFIG } from './config/runtime-config.js';
 import type { ApiEnvironment } from 'shared';
-import { configureHttp } from './config/configure-http.js';
-import { BETTER_AUTH, type BetterAuthInstance } from './common/auth/better-auth.js';
+import { configureHttp } from './config/configure-http.js';import { BETTER_AUTH, type BetterAuthInstance } from './common/auth/better-auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS_DIR = path.resolve(__dirname, '../uploads');
@@ -77,6 +76,19 @@ async function bootstrap() {
       theme: 'kepler',
     }),
   );
+
+  // Seed do admin (§13.11): UPSERT idempotente — cria/sincroniza o admin de
+  // ADMIN_EMAIL/ADMIN_PASSWORD em QUALQUER ambiente no boot (é assim que o
+  // admin default sobe para PRODUÇÃO sem passo manual). Falha não derruba a API.
+  if (config.ADMIN_EMAIL && config.ADMIN_PASSWORD) {
+    const { main: seedAdmin } = await import('./db/seed-admin.js');
+    await seedAdmin(config).catch((err: unknown) =>
+      console.error(
+        '[SeedAdmin] falhou no boot:',
+        err instanceof Error ? err.message : String(err),
+      ),
+    );
+  }
 
   const port = config.PORT;
 

@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { createAuthClient } from 'better-auth/react';
 import { expoClient } from '@better-auth/expo/client';
 import * as SecureStore from 'expo-secure-store';
@@ -10,33 +11,41 @@ import { getApiBaseUrl } from '@/services/api';
 export const JWT_STORAGE_KEY = 'unifacens.jwt';
 
 /**
- * Client better-auth para nativo (Android/iOS):
- * - `expoClient` persiste os cookies de sessão no expo-secure-store,
- *   dando suporte ao refresh silencioso do JWT (24h) sem re-login;
- * - O JWT é obtido em `GET /auth/token` via `authClient.$fetch`
- *   (os cookies de sessão são anexados automaticamente).
+ * ⚠️ expoClient SOMENTE em nativo (bug web, 2026-11-09): o plugin substitui
+ * o fetch por um adapter de cookies via SecureStore — no navegador ele
+ * ENGOLE o Set-Cookie do login (SecureStore não existe na web) e a sessão
+ * nunca persiste → getSession sem usuário → "Não foi possível concluir o
+ * acesso". Na web, o browser cuida dos cookies nativamente (com o
+ * credentials:'include' abaixo).
+ */
+const authPlugins =
+  Platform.OS === 'web'
+    ? []
+    : [
+        expoClient({
+          scheme: 'unifacensclient',
+          storagePrefix: 'unifacens',
+          storage: SecureStore,
+        }),
+      ];
+
+/**
+ * Client better-auth:
+ * - NATIVO: `expoClient` persiste os cookies de sessão no expo-secure-store
+ *   (refresh silencioso do JWT de 24h sem re-login);
+ * - WEB: cookies do navegador (exige credentials:'include' — sem isto o
+ *   navegador descarta o Set-Cookie do login em requisições cross-origin).
+ * - O JWT é obtido em `GET /auth/token` via `authClient.$fetch`.
  */
 export const authClient = createAuthClient({
   baseURL: getApiBaseUrl(),
   // O handler better-auth da API é montado em /auth (ver better-auth.ts no
   // servidor); sem isto o client chamaria o default /api/auth → 404.
   basePath: '/auth',
-  // ⚠️ WEB (bug do merge, 2026-11-09): sem credentials:'include' o navegador
-  // DESCARTA o Set-Cookie da resposta do login em requisições cross-origin
-  // (app :8081 → API :8000 = origens diferentes por PORTA) — o signIn
-  // "succeede", mas o cookie de sessão nunca é armazenado e o GET /auth/token
-  // sai sem cookie → 401 → "Não foi possível obter o token de acesso".
-  // No nativo é inócuo (o expoClient gerencia cookies via SecureStore).
   fetchOptions: {
     credentials: 'include',
   },
-  plugins: [
-    expoClient({
-      scheme: 'unifacensclient',
-      storagePrefix: 'unifacens',
-      storage: SecureStore,
-    }),
-  ],
+  plugins: authPlugins,
 });
 
 export async function saveJwt(token: string): Promise<void> {
