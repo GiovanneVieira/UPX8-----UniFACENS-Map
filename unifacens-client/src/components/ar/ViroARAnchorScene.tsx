@@ -98,6 +98,13 @@ export interface ViroARAnchorSceneProps {
     pin: Anchor;
     source: ReturnType<typeof cloudAnchorFrameSource>;
   }>;
+  /**
+   * ARCore session pronto (Geospatial habilitado + tracking 3)?
+   * Sensores cloud SÓ montam quando true — montar antes do ARCore
+   * session ready faz resolveCloudAnchor pendurar PARA SEMPRE.
+   * Uma vez montados, NÃO desmontar (evita "already in progress").
+   */
+  cloudSensorsReady?: boolean;
   /** Callback quando um cloud anchor localiza (posição em sessão AR). */
   onCloudAnchorLocalized?: (
     pinId: string,
@@ -161,6 +168,11 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const trackingHealthy = viroProps.trackingHealthy !== false;
   const previewPosition = viroProps.previewPosition ?? null;
   const cloudAnchorSensors = viroProps.cloudAnchorSensors || [];
+  const cloudSensorsReady = viroProps.cloudSensorsReady === true;
+  /** Uma vez montados (ready passou a true 1×), ficam montados para sempre. */
+  const cloudSensorsMountedRef = useRef(false);
+  if (cloudSensorsReady) cloudSensorsMountedRef.current = true;
+  const shouldRenderSensors = cloudSensorsMountedRef.current;
   const onCloudAnchorLocalized = viroProps.onCloudAnchorLocalized;
   const onCloudAnchorError = viroProps.onCloudAnchorError;
   const onCameraUpdate = viroProps.onCameraUpdate;
@@ -544,7 +556,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           resolve e o ARCore responde "already in progress" → nunca completa.
           O gate de tracking aplica à RENDERIZAÇÃO dos pins (projeção),
           não aos sensores. */}
-      {cloudAnchorSensors.map(({ pin, source }) => {
+      {shouldRenderSensors ? cloudAnchorSensors.map(({ pin, source }) => {
         if (!pin.cloudAnchorId || !Array.isArray(pin.frameOffset)) return null;
         const nav = (props.arSceneNavigator ?? props.sceneNavigator) as any;
         return (
@@ -570,7 +582,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
             }}
           />
         );
-      })}
+      }) : null}
 
       {/* ══ MODO PREVIEW: pin fantasma no ponto de criação ═════════════════
           Diamante âmbar + haste — visualmente DISTINTO dos pins regulares

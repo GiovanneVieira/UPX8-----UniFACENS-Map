@@ -233,6 +233,14 @@ export const ViroARAnchorContainer: FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- timeout de segurança
   }, [cloudAnchorPins.length]);
 
+  // ── Gate: sensores cloud só montam DEPOIS do ARCore session pronto ────
+  // O Geospatial tem delay de 2s + retry (§12.4 — interop Fabric settle).
+  // Se os ViroSharedFrame montam ANTES, resolveCloudAnchor é chamado num
+  // navigator cujo view nativo não existe → promise pendura PARA SEMPRE
+  // (nem onLocalized nem onLocalizeError). Na MESMA sessão funciona porque
+  // o ARCore já estava pronto. No tab remount → monta cedo demais → falha.
+  const cloudSensorsReady = geospatial.supported === true && trackingState === 3;
+
   const [reprojectNonce, setReprojectNonce] = useState(0);
 
   const projection = useARProjection({
@@ -910,6 +918,7 @@ export const ViroARAnchorContainer: FC = () => {
       trackingHealthy: trackingState === 3,
       cloudAnchorPins,
       cloudAnchorSensors,
+      cloudSensorsReady,
       onCloudAnchorLocalized: handleCloudAnchorLocalized,
       onCloudAnchorError: handleCloudAnchorError,
       surfaceAvailable,
@@ -930,6 +939,7 @@ export const ViroARAnchorContainer: FC = () => {
       trackingState,
       cloudAnchorPins,
       cloudAnchorSensors,
+      cloudSensorsReady,
       handleCloudAnchorLocalized,
       handleCloudAnchorError,
       surfaceAvailable,
