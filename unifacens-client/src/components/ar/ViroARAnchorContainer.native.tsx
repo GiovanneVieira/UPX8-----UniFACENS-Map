@@ -347,6 +347,8 @@ export const ViroARAnchorContainer: FC = () => {
         if (arSceneRef.current?.performARHitTestWithPoint) {
           const hits = await arSceneRef.current.performARHitTestWithPoint(centerX, centerY);
           if (Array.isArray(hits) && hits.length > 0) {
+            // Diagnóstico: quais tipos o ARCore está devolvendo?
+            console.log(`[ARCloud] hits (tentativa ${attempt}): ${hits.map((h: any) => h.type).join(', ')}`);
             for (const type of HIT_TEST_PRIORITY) {
               const match = hits.find(
                 (h: any) => h.type === type && isUsablePoint(h.transform?.position),
@@ -375,32 +377,39 @@ export const ViroARAnchorContainer: FC = () => {
             if (bestHit) break;
           }
         }
-        // Fallback: raio frontal pega feature points sem plano detectado
-        if (attempt === 3 && !bestHit && arSceneRef.current?.performARHitTestWithRay) {
+        // Fallback: posição 3D à frente da câmera pega feature points
+        // (performARHitTestWithRay espera formato de array não documentado
+        // — ViroRay = any — e lança exceção de tipo; REMOVIDO por bug de
+        // device 2026-11-09. Position-based é mais confiável.)
+        if (attempt === 3 && !bestAnchorableHit && arSceneRef.current?.performARHitTestWithPosition) {
           const fwd = cameraFwdRef.current;
-          const rayHits = await arSceneRef.current.performARHitTestWithRay({
-            origin: cameraPosRef.current,
-            direction: fwd,
-          });
-          if (Array.isArray(rayHits) && rayHits.length > 0) {
-            for (const type of HIT_TEST_PRIORITY) {
-              const match = rayHits.find(
-                (h: any) => h.type === type && isUsablePoint(h.transform?.position),
+          const cam = cameraPosRef.current;
+          const ahead: [number, number, number] = [
+            cam[0] + fwd[0] * 3,
+            cam[1] + fwd[1] * 3,
+            cam[2] + fwd[2] * 3,
+          ];
+          try {
+            const posHits = await arSceneRef.current.performARHitTestWithPosition(ahead);
+            if (Array.isArray(posHits) && posHits.length > 0) {
+              console.log(`[ARCloud] hits via posição 3D: ${posHits.map((h: any) => h.type).join(', ')}`);
+              const anchorable = posHits.find(
+                (h: any) => ANCHORABLE_HIT_TYPES.has(h.type) && isUsablePoint(h.transform?.position),
               );
-              if (match) {
-                targetCoords = [
-                  match.transform.position[0],
-                  match.transform.position[1],
-                  match.transform.position[2],
-                ];
-                bestHit = match;
-                if (ANCHORABLE_HIT_TYPES.has(match.type)) {
-                  bestAnchorableHit = match;
+              if (anchorable) {
+                if (!bestHit) {
+                  targetCoords = [
+                    anchorable.transform.position[0],
+                    anchorable.transform.position[1],
+                    anchorable.transform.position[2],
+                  ];
+                  bestHit = anchorable;
                 }
-                console.log(`[ARCloud] hit via raio (type: ${match.type})`);
-                break;
+                bestAnchorableHit = anchorable;
               }
             }
+          } catch (posErr) {
+            console.warn('[ARCloud] performARHitTestWithPosition falhou:', posErr);
           }
         }
         if (!bestHit && attempt < 3) {
