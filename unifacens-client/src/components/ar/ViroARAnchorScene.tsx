@@ -536,32 +536,34 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           Google e entrega a posição do frame em COORDENADAS DA SESSÃO AR
           (metros da origem) via onLocalized — não ECEF como o método
           imperativo resolveCloudAnchor. O callback alimenta o pipeline de
-          projeção (distância, transições, labels). */}
-      {trackingHealthy
-        ? cloudAnchorPins.map((pin) => {
-            if (!pin.cloudAnchorId || !Array.isArray(pin.frameOffset)) return null;
-            return (
-              <ViroARCloudAnchor
-                key={`cloud-${pin.id}`}
-                cloudAnchorId={pin.cloudAnchorId}
-                arSceneNavigator={
-                  (props.arSceneNavigator ?? props.sceneNavigator) as any
-                }
-                onLocalized={(event) => {
-                  onCloudAnchorLocalized?.(
-                    pin.id,
-                    pin.cloudAnchorId,
-                    event.position as [number, number, number],
-                    event.rotation?.[1] ?? 0,
-                  );
-                }}
-                onLocalizeError={(error) => {
-                  onCloudAnchorError?.(pin.id, error);
-                }}
-              />
-            );
-          })
-        : null}
+          projeção (distância, transições, labels).
+          ⚠️ NÃO desmontar por trackingState: cada remount tenta um novo
+          resolve e o ARCore responde "already in progress" → nunca completa.
+          O gate de tracking aplica à RENDERIZAÇÃO dos pins (projeção),
+          não aos sensores. */}
+      {cloudAnchorPins.map((pin) => {
+        if (!pin.cloudAnchorId || !Array.isArray(pin.frameOffset)) return null;
+        return (
+          <ViroARCloudAnchor
+            key={`cloud-${pin.id}`}
+            cloudAnchorId={pin.cloudAnchorId}
+            arSceneNavigator={
+              (props.arSceneNavigator ?? props.sceneNavigator) as any
+            }
+            onLocalized={(event) => {
+              onCloudAnchorLocalized?.(
+                pin.id,
+                pin.cloudAnchorId,
+                event.position as [number, number, number],
+                event.rotation?.[1] ?? 0,
+              );
+            }}
+            onLocalizeError={(error) => {
+              onCloudAnchorError?.(pin.id, error);
+            }}
+          />
+        );
+      })}
 
       {/* ══ MODO PREVIEW: pin fantasma no ponto de criação ═════════════════
           Diamante âmbar + haste — visualmente DISTINTO dos pins regulares
