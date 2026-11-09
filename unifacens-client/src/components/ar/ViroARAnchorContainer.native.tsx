@@ -569,18 +569,18 @@ export const ViroARAnchorContainer: FC = () => {
         }
       }
 
-      cloudAnchors.setPendingLocalAnchor(anchorId);
+      cloudAnchors.setPendingLocalAnchor(anchorId, targetCoords ? [...targetCoords] : undefined);
     } else if (bestHit && !bestAnchorableHit) {
       console.warn(
         "[ARCloud] hit não-anchorable (DepthPoint/Estimated) — GPS-only para este pin",
       );
-      cloudAnchors.setPendingLocalAnchor(null);
+      cloudAnchors.setPendingLocalAnchor(null, undefined);
     } else if (!bestHit) {
       console.warn("[ARCloud] hit-test sem resultado utilizável — pin será GPS-only se salvo assim");
-      cloudAnchors.setPendingLocalAnchor(null);
+      cloudAnchors.setPendingLocalAnchor(null, undefined);
     } else {
       console.warn("[ARCloud] createAnchoredNode indisponível no ref da cena");
-      cloudAnchors.setPendingLocalAnchor(null);
+      cloudAnchors.setPendingLocalAnchor(null, undefined);
     }
 
     const camPos = cameraPosRef.current || [0, 0, 0];

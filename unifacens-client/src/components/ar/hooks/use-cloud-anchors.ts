@@ -50,7 +50,7 @@ export function isRealCloudAnchorId(id: string | null | undefined): boolean {
 }
 
 /** Rotaciona offset no plano XZ por yaw (graus). */
-function rotateY(
+export function rotateY(
   offset: [number, number, number],
   yawDeg: number,
 ): [number, number, number] {
@@ -64,24 +64,9 @@ function rotateY(
   ];
 }
 
-interface CloudAnchorShape {
-  anchorId?: string;
-  cloudAnchorId?: string;
-  state?: string;
-  position?: [number, number, number];
-  rotation?: [number, number, number];
-}
-
 interface HostResultShape {
   success?: boolean;
   cloudAnchorId?: string;
-  error?: string;
-  state?: string;
-}
-
-interface ResolveResultShape {
-  success?: boolean;
-  anchor?: CloudAnchorShape;
   error?: string;
   state?: string;
 }
@@ -117,6 +102,8 @@ export function useCloudAnchors({
   const aliveRef = useRef(true);
   /** Âncora LOCAL criada do hit-test do modal (aguardando host pós-save). */
   const pendingLocalAnchorRef = useRef<string | null>(null);
+  /** Posição onde o hit-test acertou (posição da âncora local). */
+  const pendingHitPosRef = useRef<[number, number, number] | null>(null);
   const [hosting, setHosting] = useState<CloudHostingState>({ phase: 'idle' });
 
   useEffect(() => {
@@ -148,8 +135,9 @@ export function useCloudAnchors({
 
   // ── FASE 1: âncora local a partir do hit-test do modal ───────────────────
   /** Registra a âncora local criada pelo container (createAnchoredNode). */
-  const setPendingLocalAnchor = useCallback((anchorId: string | null) => {
+  const setPendingLocalAnchor = useCallback((anchorId: string | null, hitPos?: [number, number, number]) => {
     pendingLocalAnchorRef.current = anchorId;
+    pendingHitPosRef.current = hitPos ?? null;
   }, []);
 
   /** Existe âncora local pronta para hospedar? */
@@ -177,9 +165,15 @@ export function useCloudAnchors({
     ): Promise<void> => {
       const nav = navigatorRef.current;
       const localAnchorId = pendingLocalAnchorRef.current;
+      const anchorLocalPos = pendingHitPosRef.current;
       pendingLocalAnchorRef.current = null;
+      pendingHitPosRef.current = null;
       if (!localAnchorId) {
         setHosting({ phase: 'failed', error: 'sem âncora local do hit-test' });
+        return;
+      }
+      if (!anchorLocalPos) {
+        setHosting({ phase: 'failed', error: 'sem posição do hit para calibrar offset' });
         return;
       }
       if (!nav?.hostCloudAnchor || !nav?.resolveCloudAnchor) {
@@ -200,36 +194,23 @@ export function useCloudAnchors({
         }
         const cloudAnchorId = hostResult.cloudAnchorId;
 
-        // Calibração: resolve na MESMA sessão (mapa fresco → match rápido)
-        // revela a posição mundial da âncora; o offset cobre o caso do pin
-        // ter sido ajustado ao longo do raio DEPOIS do hit.
         setHosting({ phase: 'calibrating' });
-        const resolveResult = (await withTimeout(
-          nav.resolveCloudAnchor(cloudAnchorId) as Promise<ResolveResultShape>,
-          OP_TIMEOUT_MS,
-          'resolveCloudAnchor(calibração)',
-        )) as ResolveResultShape;
-        const anchor = resolveResult?.anchor;
-        if (!resolveResult?.success || !anchor?.position) {
-          // Host OK mas calibração falhou: offset [0,0,0] é a melhor aposta
-          // (a âncora nasceu NA posição do hit).
-          onHosted({ cloudAnchorId, frameOffset: [0, 0, 0] });
-          setEntry({ pinId, nativeAnchorId: cloudAnchorId, position: pinLocalPos });
-          setHosting({ phase: 'done', cloudAnchorId });
-          console.warn(
-            '[ARCloud] hospedada sem calibração (offset 0) — resolve falhou:',
-            resolveResult?.error ?? resolveResult?.state,
-          );
-          return;
-        }
-        const anchorPos = anchor.position as [number, number, number];
-        const yawDeg = anchor.rotation?.[1] ?? 0;
-        const worldOffset: [number, number, number] = [
-          pinLocalPos[0] - anchorPos[0],
-          pinLocalPos[1] - anchorPos[1],
-          pinLocalPos[2] - anchorPos[2],
+
+        // ── CALIBRAÇÃO CORRETA (sem resolveCloudAnchor = ECEF!) ────────
+        // A âncora local foi criada NO HIT POSITION (createAnchoredNode).
+        // O frameOffset é simplesmente a diferença entre onde o pin está
+        // (após ajustes de distância) e onde o hit aconteceu:
+        //   frameOffset = pinPos − anchorHitPos (ambos em SLAM da sessão)
+        // NÃO usar resolveCloudAnchor para calibrar — retorna ECEF (~6M m).
+        //
+        // O componente ViroARCloudAnchor (na cena) resolverá o frame
+        // corretamente em coordenadas de sessão; o offset que gravamos
+        // aqui é o deslocamento físico do pin em relação à âncora.
+        const frameOffset: [number, number, number] = [
+          pinLocalPos[0] - anchorLocalPos[0],
+          pinLocalPos[1] - anchorLocalPos[1],
+          pinLocalPos[2] - anchorLocalPos[2],
         ];
-        const frameOffset = rotateY(worldOffset, -yawDeg);
 
         setEntry({ pinId, nativeAnchorId: cloudAnchorId, position: pinLocalPos });
         onHosted({ cloudAnchorId, frameOffset });
