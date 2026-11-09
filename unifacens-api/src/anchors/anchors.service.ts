@@ -10,7 +10,7 @@ import { anchors } from '../db/schema.js';
 import type { Anchor, AnchorDetail, CreateAnchorDto, UpdateAnchorDto } from 'shared';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOADS_ROOT = path.resolve(__dirname, '../../../uploads');
+const UPLOADS_ROOT = path.resolve(__dirname, '../../uploads');
 
 @Injectable()
 export class AnchorsService implements OnModuleInit {

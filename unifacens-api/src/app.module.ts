@@ -1,3 +1,4 @@
+import { AdminModule } from './modules/admin/admin.module.js';
 import { Module } from '@nestjs/common';
 import { createObserveModule } from '@nestjs/observe';
 import { AppController } from './app.controller.js';
@@ -26,6 +27,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AccessModule,
     AnchorsModule,
     PlacesModule,
+    AdminModule,
     RoutingModule,
     ...(hasObserveKeys
       ? [

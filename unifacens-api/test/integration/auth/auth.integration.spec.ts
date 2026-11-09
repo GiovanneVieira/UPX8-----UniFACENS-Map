@@ -1,3 +1,7 @@
+import request from 'supertest';
+import { AdminController } from '../../../src/modules/admin/admin.controller.js';
+import { AdminRepository } from '../../../src/modules/admin/admin.repository.js';
+import { AdminService } from '../../../src/modules/admin/admin.service.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Test } from '@nestjs/testing';
 import {
@@ -131,12 +135,15 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
 
     const moduleFixture = await Test.createTestingModule({
       controllers: [
+        AdminController,
         PlacesController,
         AnchorsController,
         AccessController,
         HealthController,
       ],
       providers: [
+        AdminRepository,
+        AdminService,
         PlacesService,
         PlacesRepository,
         AnchorsService,
@@ -391,4 +398,22 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: 'ok' });
   });
+  it('restringe listagem de usuários e edição dos pontos aos administradores', async () => {
+    await request(app.getHttpServer()).get('/admin/users').expect(401);
+    await request(app.getHttpServer()).get('/admin/users').set(bearer(commonJwt)).expect(403);
+    const users = await request(app.getHttpServer()).get('/admin/users?search=Admin').set(bearer(adminJwt)).expect(200);
+    expect(users.body.items.some((u: { email: string }) => u.email === adminFixture.email)).toBe(true);
+    expect(users.body.items[0]).not.toHaveProperty('password');
+    const created = await request(app.getHttpServer()).post('/anchors').set(bearer(adminJwt))
+      .send({ name: 'Ponto admin', cloudAnchorId: 'admin-test', latitude: -23.4699, longitude: -47.4297 }).expect(201);
+    const url = `/admin/points/${created.body.id}`;
+    await request(app.getHttpServer()).patch(url).set(bearer(commonJwt)).send({ name: 'Inválido' }).expect(403);
+    await request(app.getHttpServer()).patch(url).set(bearer(adminJwt)).send({ latitude: 0 }).expect(400);
+    await request(app.getHttpServer()).patch(url).set(bearer(adminJwt))
+      .send({ name: 'Nome atualizado', description: 'Descrição atualizada' }).expect(200);
+    const detail = await request(app.getHttpServer()).get(`/anchors/${created.body.id}`).set(bearer(adminJwt)).expect(200);
+    expect(detail.body.name).toBe('Nome atualizado');
+    expect(detail.body.latitude).toBe(-23.4699);
+  });
+
 });

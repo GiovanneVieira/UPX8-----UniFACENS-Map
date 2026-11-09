@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  ParseUUIDPipe,
   NotFoundException,
   UseInterceptors,
   UploadedFiles,
@@ -43,7 +44,7 @@ export class AnchorsController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Buscar uma âncora específica pelo ID (com imagens)' })
-  async getAnchorById(@Param('id') id: string): Promise<AnchorDetail> {
+  async getAnchorById(@Param('id', new ParseUUIDPipe()) id: string): Promise<AnchorDetail> {
     const anchor = await this.anchorsService.findById(id);
     if (!anchor) {
       throw new NotFoundException(`Âncora com ID ${id} não encontrada`);
@@ -93,9 +94,13 @@ export class AnchorsController {
       },
     },
   })
-  @UseInterceptors(FileFieldsInterceptor([{ name: 'files', maxCount: MAX_IMAGES }]))
+  @UseInterceptors(
+    FileFieldsInterceptor([{ name: 'files', maxCount: MAX_IMAGES }], {
+      limits: { fileSize: MAX_FILE_SIZE, files: MAX_IMAGES },
+    }),
+  )
   async uploadImages(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @UploadedFiles() files: { files?: Array<{ buffer: Buffer; mimetype: string; size: number; originalname: string }> },
   ): Promise<{ images: string[] }> {
     const uploaded = files?.files ?? [];
@@ -132,7 +137,7 @@ export class AnchorsController {
   @Delete(':id')
   @ApiBearerAuth('admin-bearer')
   @ApiOperation({ summary: 'Excluir uma âncora do catálogo pelo ID' })
-  async deleteAnchor(@Param('id') id: string): Promise<{ success: boolean }> {
+  async deleteAnchor(@Param('id', new ParseUUIDPipe()) id: string): Promise<{ success: boolean }> {
     const res = await this.anchorsService.remove(id);
     if (!res.success) {
       throw new NotFoundException(`Âncora com ID ${id} não encontrada para exclusão`);
