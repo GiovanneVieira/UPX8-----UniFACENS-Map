@@ -30,7 +30,6 @@ import { useARProjection } from "./hooks/use-ar-projection";
 import { useGeospatialPose, isPoseFresh } from "./hooks/use-geospatial-pose";
 import { useNativeAnchors } from "./hooks/use-native-anchors";
 import { useCloudAnchors, SCAN_GUIDE_MS, isRealCloudAnchorId } from "./hooks/use-cloud-anchors";
-import { cloudAnchorFrameSource } from "@reactvision/react-viro";
 import { useARWorldAlignment } from "./hooks/use-ar-world-alignment";
 import { useARZoom } from "./hooks/use-ar-zoom";
 import { ARStatusHud } from "./hud/ar-status-hud";
@@ -157,16 +156,6 @@ export const ViroARAnchorContainer: FC = () => {
     );
   }, [anchorsQuery.data]);
 
-  // Sensores memoizados: source criado UMA vez (cloudAnchorFrameSource
-  // retorna novo objeto a cada chamada — sem memo, cada re-render do
-  // container recria o source e o ViroSharedFrame pode re-adquirir).
-  const cloudAnchorSensors = useMemo(() => {
-    return cloudAnchorPins.map((pin) => ({
-      pin,
-      source: cloudAnchorFrameSource(pin.cloudAnchorId!),
-    }));
-  }, [cloudAnchorPins]); // eslint-disable-line react-hooks/exhaustive-deps -- cloudAnchorFrameSource é estável por cloudAnchorId
-
   // Pins que falharam ao localizar (rastreados para não deixar o HUD
   // preso em "Localizando âncora visual…" quando já deu erro).
   const [cloudFailedPins, setCloudFailedPins] = useState<Set<string>>(new Set());
@@ -232,14 +221,6 @@ export const ViroARAnchorContainer: FC = () => {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- timeout de segurança
   }, [cloudAnchorPins.length]);
-
-  // ── Gate: sensores cloud só montam DEPOIS do ARCore session pronto ────
-  // O Geospatial tem delay de 2s + retry (§12.4 — interop Fabric settle).
-  // Se os ViroSharedFrame montam ANTES, resolveCloudAnchor é chamado num
-  // navigator cujo view nativo não existe → promise pendura PARA SEMPRE
-  // (nem onLocalized nem onLocalizeError). Na MESMA sessão funciona porque
-  // o ARCore já estava pronto. No tab remount → monta cedo demais → falha.
-  const cloudSensorsReady = geospatial.supported === true && trackingState === 3;
 
   const [reprojectNonce, setReprojectNonce] = useState(0);
 
@@ -917,8 +898,6 @@ export const ViroARAnchorContainer: FC = () => {
       anchors: visibleAnchors,
       trackingHealthy: trackingState === 3,
       cloudAnchorPins,
-      cloudAnchorSensors,
-      cloudSensorsReady,
       onCloudAnchorLocalized: handleCloudAnchorLocalized,
       onCloudAnchorError: handleCloudAnchorError,
       surfaceAvailable,
@@ -938,8 +917,6 @@ export const ViroARAnchorContainer: FC = () => {
       visibleAnchors,
       trackingState,
       cloudAnchorPins,
-      cloudAnchorSensors,
-      cloudSensorsReady,
       handleCloudAnchorLocalized,
       handleCloudAnchorError,
       surfaceAvailable,

@@ -10,7 +10,6 @@ import {
   ViroDirectionalLight,
   ViroMaterials,
 } from '@reactvision/react-viro';
-import { ViroSharedFrame, cloudAnchorFrameSource } from '@reactvision/react-viro';
 import type { Anchor } from 'shared';
 import { isUsablePoint } from 'shared';
 import type { RouteChevron } from '@/features/ar/hooks/use-ar-navigation';
@@ -90,31 +89,6 @@ const SHOW_DETECTED_PLANES = false;
 export interface ViroARAnchorSceneProps {
   anchors?: Anchor[];
   /**
-   * Sensores cloud anchor MEMOIZADOS (source criado 1× por sessão).
-   * Sem memo, cada re-render do container recria cloudAnchorFrameSource
-   * → ViroSharedFrame componentDidUpdate pode re-adquirir.
-   */
-  cloudAnchorSensors?: Array<{
-    pin: Anchor;
-    source: ReturnType<typeof cloudAnchorFrameSource>;
-  }>;
-  /**
-   * ARCore session pronto (Geospatial habilitado + tracking 3)?
-   * Sensores cloud SÓ montam quando true — montar antes do ARCore
-   * session ready faz resolveCloudAnchor pendurar PARA SEMPRE.
-   * Uma vez montados, NÃO desmontar (evita "already in progress").
-   */
-  cloudSensorsReady?: boolean;
-  /** Callback quando um cloud anchor localiza (posição em sessão AR). */
-  onCloudAnchorLocalized?: (
-    pinId: string,
-    cloudAnchorId: string,
-    position: [number, number, number],
-    yawDeg: number,
-  ) => void;
-  /** Callback quando um cloud anchor falha ao localizar. */
-  onCloudAnchorError?: (pinId: string, error: string) => void;
-  /**
    * Superfície detectável no centro da tela (retícula)? Muda a cor da
    * retícula: verde = pode criar pin, vermelho = sem superfície.
    */
@@ -167,14 +141,6 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const anchors = viroProps.anchors || [];
   const trackingHealthy = viroProps.trackingHealthy !== false;
   const previewPosition = viroProps.previewPosition ?? null;
-  const cloudAnchorSensors = viroProps.cloudAnchorSensors || [];
-  const cloudSensorsReady = viroProps.cloudSensorsReady === true;
-  /** Uma vez montados (ready passou a true 1×), ficam montados para sempre. */
-  const cloudSensorsMountedRef = useRef(false);
-  if (cloudSensorsReady) cloudSensorsMountedRef.current = true;
-  const shouldRenderSensors = cloudSensorsMountedRef.current;
-  const onCloudAnchorLocalized = viroProps.onCloudAnchorLocalized;
-  const onCloudAnchorError = viroProps.onCloudAnchorError;
   const onCameraUpdate = viroProps.onCameraUpdate;
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
@@ -546,44 +512,11 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         );
       })}
 
-      {/* ══ CLOUD ANCHORS: sensores visuais (posição em SESSÃO AR) ════════
-          Cada <ViroARCloudAnchor> resolve contra o mapa visual hospedado no
-          Google e entrega a posição do frame em COORDENADAS DA SESSÃO AR
-          (metros da origem) via onLocalized — não ECEF como o método
-          imperativo resolveCloudAnchor. O callback alimenta o pipeline de
-          projeção (distância, transições, labels).
-          ⚠️ NÃO desmontar por trackingState: cada remount tenta um novo
-          resolve e o ARCore responde "already in progress" → nunca completa.
-          O gate de tracking aplica à RENDERIZAÇÃO dos pins (projeção),
-          não aos sensores. */}
-      {shouldRenderSensors ? cloudAnchorSensors.map(({ pin, source }) => {
-        if (!pin.cloudAnchorId || !Array.isArray(pin.frameOffset)) return null;
-        const nav = (props.arSceneNavigator ?? props.sceneNavigator) as any;
-        return (
-          <ViroSharedFrame
-            key={`cloud-${pin.id}`}
-            source={source}
-            arSceneNavigator={nav}
-            onLocalized={(event) => {
-              console.log(`[ARCloud] "${pin.name}" LOCALIZADA — pos=[${event.position.map((v: number) => v.toFixed(2)).join(', ')}]`);
-              onCloudAnchorLocalized?.(
-                pin.id,
-                pin.cloudAnchorId,
-                event.position as [number, number, number],
-                event.rotation?.[1] ?? 0,
-              );
-            }}
-            onLocalizeError={(error: string, state?: string) => {
-              console.warn(`[ARCloud] "${pin.name}" ERRO: ${error} (state=${state})`);
-              onCloudAnchorError?.(pin.id, `${error} (state=${state})`);
-            }}
-            onLocalizeProgress={(status: { message: string; attempt: number }) => {
-              console.log(`[ARCloud] "${pin.name}" progresso: ${status.message} (tentativa ${status.attempt})`);
-            }}
-          />
-        );
-      }) : null}
-
+      {/* ══ CLOUD ANCHOR RESOLVE: agora via MÓDULO NATIVO (use-cloud-anchors.ts) ══
+          O ViroSharedFrame/resolveCloudAnchor do Viro 3.0.3 pendurava a
+          promise em resolves cross-session. O módulo nativo
+          CloudAnchorModule.kt chama o ARCore SDK diretamente. Os sensores
+          ViroSharedFrame foram REMOVIDOS da cena. */}
       {/* ══ MODO PREVIEW: pin fantasma no ponto de criação ═════════════════
           Diamante âmbar + haste — visualmente DISTINTO dos pins regulares
           (cubos coloridos). Atualiza em tempo real conforme o usuário

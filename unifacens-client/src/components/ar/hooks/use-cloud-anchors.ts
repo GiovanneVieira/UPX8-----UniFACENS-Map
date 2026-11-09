@@ -89,8 +89,8 @@ export type CloudHostingState =
   | { phase: 'failed'; error: string };
 
 export function useCloudAnchors({
-  serverAnchors: _serverAnchors,
-  trackingState: _trackingState,
+  serverAnchors,
+  trackingState,
 }: {
   serverAnchors: Anchor[] | undefined;
   trackingState: number;
@@ -227,11 +227,71 @@ export function useCloudAnchors({
     [setEntry],
   );
 
-  // ── FASE 5: RESOLVE agora acontece via componente <ViroARCloudAnchor> ──
-  // na CENA (ver ViroARAnchorScene.tsx) — o componente entrega posições em
-  // COORDENADAS DA SESSÃO AR via onLocalized (o método imperativo
-  // resolveCloudAnchor retornava ECEF ~1.490km errado). O container
-  // alimenta as entries via setEntry no handler onCloudAnchorLocalized.
+  // ── FASE 5: RESOLVE via MÓDULO NATIVO (ARCore SDK direto) ──────────────
+  // O ViroSharedFrame/resolveCloudAnchor do Viro 3.0.3 tem um bug onde a
+  // promise pendura para sempre em resolves cross-session. O módulo nativo
+  // CloudAnchorModule.kt chama Session.resolveAnchorOnCloudAsync() do ARCore
+  // SDK diretamente e retorna posições em COORDENADAS DA SESSÃO AR.
+  useEffect(() => {
+    if (!serverAnchors || trackingState !== 3) return;
+
+    const candidates = serverAnchors.filter(
+      (a) =>
+        isRealCloudAnchorId(a.cloudAnchorId) &&
+        Array.isArray(a.frameOffset) &&
+        !entriesRef.current.has(a.id),
+    );
+    if (candidates.length === 0) return;
+
+    const { resolveCloudAnchorNative, quaternionToYawDeg } = require('../services/cloud-anchor-native');
+    let alive = true;
+
+    (async () => {
+      // Registra a sessão ARCore (a primeira vez — depois fica em cache)
+      const registered = await require('../services/cloud-anchor-native').registerARSession();
+      if (!registered || !alive) return;
+
+      // Resolve um por vez (SIFT matching é intensivo)
+      for (const anchor of candidates) {
+        if (!alive) break;
+        try {
+          console.log(`[ARCloud] resolvendo "${anchor.name}" via módulo nativo…`);
+          const result = await resolveCloudAnchorNative(anchor.cloudAnchorId);
+          if (!alive || !result) continue;
+
+          // Aplica o frameOffset (offset do pin em relação à âncora)
+          const offset = anchor.frameOffset as [number, number, number];
+          const yawDeg = quaternionToYawDeg(result);
+          const rad = (yawDeg * Math.PI) / 180;
+          const cos = Math.cos(rad);
+          const sin = Math.sin(rad);
+          const pinPos: [number, number, number] = [
+            result.x + (offset[0] * cos - offset[2] * sin),
+            result.y + offset[1],
+            result.z + (offset[0] * sin + offset[2] * cos),
+          ];
+
+          // Validação: coordenadas de sessão são metros (max ~±1000)
+          const distFromOrigin = Math.hypot(pinPos[0], pinPos[1], pinPos[2]);
+          if (distFromOrigin > 1000 || !Number.isFinite(distFromOrigin)) {
+            console.warn(`[ARCloud] "${anchor.name}" posição absurda (${distFromOrigin.toFixed(0)}m) — rejeitada`);
+            continue;
+          }
+
+          setEntry({ pinId: anchor.id, nativeAnchorId: anchor.cloudAnchorId, position: pinPos });
+          console.log(
+            `[ARCloud] "${anchor.name}" RESOLVIDA via nativo — pos=[${pinPos.map((v) => v.toFixed(2)).join(', ')}] yaw=${yawDeg.toFixed(1)}°`,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`[ARCloud] "${anchor.name}" resolve nativo falhou: ${message}`);
+        }
+      }
+    })();
+
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverAnchors, trackingState, setEntry]);
 
   return {
     /** Mapa pinId -> entrada resolvida visualmente (prioridade máxima). */
@@ -244,7 +304,7 @@ export function useCloudAnchors({
     beginScanGuide,
     hostPendingAnchor,
     removeLocal,
-    /** Registra uma entrada resolvida (alimentado pelo ViroARCloudAnchor component). */
+    /** Registra uma entrada resolvida (alimentado pelo módulo nativo). */
     setEntry,
   };
 }
