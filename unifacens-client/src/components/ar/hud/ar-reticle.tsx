@@ -3,15 +3,22 @@ import { StyleSheet, Text, View } from 'react-native';
 
 interface ARReticleProps {
   zoomLevel: number;
+  /** Superfície detectável no centro? Verde = pode criar, vermelho = não. */
+  surfaceAvailable?: boolean;
 }
 
 /**
  * Retículo/mira central sobreposto ao feed da câmera. Com zoom ativo
  * (> 1.05x) exibe a mira telescópica de precisão; caso contrário, a
  * mira simples de pontilhado.
+ *
+ * A cor muda conforme detectação de superfície no background hit-test:
+ * verde = hit-test encontraria plano/feature (âncora visual possível),
+ * vermelho = sem superfície (GPS-only se salvar agora).
  */
-export const ARReticle: React.FC<ARReticleProps> = ({ zoomLevel }) => {
+export const ARReticle: React.FC<ARReticleProps> = ({ zoomLevel, surfaceAvailable }) => {
   const isZoomed = zoomLevel > 1.05;
+  const ringColor = surfaceAvailable === undefined ? '#FFFFFF' : surfaceAvailable ? '#34D399' : '#EF4444';
 
   return (
     <View style={styles.reticleOverlay} pointerEvents="none">
@@ -26,7 +33,7 @@ export const ARReticle: React.FC<ARReticleProps> = ({ zoomLevel }) => {
           <View style={styles.telescopicOuterRing}>
             <View style={styles.telescopicMiddleRing}>
               <View style={styles.telescopicInnerRing}>
-                <View style={styles.telescopicCenterDot} />
+                <View style={[styles.telescopicCenterDot, { backgroundColor: ringColor }]} />
               </View>
             </View>
             <View style={styles.crosshairHorizontal} />
@@ -34,8 +41,8 @@ export const ARReticle: React.FC<ARReticleProps> = ({ zoomLevel }) => {
           </View>
         </View>
       ) : (
-        <View style={styles.defaultReticleRing}>
-          <View style={styles.defaultReticleDot} />
+        <View style={[styles.defaultReticleRing, { borderColor: ringColor }]}>
+          <View style={[styles.defaultReticleDot, { backgroundColor: ringColor }]} />
         </View>
       )}
     </View>

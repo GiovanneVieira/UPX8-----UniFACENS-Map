@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { calculateDistance, type Anchor } from 'shared';
+import { type Anchor } from 'shared';
 import type { NativeAnchorEntry } from './use-native-anchors';
-import type { GeospatialPose } from './use-geospatial-pose';
 
 /**
  * ── Âncoras de Nuvem VISUAIS (ARCore Cloud Anchors) — precisão centimétrica ──
@@ -37,8 +36,6 @@ import type { GeospatialPose } from './use-geospatial-pose';
  * seguem o padrão "ua-facens-demo-*".
  */
 const SYNTHETIC_ID_PREFIXES = ['coord-', 'ua-facens-'];
-/** Distância máxima para tentar resolve visual (m) — SIFT precisa proximidade. */
-const RESOLVE_RANGE_M = 40;
 /** TTL do host em dias (API key = máx 1). */
 const HOST_TTL_DAYS = 1;
 /** Timeout JS por host/resolve. */
@@ -107,14 +104,10 @@ export type CloudHostingState =
   | { phase: 'failed'; error: string };
 
 export function useCloudAnchors({
-  serverAnchors,
-  geoPoseRef,
-  cameraPosRef,
-  trackingState,
+  serverAnchors: _serverAnchors,
+  trackingState: _trackingState,
 }: {
   serverAnchors: Anchor[] | undefined;
-  geoPoseRef: React.MutableRefObject<GeospatialPose | null>;
-  cameraPosRef: React.MutableRefObject<[number, number, number]>;
   trackingState: number;
 }) {
   /** Mapa pinId -> entrada resolvida (mesma forma da âncora nativa). */
@@ -124,11 +117,6 @@ export function useCloudAnchors({
   const aliveRef = useRef(true);
   /** Âncora LOCAL criada do hit-test do modal (aguardando host pós-save). */
   const pendingLocalAnchorRef = useRef<string | null>(null);
-  /** Resolve sequencial (SIFT = um por vez). */
-  const resolvingRef = useRef(false);
-  /** Pins já tentados nesta sessão (sucesso OU falha — sem retry automático). */
-  const attemptedRef = useRef<Set<string>>(new Set());
-  const [resolving, setResolving] = useState(false);
   const [hosting, setHosting] = useState<CloudHostingState>({ phase: 'idle' });
 
   useEffect(() => {
@@ -258,118 +246,24 @@ export function useCloudAnchors({
     [setEntry],
   );
 
-  // ── FASE 5: resolve dos pins próximos (uma por vez) ──────────────────────
-  useEffect(() => {
-    if (!serverAnchors || trackingState !== 3 || resolvingRef.current) return;
-    const nav = navigatorRef.current;
-    if (!nav?.resolveCloudAnchor) return;
-
-    const pose = geoPoseRef.current;
-    if (!pose) return;
-
-    // Candidatos: cloud anchor real + perto + não resolvido/não tentado
-    const candidates = serverAnchors
-      .filter(
-        (a) =>
-          isRealCloudAnchorId(a.cloudAnchorId) &&
-          Array.isArray(a.frameOffset) &&
-          !entriesRef.current.has(a.id) &&
-          !attemptedRef.current.has(a.id) &&
-          typeof a.latitude === 'number' &&
-          typeof a.longitude === 'number',
-      )
-      .map((a) => ({
-        anchor: a,
-        distM: calculateDistance(
-          pose.latitude,
-          pose.longitude,
-          a.latitude as number,
-          a.longitude as number,
-        ),
-      }))
-      .filter((c) => c.distM <= RESOLVE_RANGE_M)
-      .sort((x, y) => x.distM - y.distM);
-
-    const next = candidates[0];
-    if (!next) return;
-
-    resolvingRef.current = true;
-    setResolving(true);
-    const { anchor } = next;
-    attemptedRef.current.add(anchor.id);
-    console.log(
-      `[ARCloud] resolvendo "${anchor.name}" (${next.distM.toFixed(0)}m) — aponte a câmera ao redor…`,
-    );
-
-    (async () => {
-      try {
-        const result = (await withTimeout(
-          nav.resolveCloudAnchor(anchor.cloudAnchorId) as Promise<ResolveResultShape>,
-          OP_TIMEOUT_MS,
-          `resolveCloudAnchor(${anchor.name})`,
-        )) as ResolveResultShape;
-        const resolved = result?.anchor;
-        if (result?.success && resolved?.position) {
-          const origin = resolved.position as [number, number, number];
-          const yawDeg = resolved.rotation?.[1] ?? 0;
-          const world = rotateY(anchor.frameOffset as [number, number, number], yawDeg);
-          const pinPos: [number, number, number] = [
-            origin[0] + world[0],
-            origin[1] + world[1],
-            origin[2] + world[2],
-          ];
-
-          // VALIDAÇÃO: coordenadas da sessão AR são metros (max ~±1000).
-          // Valores na casa de milhões = ECEF ou outro datum global —
-          // a âncora resolveu mas a posição é inútil (bug de device:
-          // 1490169.8m de distância, 2026-11-09). Rejeita e segue GPS.
-          const camPos = cameraPosRef.current;
-          const distFromCam = Math.hypot(
-            pinPos[0] - camPos[0],
-            pinPos[1] - camPos[1],
-            pinPos[2] - camPos[2],
-          );
-          if (distFromCam <= 1000 && Number.isFinite(distFromCam)) {
-            setEntry({ pinId: anchor.id, nativeAnchorId: anchor.cloudAnchorId, position: pinPos });
-            console.log(
-              `[ARCloud] "${anchor.name}" localizada visualmente — ` +
-              `origin=[${origin.map((v) => v.toFixed(2)).join(', ')}] ` +
-              `yaw=${yawDeg.toFixed(1)}° distFromCam=${distFromCam.toFixed(1)}m`,
-            );
-          } else {
-            console.warn(
-              `[ARCloud] "${anchor.name}" posição absurda rejeitada: ` +
-              `origin=[${origin.map((v) => v.toFixed(1)).join(', ')}] ` +
-              `distFromCam=${(distFromCam / 1000).toFixed(1)}km — ` +
-              `provável ECEF/coordenadas globais em vez de sessão AR. Segue GPS/fallback.`,
-            );
-          }
-        } else {
-          console.warn(
-            `[ARCloud] "${anchor.name}" sem match visual (${result?.error ?? result?.state ?? 'sem detalhe'}) — segue geospatial/fallback`,
-          );
-        }
-      } catch (err) {
-        console.warn(`[ARCloud] resolve falhou: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        resolvingRef.current = false;
-        setResolving(false);
-      }
-    })();
-  }, [serverAnchors, trackingState, geoPoseRef, cameraPosRef, setEntry]);
+  // ── FASE 5: RESOLVE agora acontece via componente <ViroARCloudAnchor> ──
+  // na CENA (ver ViroARAnchorScene.tsx) — o componente entrega posições em
+  // COORDENADAS DA SESSÃO AR via onLocalized (o método imperativo
+  // resolveCloudAnchor retornava ECEF ~1.490km errado). O container
+  // alimenta as entries via setEntry no handler onCloudAnchorLocalized.
 
   return {
     /** Mapa pinId -> entrada resolvida visualmente (prioridade máxima). */
     entries,
     /** Estado do fluxo de hospedagem (UI do modal de criação). */
     hosting,
-    /** Um resolve visual está em andamento (UI "localizando…"). */
-    resolving,
     handleNavigatorReady,
     setPendingLocalAnchor,
     hasPendingLocalAnchor,
     beginScanGuide,
     hostPendingAnchor,
     removeLocal,
+    /** Registra uma entrada resolvida (alimentado pelo ViroARCloudAnchor component). */
+    setEntry,
   };
 }

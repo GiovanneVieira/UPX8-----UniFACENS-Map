@@ -10,6 +10,7 @@ import {
   ViroDirectionalLight,
   ViroMaterials,
 } from '@reactvision/react-viro';
+import { ViroARCloudAnchor } from '@reactvision/react-viro';
 import type { Anchor } from 'shared';
 import { isUsablePoint } from 'shared';
 import type { RouteChevron } from '@/features/ar/hooks/use-ar-navigation';
@@ -89,6 +90,26 @@ const SHOW_DETECTED_PLANES = false;
 export interface ViroARAnchorSceneProps {
   anchors?: Anchor[];
   /**
+   * Pins com cloud anchor REAL (ID do Google, não sintético) + frameOffset
+   * calibrado. Cada um vira um <ViroARCloudAnchor> que resolve visualmente
+   * e entrega posição em COORDENADAS DA SESSÃO AR via onLocalized.
+   */
+  cloudAnchorPins?: Anchor[];
+  /** Callback quando um cloud anchor localiza (posição em sessão AR). */
+  onCloudAnchorLocalized?: (
+    pinId: string,
+    cloudAnchorId: string,
+    position: [number, number, number],
+    yawDeg: number,
+  ) => void;
+  /** Callback quando um cloud anchor falha ao localizar. */
+  onCloudAnchorError?: (pinId: string, error: string) => void;
+  /**
+   * Superfície detectável no centro da tela (retícula)? Muda a cor da
+   * retícula: verde = pode criar pin, vermelho = sem superfície.
+   */
+  surfaceAvailable?: boolean;
+  /**
    * Tracking do ARCore saudável (estado 3)? Com tracking degradado o quadro
    * do mundo NÃO é rígido — TODO conteúdo AR "anda" com o aparelho (§12.8).
    * Conteúdo é OCULTADO em vez de mentir visualmente (padrão Live View).
@@ -136,6 +157,9 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const anchors = viroProps.anchors || [];
   const trackingHealthy = viroProps.trackingHealthy !== false;
   const previewPosition = viroProps.previewPosition ?? null;
+  const cloudAnchorPins = viroProps.cloudAnchorPins || [];
+  const onCloudAnchorLocalized = viroProps.onCloudAnchorLocalized;
+  const onCloudAnchorError = viroProps.onCloudAnchorError;
   const onCameraUpdate = viroProps.onCameraUpdate;
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
@@ -506,6 +530,38 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           </ViroNode>
         );
       })}
+
+      {/* ══ CLOUD ANCHORS: sensores visuais (posição em SESSÃO AR) ════════
+          Cada <ViroARCloudAnchor> resolve contra o mapa visual hospedado no
+          Google e entrega a posição do frame em COORDENADAS DA SESSÃO AR
+          (metros da origem) via onLocalized — não ECEF como o método
+          imperativo resolveCloudAnchor. O callback alimenta o pipeline de
+          projeção (distância, transições, labels). */}
+      {trackingHealthy
+        ? cloudAnchorPins.map((pin) => {
+            if (!pin.cloudAnchorId || !Array.isArray(pin.frameOffset)) return null;
+            return (
+              <ViroARCloudAnchor
+                key={`cloud-${pin.id}`}
+                cloudAnchorId={pin.cloudAnchorId}
+                arSceneNavigator={
+                  (props.arSceneNavigator ?? props.sceneNavigator) as any
+                }
+                onLocalized={(event) => {
+                  onCloudAnchorLocalized?.(
+                    pin.id,
+                    pin.cloudAnchorId,
+                    event.position as [number, number, number],
+                    event.rotation?.[1] ?? 0,
+                  );
+                }}
+                onLocalizeError={(error) => {
+                  onCloudAnchorError?.(pin.id, error);
+                }}
+              />
+            );
+          })
+        : null}
 
       {/* ══ MODO PREVIEW: pin fantasma no ponto de criação ═════════════════
           Diamante âmbar + haste — visualmente DISTINTO dos pins regulares
