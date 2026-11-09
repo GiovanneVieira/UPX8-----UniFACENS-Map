@@ -157,6 +157,19 @@ export const ViroARAnchorContainer: FC = () => {
     );
   }, [anchorsQuery.data]);
 
+  // Pins que falharam ao localizar (rastreados para não deixar o HUD
+  // preso em "Localizando âncora visual…" quando já deu erro).
+  const [cloudFailedPins, setCloudFailedPins] = useState<Set<string>>(new Set());
+
+  // Limpa pins removidos quando a lista muda (exclusão, refresh)
+  useEffect(() => {
+    const validIds = new Set((anchorsQuery.data ?? []).map((a) => a.id));
+    setCloudFailedPins((prev) => {
+      const next = new Set([...prev].filter((id) => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [anchorsQuery.data]);
+
   // Handler: cloud anchor localizou → posição em SESSÃO AR + yaw → entry
   const handleCloudAnchorLocalized = useCallback(
     (pinId: string, cloudAnchorId: string, position: [number, number, number], yawDeg: number) => {
@@ -185,6 +198,8 @@ export const ViroARAnchorContainer: FC = () => {
     (pinId: string, error: string) => {
       const pin = cloudAnchorPins.find((p) => p.id === pinId);
       console.warn(`[ARCloud] "${pin?.name ?? pinId}" não localizou: ${error}`);
+      // Registra a falha — impede o HUD de ficar preso em "Localizando…"
+      setCloudFailedPins((prev) => new Set(prev).add(pinId));
     },
     [cloudAnchorPins],
   );
@@ -276,8 +291,10 @@ export const ViroARAnchorContainer: FC = () => {
     if (anchorsQuery.isError) return "Erro de conexão";
     const total = anchorsQuery.data?.length ?? 0;
     if (total === 0) return "0 ponto(s)";
-    // Localização visual em andamento (componente ViroARCloudAnchor)
-    if (cloudAnchors.entries.size > 0 && cloudAnchors.entries.size < cloudAnchorPins.length) return "Localizando âncora visual…";
+    // Localização visual: só mostra "Localizando…" enquanto há pins
+    // AINDA EM PROCESSO (nem resolvidos nem falhos)
+    const cloudCompleted = cloudAnchors.entries.size + cloudFailedPins.size;
+    if (cloudCompleted > 0 && cloudCompleted < cloudAnchorPins.length) return "Localizando âncora visual…";
     // Mundo AR ainda não alinhado com o Norte → projeção aguardando Δ
     if (alignment.status === "aligning") return "Alinhando AR…";
     // Pins do servidor existem mas nenhum projetado → calibrando
@@ -299,6 +316,7 @@ export const ViroARAnchorContainer: FC = () => {
     alignment.status,
     cloudAnchors.entries,
     cloudAnchorPins,
+    cloudFailedPins,
   ]);
   const cloudStatus = mutationStatus ?? cloudStatusDerived;
 
