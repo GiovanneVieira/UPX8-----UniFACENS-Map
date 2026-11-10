@@ -3,7 +3,10 @@ import { View, Text, TouchableOpacity, ActivityIndicator, FlatList } from 'react
 import { fetchAnchors, deleteAnchor } from '@/services/api';
 import type { Anchor } from 'shared';
 
-export const ViroARAnchorContainer: FC = () => {
+// Mesma assinatura do container nativo (§ ar.tsx): `focused` só é usada no
+// nativo para congelar o poll geospatial no blur (anti-SIGSEGV §12.12) — no
+// web não há nativo, a prop é aceita e ignorada.
+export const ViroARAnchorContainer: FC<{ focused?: boolean }> = () => {
   const [anchors, setAnchors] = useState<Anchor[]>([]);
   const [loading, setLoading] = useState(false);
 

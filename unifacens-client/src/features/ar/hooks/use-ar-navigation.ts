@@ -8,6 +8,7 @@ import {
   type Anchor,
 } from 'shared';
 import type { GeospatialPose } from '@/components/ar/hooks/use-geospatial-pose';
+import type { NativeAnchorEntry } from '@/components/ar/hooks/use-native-anchors';
 import { requestRoute } from '../services/routing-api';
 
 export type NavInstruction = 'straight' | 'left' | 'right' | 'arrive';
@@ -28,7 +29,7 @@ export interface ARRouteState {
   isLoading: boolean;
   isRerouting: boolean;
   error?: string;
-  mode: 'campus' | 'direct';
+  mode: 'campus' | 'direct' | 'direct-ar';
   totalLengthM: number;
   progressArcM: number;
   offRouteM: number;
@@ -43,6 +44,13 @@ interface UseARNavigationParams {
   geoPoseRef: React.MutableRefObject<GeospatialPose | null>;
   /** Pose SLAM da câmera (para perna viva e distância). */
   cameraPosRef: React.MutableRefObject<[number, number, number]>;
+  /**
+   * Âncoras nativas resolvidas (cloud/geospatial) — quando o destino tem uma
+   * entrada aqui, a rota usa a posição VISUAL (centimétrica, frame SLAM) em
+   * vez do lat/lng GPS do banco (±5-15m indoor) — lição de device 2026-11-10:
+   * "rota de 8.8m para um pin a 1.2m da câmera" porque a rota seguia o GPS.
+   */
+  nativeEntries?: Map<string, NativeAnchorEntry>;
 }
 
 // ── Constantes ───────────────────────────────────────────────────────────────
@@ -228,7 +236,7 @@ function bearingToPath(geom: PathGeometry, u: { e: number; n: number }, arcM: nu
  * - Perna viva nos pés do usuário quando fora da polyline
  * - Reroute ágil em modo direto, conservador no campus
  */
-export function useARNavigation({ geoPoseRef, cameraPosRef }: UseARNavigationParams) {
+export function useARNavigation({ geoPoseRef, cameraPosRef, nativeEntries }: UseARNavigationParams) {
   const [route, setRoute] = useState<ARRouteState>(EMPTY_ROUTE);
   const routeRef = useRef<ARRouteState>(EMPTY_ROUTE);
   const geometryRef = useRef<PathGeometry | null>(null);
@@ -335,9 +343,99 @@ export function useARNavigation({ geoPoseRef, cameraPosRef }: UseARNavigationPar
     }
   }, [installRoute, commitRoute]);
 
+  /**
+   * Instala uma rota "direct-AR": linha reta da posição SLAM da câmera até a
+   * posição VISUAL do destino (cloud anchor resolvida, centimétrica) — 100%
+   * no frame SLAM da sessão, sem GPS, sem backend, sem geospatial. Este é o
+   * modo correto para pins cloud indoor (lição 2026-11-10: rota de 8.8m para
+   * um pin a 1.2m — o GPS best-effort do banco erra a direção).
+   */
+  const installDirectARRoute = useCallback(
+    (anchor: Anchor, targetPos: [number, number, number]) => {
+      const cam = cameraPosRef.current;
+      const dx = targetPos[0] - cam[0];
+      const dz = targetPos[2] - cam[2];
+      const dist = Math.hypot(dx, dz);
+      if (dist < 0.5) {
+        // Já em cima do destino
+        commitRoute({
+          ...EMPTY_ROUTE,
+          active: true,
+          mode: 'direct-ar',
+          targetName: anchor.name,
+          distanceRemaining: 0,
+          instruction: 'arrive',
+          arrived: true,
+        });
+        Vibration.vibrate([0, 120, 80, 160]);
+        console.log('[AR Nav] direct-AR: já está no destino');
+        setTimeout(() => {
+          commitRoute(EMPTY_ROUTE);
+          targetRef.current = null;
+        }, 3000);
+        return;
+      }
+
+      // Direção da câmera → destino (no plano XZ, chevrons no chão)
+      const angleDeg = (-Math.atan2(dx, -dz) * 180) / Math.PI;
+      const instr: NavInstruction =
+        Math.abs(angleDeg) > 45 ? (angleDeg > 0 ? 'right' : 'left') : 'straight';
+      const totalM = Math.max(dist, 1);
+
+      // Chevrons: do usuário até o destino, espaçados 1m (sem janela — rota curta)
+      const chevrons: RouteChevron[] = [];
+      const num = Math.min(Math.ceil(totalM / CHEVRON_SPACING_M), MAX_WINDOW_CHEVRONS);
+      for (let i = 1; i <= num; i++) {
+        const t = (i * CHEVRON_SPACING_M) / totalM;
+        chevrons.push({
+          key: i,
+          pos: [
+            cam[0] + dx * t,
+            FLOOR_Y,
+            cam[2] + dz * t,
+          ] as [number, number, number],
+          angleDeg,
+        });
+      }
+
+      // Guardar a posição AR do destino para updateProgress
+      directARTargetRef.current = targetPos;
+
+      commitRoute({
+        ...EMPTY_ROUTE,
+        active: true,
+        mode: 'direct-ar',
+        targetName: anchor.name,
+        chevrons,
+        distanceRemaining: Math.round(dist),
+        totalLengthM: totalM,
+        instruction: instr,
+        metersToTurn: Math.round(dist),
+        arrived: false,
+      });
+      console.log(
+        `[AR Nav] direct-AR instalada: ${dist.toFixed(1)}m [${instr}] — pin "${anchor.name}" pos=[${targetPos.map((v) => v.toFixed(2)).join(', ')}]`,
+      );
+    },
+    [cameraPosRef, commitRoute],
+  );
+
+  /** Posição AR do destino em modo direct-AR (para updateProgress). */
+  const directARTargetRef = useRef<[number, number, number] | null>(null);
+
   /** Inicia navegação para uma âncora. */
   const startNavigation = useCallback(
     async (anchor: Anchor) => {
+      // ── PRIORIDADE 1: rota direct-AR (visual) ────────────────────────────
+      // Se o destino tem entrada nativa resolvida (cloud anchor), a posição
+      // VISUAL é centimétrica — usar direto, sem GPS/backend (lição 8.8m).
+      const nativeEntry = nativeEntries?.get(anchor.id);
+      if (nativeEntry && nativeEntry.position) {
+        installDirectARRoute(anchor, nativeEntry.position);
+        return;
+      }
+
+      // ── FALLBACK: rota por lat/lng (GPS → backend) ──────────────────────
       const pose = geoPoseRef.current;
       if (!pose) {
         failRoute(anchor.name, 'Aguardando sinal GPS/Geospatial para navegar.');
@@ -383,7 +481,7 @@ export function useARNavigation({ geoPoseRef, cameraPosRef }: UseARNavigationPar
         );
       }
     },
-    [geoPoseRef, installRoute, failRoute, commitRoute],
+    [geoPoseRef, installRoute, failRoute, commitRoute, nativeEntries, installDirectARRoute],
   );
 
   /** Tick de progresso (~1s): desliza janela, perna viva, chegada, reroute. */
@@ -391,6 +489,57 @@ export function useARNavigation({ geoPoseRef, cameraPosRef }: UseARNavigationPar
     (userLat: number, userLng: number) => {
       const current = routeRef.current;
       const geom = geometryRef.current;
+
+      // ── MODO direct-AR: progresso pela posição SLAM (sem geospatial) ──
+      if (current.active && current.mode === 'direct-ar') {
+        const target = directARTargetRef.current;
+        if (!target || current.arrived) return;
+        const cam = cameraPosRef.current;
+        const dx = target[0] - cam[0];
+        const dz = target[2] - cam[2];
+        const dist = Math.hypot(dx, dz);
+
+        if (dist <= ARRIVE_RADIUS_M) {
+          Vibration.vibrate([0, 120, 80, 160]);
+          commitRoute({
+            ...current,
+            chevrons: [],
+            distanceRemaining: 0,
+            instruction: 'arrive',
+            metersToTurn: 0,
+            arrived: true,
+          });
+          console.log('[AR Nav] 🎉 direct-AR: chegou ao destino');
+          setTimeout(() => {
+            commitRoute(EMPTY_ROUTE);
+            directARTargetRef.current = null;
+            targetRef.current = null;
+          }, 4000);
+          return;
+        }
+
+        // Reposiciona chevrons da câmera ao destino (o caminho anda)
+        const angleDeg = (-Math.atan2(dx, -dz) * 180) / Math.PI;
+        const chevrons: RouteChevron[] = [];
+        const num = Math.min(Math.ceil(dist / CHEVRON_SPACING_M), MAX_WINDOW_CHEVRONS);
+        for (let i = 1; i <= num; i++) {
+          const t = (i * CHEVRON_SPACING_M) / dist;
+          chevrons.push({
+            key: i,
+            pos: [cam[0] + dx * t, FLOOR_Y, cam[2] + dz * t] as [number, number, number],
+            angleDeg,
+          });
+        }
+
+        commitRoute({
+          ...current,
+          chevrons,
+          distanceRemaining: Math.round(dist),
+          metersToTurn: Math.round(dist),
+        });
+        return;
+      }
+
       if (!current.active || !geom || current.arrived) return;
 
       lastUserWgsRef.current = { latitude: userLat, longitude: userLng };
@@ -476,7 +625,7 @@ export function useARNavigation({ geoPoseRef, cameraPosRef }: UseARNavigationPar
         void reroute();
       }
     },
-    [reroute, commitRoute, geoPoseRef, cameraPosRef],
+    [reroute, commitRoute, geoPoseRef, cameraPosRef, installDirectARRoute, nativeEntries],
   );
 
   /** Encerra a navegação. */
@@ -487,6 +636,7 @@ export function useARNavigation({ geoPoseRef, cameraPosRef }: UseARNavigationPar
     targetRef.current = null;
     offRouteSinceRef.current = null;
     reroutingRef.current = false;
+    directARTargetRef.current = null;
   }, [commitRoute]);
 
   return { route, startNavigation, stopNavigation, updateProgress };

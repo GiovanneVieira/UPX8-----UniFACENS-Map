@@ -30,6 +30,19 @@ interface UseNativeAnchorsParams {
    * quota: cada criação/resolve conta como request no Cloud Console.
    */
   poseReady: boolean;
+  /**
+   * Tab focada? false NO INSTANTE do blur — congela a criação de âncoras
+   * nativas (createGeospatialAnchor/createTerrainAnchor também são UIBlocks
+   * interop; chamadas na janela do keep-alive de unmount cravam NPE/SIGSEGV
+   * em view destruída — lição de device 2026-11-10, §12.12).
+   */
+  focused: boolean;
+  /**
+   * Tracking ≥ 2 (sessão viva)? Gates de chamada nativa — ===3 matava o
+   * fluxo indoor (tracking LIMITED permanente após remounts; lição
+   * 14:56-14:57, §12.12).
+   */
+  trackingHealthy: boolean;
 }
 
 /** Máximo de âncoras nativas simultâneas. */
@@ -73,10 +86,17 @@ const FATAL_ERROR_PATTERNS = [
  * posição. Falhas/pendências têm retry + timeout; esgotadas as tentativas,
  * o pin permanece no fallback de projeção (estimativa visível).
  */
-export function useNativeAnchors({ serverAnchors, poseReady }: UseNativeAnchorsParams) {
+export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHealthy }: UseNativeAnchorsParams) {
   /** Mapa pinId -> entrada nativa (estado — dispara re-render da projeção). */
   const [entries, setEntries] = useState<Map<string, NativeAnchorEntry>>(new Map());
   const entriesRef = useRef<Map<string, NativeAnchorEntry>>(new Map());
+
+  /** Tab focada (lida pelo interval sem recriá-lo). */
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
+  /** Tracking estável — sinal mais cedo do detach da view (§12.12). */
+  const trackingHealthyRef = useRef(trackingHealthy);
+  trackingHealthyRef.current = trackingHealthy;
 
   /** Navigator (chegado da cena via onNavigatorReady). */
   const navigatorRef = useRef<any>(null);
@@ -194,6 +214,10 @@ const withTimeout = async <T,>(
   useEffect(() => {
     const timer = setInterval(async () => {
       if (!aliveRef.current || !geoEnabledRef.current) return;
+      // Blur da tab OU tracking degradado (sinal do detach): NÃO criar
+      // âncoras nativas — createGeospatialAnchor/createTerrainAnchor são
+      // UIBlocks interop e a view está a caminho da destruição (§12.12).
+      if (!focusedRef.current || !trackingHealthyRef.current) return;
       // Gate de pose: sem pose razoável, criar âncora nativa é request fútil.
       if (!poseReadyRef.current) return;
       const nav = navigatorRef.current;

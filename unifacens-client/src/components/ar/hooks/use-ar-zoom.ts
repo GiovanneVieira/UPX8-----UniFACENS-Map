@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Gesture } from 'react-native-gesture-handler';
-import {
+import { Gesture } from 'react-native-gesture-handler';import {
   useAnimatedStyle,
   useSharedValue,
   withTiming,

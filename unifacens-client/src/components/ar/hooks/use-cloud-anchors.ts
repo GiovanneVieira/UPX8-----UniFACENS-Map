@@ -1,72 +1,66 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { parseLocationTransform } from '@reactvision/react-viro';
 import { type Anchor } from 'shared';
 import type { NativeAnchorEntry } from './use-native-anchors';
 
 /**
- * ── Âncoras de Nuvem VISUAIS (ARCore Cloud Anchors) — precisão centimétrica ──
+ * ── RESOLVE pelo pipeline oficial (lição de auditoria 2026-11-10) ─────────
  *
- * O Geospatial (GPS/VPS) não distingue ambientes internos: a pose indoor é
- * lixo e pins "nascem com relação ao celular". A âncora de nuvem visual
- * resolve pela CÂMERA contra um mapa visual hospedado no servidor do Google
- * — o entorno do SEU ponto vira a cobertura VPS privada.
- *
- * ⚠️ LIÇÃO (2026-11-09): startScan/finishScan são APIs do provider
- * REACTVISION (prefixo rv*, backend próprio) — com provider="arcore" elas
- * falham SEMPRE ("Ancoragem visual indisponível"). O caminho ARCore nativo é:
- *
- * 1. hit-test (retícula) → arScene.createAnchoredNode(hit) → âncora LOCAL
- *    na posição do tap (válida por 30s após o hit — criar logo).
- * 2. Usuário escaneia o entorno do ponto ~15s (features visuais p/ o mapa).
- * 3. navigator.hostCloudAnchor(anchorId, ttl=1) → cloudAnchorId no Google.
- * 4. Calibração: resolveCloudAnchor na MESMA sessão → posição mundial da
- *    âncora → frameOffset = pinPos − anchorPos (o pin pode ter sido ajustado
- *    ao longo do raio depois do hit) → PATCH no banco.
- * 5. RETORNO: resolveNearby (1 por vez, SIFT ~30s) → pin = anchorPos +
- *    R(yaw)·frameOffset → entrada de PRIORIDADE MÁXIMA na projeção.
- *
- * TTL: via API key = 24h (limite do ARCore). Para 365 dias: autorização
- * keyless (JWT por service account) OU renovação via Management API —
- * roadmap no AGENTS.MD.
+ * O hosting migrou para use-anchor-scan (startScan/finishScan com coverage
+ * gate). Este hook cuida do RETORNO:
+ * - resolveCloudAnchor + poll getCloudAnchorStatus() @1Hz (progress/message
+ *   para o HUD — a promise é silenciosa por design da doc VPS);
+ * - re-tentativa com backoff (a doc manda guiar o usuário: "keep standing
+ *   still" / "move closer" — um único tiro por sessão perde resolves);
+ * - rvTrackCloudAnchorResolution() após cada tentativa (best practice da doc:
+ *   "report every resolve");
+ * - pins cloud NÃO localizados ficam no estado honesto "pendingCount" —
+ *   JAMAIS caem no fallback GPS (lição E5: o pin "pulando" entre cravado e
+ *   GPS destrói a confiança).
  */
 
 /**
  * Prefixos de IDs sintéticos que NÃO são cloud anchors reais.
- * ⚠️ O ARCore gera cloud anchor IDs começando com "ua-" (formato
- * ua-<hex-uuid>) — NÃO filtrar por "ua-" genérico! Os seeds de dev
- * seguem o padrão "ua-facens-demo-*".
+ * ⚠️ O ARCore gera cloud anchor IDs começando com "ua-" — NÃO filtrar por
+ * "ua-" genérico! Seeds de dev seguem "ua-facens-demo-*".
  */
 const SYNTHETIC_ID_PREFIXES = ['coord-', 'ua-facens-'];
-/** TTL do host em dias (API key = máx 1). */
-const HOST_TTL_DAYS = 1;
-/** Timeout JS por host/resolve. */
-const OP_TIMEOUT_MS = 75_000;
-/** Janela de escaneio guiado antes de hospedar (ms). */
-export const SCAN_GUIDE_MS = 15_000;
+/** Timeout JS por tentativa de resolve (SDK dá timeout interno ~30s). */
+const OP_TIMEOUT_MS = 45_000;
+/**
+ * Backoff de re-tentativa por pin (ms) — SEMPRE acima da vida nativa do
+ * resolve (~30s): backoffs curtos disparavam "A resolve for this anchor is
+ * already in progress (2ms!)" em cima do resolve anterior ainda vivo
+ * (lição de device 2026-11-10 noite, logs 18:46-18:47).
+ */
+const RETRY_BACKOFF_MS = [60_000, 90_000, 120_000];
+/** "already in progress": re-checar após este intervalo (sem penalizar). */
+const IN_PROGRESS_RECHECK_MS = 12_000;
+/** Progresso HUD durante o resolve (doc: active/progress/message). */
+export interface ResolveHudStatus {
+  active: boolean;
+  progress: number;
+  message: string;
+  /** Início da tentativa (Date.now()) — HUD escala a dica após 25s. */
+  startedAt: number;
+}
 
-/** Um cloud anchor é real (hospedado no Google) e não sintético local? */
+/** Um cloud anchor é real (hospedado no provider) e não sintético local? */
 export function isRealCloudAnchorId(id: string | null | undefined): boolean {
   if (!id) return false;
   return !SYNTHETIC_ID_PREFIXES.some((p) => id.startsWith(p));
 }
 
-/** Rotaciona offset no plano XZ por yaw (graus). */
-export function rotateY(
-  offset: [number, number, number],
-  yawDeg: number,
-): [number, number, number] {
-  const rad = (yawDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  return [
-    offset[0] * cos - offset[2] * sin,
-    offset[1],
-    offset[0] * sin + offset[2] * cos,
-  ];
-}
-
-interface HostResultShape {
+/** Shape do resultado oficial do sceneNavigator.resolveCloudAnchor (3.1.x). */
+interface ResolveResultShape {
   success?: boolean;
-  cloudAnchorId?: string;
+  anchor?: {
+    anchorId?: string;
+    cloudAnchorId?: string;
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+    state?: string;
+  };
   error?: string;
   state?: string;
 }
@@ -80,31 +74,27 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-export type CloudHostingState =
-  | { phase: 'idle' }
-  | { phase: 'scanning'; startedAt: number }
-  | { phase: 'hosting' }
-  | { phase: 'calibrating' }
-  | { phase: 'done'; cloudAnchorId: string }
-  | { phase: 'failed'; error: string };
-
 export function useCloudAnchors({
   serverAnchors,
   trackingState,
+  focused = true,
 }: {
   serverAnchors: Anchor[] | undefined;
   trackingState: number;
+  /** Tab focada? false no blur — congela resolves nativos (§12.12). */
+  focused?: boolean;
 }) {
-  /** Mapa pinId -> entrada resolvida (mesma forma da âncora nativa). */
+  /** Mapa pinId -> entrada resolvida (posição de sessão — prioridade máx). */
   const [entries, setEntries] = useState<Map<string, NativeAnchorEntry>>(new Map());
   const entriesRef = useRef<Map<string, NativeAnchorEntry>>(new Map());
   const navigatorRef = useRef<any>(null);
   const aliveRef = useRef(true);
-  /** Âncora LOCAL criada do hit-test do modal (aguardando host pós-save). */
-  const pendingLocalAnchorRef = useRef<string | null>(null);
-  /** Posição onde o hit-test acertou (posição da âncora local). */
-  const pendingHitPosRef = useRef<[number, number, number] | null>(null);
-  const [hosting, setHosting] = useState<CloudHostingState>({ phase: 'idle' });
+  const focusedRef = useRef(focused);
+  focusedRef.current = focused;
+  /** HUD: progresso do resolve em curso. */
+  const [resolveHud, setResolveHud] = useState<ResolveHudStatus | null>(null);
+  /** Pins cloud ainda não localizados (estado honesto p/ HUD/projeção). */
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     aliveRef.current = true;
@@ -122,189 +112,275 @@ export function useCloudAnchors({
     navigatorRef.current = nav;
   }, []);
 
+  /**
+   * Pins com entry PROVISÓRIA (posição do locationTransform do finishScan —
+   * o pin aparece NA HORA para quem escaneou, padrão do exemplo oficial
+   * vps-lite-test: "its own locationTransform as a stand-in for a resolved
+   * anchor's transform"). O loop de resolve continua tentando: quando o
+   * resolve confirma, a entry é substituída pela posição definitiva (a
+   * transição suave da projeção interpola — sem pulo).
+   */
+  const provisionalRef = useRef<Set<string>>(new Set());
+
   const setEntry = useCallback((entry: NativeAnchorEntry) => {
     entriesRef.current.set(entry.pinId, entry);
     setEntries(new Map(entriesRef.current));
   }, []);
 
+  /** Entry provisória (visível já) — continua elegível ao resolve. */
+  const setProvisionalEntry = useCallback(
+    (entry: NativeAnchorEntry) => {
+      provisionalRef.current.add(entry.pinId);
+      entriesRef.current.set(entry.pinId, entry);
+      setEntries(new Map(entriesRef.current));
+    },
+    [],
+  );
+
   /** Remove entrada local (exclusão de pin). */
   const removeLocal = useCallback((pinId: string) => {
     entriesRef.current.delete(pinId);
     setEntries(new Map(entriesRef.current));
+    setPendingIds((prev) => {
+      if (!prev.has(pinId)) return prev;
+      const next = new Set(prev);
+      next.delete(pinId);
+      return next;
+    });
   }, []);
 
-  // ── FASE 1: âncora local a partir do hit-test do modal ───────────────────
-  /** Registra a âncora local criada pelo container (createAnchoredNode). */
-  const setPendingLocalAnchor = useCallback((anchorId: string | null, hitPos?: [number, number, number]) => {
-    pendingLocalAnchorRef.current = anchorId;
-    pendingHitPosRef.current = hitPos ?? null;
-  }, []);
+  /** Recalcula o conjunto de pendentes (pins cloud sem entrada). */
+  useEffect(() => {
+    if (!serverAnchors) return;
+    const next = new Set<string>();
+    for (const a of serverAnchors) {
+      if (isRealCloudAnchorId(a.cloudAnchorId) && !entriesRef.current.has(a.id)) {
+        next.add(a.id);
+      }
+    }
+    setPendingIds((prev) => {
+      if (prev.size === next.size && [...next].every((id) => prev.has(id))) return prev;
+      return next;
+    });
+  }, [serverAnchors, entries]);
 
-  /** Existe âncora local pronta para hospedar? */
-  const hasPendingLocalAnchor = useCallback(
-    () => pendingLocalAnchorRef.current !== null,
-    [],
-  );
-
-  /** Inicia a janela de escaneio guiado (fase 2 — features visuais). */
-  const beginScanGuide = useCallback(() => {
-    setHosting({ phase: 'scanning', startedAt: Date.now() });
-  }, []);
-
-  // ── FASE 3: hospeda a âncora local + calibra o offset do pin ─────────────
   /**
-   * Hospeda a âncora local (hostCloudAnchor — caminho ARCore nativo) e
-   * calibra o offset do pin (resolve na MESMA sessão). Retorna os dados para
-   * PATCH via callback, ou falha (pin segue pelo caminho geospatial).
+   * Uma tentativa completa de resolve: promise silenciosa + poll de status
+   * @1Hz (progresso real p/ HUD — doc VPS) + report de analytics.
    */
-  const hostPendingAnchor = useCallback(
-    async (
-      pinId: string,
-      pinLocalPos: [number, number, number],
-      onHosted: (data: { cloudAnchorId: string; frameOffset: [number, number, number] }) => void,
-    ): Promise<void> => {
+  const attemptResolve = useCallback(
+    async (anchor: Anchor): Promise<boolean> => {
       const nav = navigatorRef.current;
-      const localAnchorId = pendingLocalAnchorRef.current;
-      const anchorLocalPos = pendingHitPosRef.current;
-      pendingLocalAnchorRef.current = null;
-      pendingHitPosRef.current = null;
-      if (!localAnchorId) {
-        setHosting({ phase: 'failed', error: 'sem âncora local do hit-test' });
-        return;
-      }
-      if (!anchorLocalPos) {
-        setHosting({ phase: 'failed', error: 'sem posição do hit para calibrar offset' });
-        return;
-      }
-      if (!nav?.hostCloudAnchor || !nav?.resolveCloudAnchor) {
-        setHosting({ phase: 'failed', error: 'cloud anchors não disponíveis nesta build' });
-        return;
-      }
-      try {
-        setHosting({ phase: 'hosting' });
-        const hostResult = (await withTimeout(
-          nav.hostCloudAnchor(localAnchorId, HOST_TTL_DAYS) as Promise<HostResultShape>,
-          OP_TIMEOUT_MS,
-          'hostCloudAnchor',
-        )) as HostResultShape;
-        if (!hostResult?.success || !hostResult.cloudAnchorId) {
-          throw new Error(
-            `${hostResult?.error ?? hostResult?.state ?? 'sem detalhe'}`,
-          );
+      if (!nav?.resolveCloudAnchor) return false;
+
+      const startedAt = Date.now();
+      let settled = false;
+      const resolvePromise = (async () => {
+        try {
+          return (await nav.resolveCloudAnchor(anchor.cloudAnchorId as string)) as ResolveResultShape;
+        } finally {
+          settled = true;
         }
-        const cloudAnchorId = hostResult.cloudAnchorId;
+      })();
 
-        setHosting({ phase: 'calibrating' });
+      // Poll paralelo do status (a promise é silenciosa — doc VPS).
+      const statusTimer = setInterval(async () => {
+        if (settled || !aliveRef.current) return;
+        try {
+          if (!nav.getCloudAnchorStatus) return;
+          const s = (await withTimeout(
+            nav.getCloudAnchorStatus() as Promise<ResolveHudStatus | null>,
+            5000,
+            'getCloudAnchorStatus',
+          )) as ResolveHudStatus | null;
+          if (s && !settled && aliveRef.current) {
+            setResolveHud({
+              active: s.active,
+              progress: s.progress ?? 0,
+              message: s.message ?? '',
+              startedAt,
+            });
+          }
+        } catch {
+          // poll best-effort
+        }
+      }, 1000);
 
-        // ── CALIBRAÇÃO CORRETA (sem resolveCloudAnchor = ECEF!) ────────
-        // A âncora local foi criada NO HIT POSITION (createAnchoredNode).
-        // O frameOffset é simplesmente a diferença entre onde o pin está
-        // (após ajustes de distância) e onde o hit aconteceu:
-        //   frameOffset = pinPos − anchorHitPos (ambos em SLAM da sessão)
-        // NÃO usar resolveCloudAnchor para calibrar — retorna ECEF (~6M m).
-        //
-        // O componente ViroARCloudAnchor (na cena) resolverá o frame
-        // corretamente em coordenadas de sessão; o offset que gravamos
-        // aqui é o deslocamento físico do pin em relação à âncora.
-        const frameOffset: [number, number, number] = [
-          pinLocalPos[0] - anchorLocalPos[0],
-          pinLocalPos[1] - anchorLocalPos[1],
-          pinLocalPos[2] - anchorLocalPos[2],
-        ];
-
-        setEntry({ pinId, nativeAnchorId: cloudAnchorId, position: pinLocalPos });
-        onHosted({ cloudAnchorId, frameOffset });
-        setHosting({ phase: 'done', cloudAnchorId });
-        console.log(
-          `[ARCloud] "${pinId}" hospedada (${cloudAnchorId.slice(0, 12)}…) — offset do frame [${frameOffset.map((v) => v.toFixed(2)).join(', ')}]`,
-        );
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn('[ARCloud] hospedagem falhou:', message);
-        setHosting({ phase: 'failed', error: message });
+      let result: ResolveResultShape | null = null;
+      try {
+        result = (await withTimeout(resolvePromise, OP_TIMEOUT_MS, 'resolveCloudAnchor')) as ResolveResultShape;
+      } catch {
+        result = null;
+      } finally {
+        clearInterval(statusTimer);
       }
+
+      const ok = Boolean(result?.success && result.anchor?.position);
+      // Best practice da doc: "report every resolve". ⚠️ Retorna PROMISE —
+      // try/catch síncrono não pega a rejeição (lição de device: uncaught
+      // promise no console); capturar na própria promise.
+      try {
+        const tracked = nav.rvTrackCloudAnchorResolution?.(
+          anchor.cloudAnchorId,
+          Date.now() - startedAt,
+          ok,
+        ) as Promise<unknown> | undefined;
+        if (tracked && typeof tracked.catch === 'function') {
+          tracked.catch(() => {
+            // analytics best-effort
+          });
+        }
+      } catch {
+        // analytics best-effort
+      }
+      if (!aliveRef.current) return false;
+      setResolveHud(null);
+
+      if (!ok || !result?.anchor) {
+        const message = String(result?.error ?? result?.state ?? 'sem resposta');
+        // "already in progress": resolve nativo anterior ainda vivo — marca
+        // para o loop AGUARDAR (re-check) em vez de contar como falha.
+        if (message.toLowerCase().includes('already in progress')) {
+          inProgressRef.current.add(anchor.id);
+        } else {
+          inProgressRef.current.delete(anchor.id);
+        }
+        console.warn(
+          `[ARCloud] "${anchor.name}" resolve: ${message} (tentativa ${Date.now() - startedAt}ms)`,
+        );
+        return false;
+      }
+      inProgressRef.current.delete(anchor.id);
+
+      // Posição: `.position` direto; fallback canônico `resolvedTransform`
+      // (CSV 16 floats column-major — [12],[13],[14] = translação; contrato
+      // do ViroLocationFrame, usado pelo exemplo vps-lite-test).
+      let anchorPos = result.anchor.position as [number, number, number] | undefined;
+      if (!anchorPos) {
+        const rt = (result.anchor as { resolvedTransform?: string | null }).resolvedTransform;
+        const t = parseLocationTransform(rt ?? undefined);
+        if (t) anchorPos = [t[12], t[13], t[14]];
+      }
+      if (!anchorPos) {
+        console.warn(`[ARCloud] "${anchor.name}" resolve OK sem posição — ignorada`);
+        return false;
+      }
+
+      // frameOffset aditivo (pins novos = [0,0,0] por construção do scan;
+      // pins antigos mantêm compat). Sem rotação: ARCore/RV alinham a pose da
+      // âncora entre sessões (R_B·R_A⁻¹ ≈ I).
+      const offset = (Array.isArray(anchor.frameOffset) ? anchor.frameOffset : [0, 0, 0]) as [
+        number,
+        number,
+        number,
+      ];
+      const pinPos: [number, number, number] = [
+        anchorPos[0] + offset[0],
+        anchorPos[1] + offset[1],
+        anchorPos[2] + offset[2],
+      ];
+
+      // Guard de datum (§15.7.2): coords de sessão são metros; ECEF vaza em km.
+      const distFromOrigin = Math.hypot(pinPos[0], pinPos[1], pinPos[2]);
+      if (distFromOrigin > 1000 || !Number.isFinite(distFromOrigin)) {
+        console.warn(
+          `[ARCloud] "${anchor.name}" posição fora do range de sessão (${distFromOrigin.toFixed(0)}m) — rejeitada`,
+        );
+        return false;
+      }
+
+      provisionalRef.current.delete(anchor.id);
+      setEntry({ pinId: anchor.id, nativeAnchorId: anchor.cloudAnchorId as string, position: pinPos });
+      console.log(
+        `[ARCloud] "${anchor.name}" RESOLVIDA — pos=[${pinPos.map((v) => v.toFixed(2)).join(', ')}]`,
+      );
+      return true;
     },
     [setEntry],
   );
 
-  // ── FASE 5: RESOLVE via MÓDULO NATIVO (ARCore SDK direto) ──────────────
-  // O ViroSharedFrame/resolveCloudAnchor do Viro 3.0.3 tem um bug onde a
-  // promise pendura para sempre em resolves cross-session. O módulo nativo
-  // CloudAnchorModule.kt chama Session.resolveAnchorOnCloudAsync() do ARCore
-  // SDK diretamente e retorna posições em COORDENADAS DA SESSÃO AR.
-  useEffect(() => {
-    if (!serverAnchors || trackingState !== 3) return;
+  // ── Loop de resolve com re-tentativa (backoff) e gates §12.12 ────────────
+  const attemptsRef = useRef<Map<string, number>>(new Map());
+  const retryAtRef = useRef<Map<string, number>>(new Map());
+  /** Pins com resolve NATIVO em curso ("already in progress") — aguardar. */
+  const inProgressRef = useRef<Set<string>>(new Set());
 
-    const candidates = serverAnchors.filter(
-      (a) =>
-        isRealCloudAnchorId(a.cloudAnchorId) &&
-        Array.isArray(a.frameOffset) &&
-        !entriesRef.current.has(a.id),
-    );
+  useEffect(() => {
+    if (!serverAnchors || trackingState < 2 || !focusedRef.current) return;
+
+    // Candidatos: cloud real SEM entry definitiva OU com entry PROVISÓRIA
+    // (posição do locationTransform — o resolve a confirma). Ordenados por
+    // createdAt DESC: o pin recém-hospedado resolve primeiro (features do
+    // scan ainda na memória do SDK = match quase imediato).
+    const candidates = serverAnchors
+      .filter(
+        (a) =>
+          isRealCloudAnchorId(a.cloudAnchorId) &&
+          (!entriesRef.current.has(a.id) || provisionalRef.current.has(a.id)),
+      )
+      .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
     if (candidates.length === 0) return;
 
-    const { resolveCloudAnchorNative, quaternionToYawDeg } = require('../services/cloud-anchor-native');
     let alive = true;
-
     (async () => {
-      // Registra a sessão ARCore (a primeira vez — depois fica em cache)
-      const registered = await require('../services/cloud-anchor-native').registerARSession();
-      if (!registered || !alive) return;
-
-      // Resolve um por vez (SIFT matching é intensivo)
       for (const anchor of candidates) {
-        if (!alive) break;
-        try {
-          console.log(`[ARCloud] resolvendo "${anchor.name}" via módulo nativo…`);
-          const result = await resolveCloudAnchorNative(anchor.cloudAnchorId);
-          if (!alive || !result) continue;
+        if (!alive || !focusedRef.current) break;
+        const now = Date.now();
+        const retryAt = retryAtRef.current.get(anchor.id) ?? 0;
+        if (now < retryAt) continue;
 
-          // Aplica o frameOffset (offset do pin em relação à âncora)
-          const offset = anchor.frameOffset as [number, number, number];
-          const yawDeg = quaternionToYawDeg(result);
-          const rad = (yawDeg * Math.PI) / 180;
-          const cos = Math.cos(rad);
-          const sin = Math.sin(rad);
-          const pinPos: [number, number, number] = [
-            result.x + (offset[0] * cos - offset[2] * sin),
-            result.y + offset[1],
-            result.z + (offset[0] * sin + offset[2] * cos),
-          ];
+        const nav = navigatorRef.current;
+        if (!nav?.resolveCloudAnchor) break;
 
-          // Validação: coordenadas de sessão são metros (max ~±1000)
-          const distFromOrigin = Math.hypot(pinPos[0], pinPos[1], pinPos[2]);
-          if (distFromOrigin > 1000 || !Number.isFinite(distFromOrigin)) {
-            console.warn(`[ARCloud] "${anchor.name}" posição absurda (${distFromOrigin.toFixed(0)}m) — rejeitada`);
+        const ok = await attemptResolve(anchor);
+        if (!alive) return;
+        if (!ok) {
+          // "already in progress" = há um resolve NATIVO em curso (da
+          // tentativa anterior) — NÃO é falha: re-checar sem penalizar.
+          const inProgress = inProgressRef.current.has(anchor.id);
+          if (inProgress) {
+            retryAtRef.current.set(anchor.id, Date.now() + IN_PROGRESS_RECHECK_MS);
+            console.log(`[ARCloud] "${anchor.name}" resolve em curso no nativo — re-check em ${IN_PROGRESS_RECHECK_MS / 1000}s`);
             continue;
           }
-
-          setEntry({ pinId: anchor.id, nativeAnchorId: anchor.cloudAnchorId, position: pinPos });
+          const attempts = (attemptsRef.current.get(anchor.id) ?? 0) + 1;
+          attemptsRef.current.set(anchor.id, attempts);
+          const backoff = RETRY_BACKOFF_MS[Math.min(attempts - 1, RETRY_BACKOFF_MS.length - 1)];
+          retryAtRef.current.set(anchor.id, Date.now() + backoff);
           console.log(
-            `[ARCloud] "${anchor.name}" RESOLVIDA via nativo — pos=[${pinPos.map((v) => v.toFixed(2)).join(', ')}] yaw=${yawDeg.toFixed(1)}°`,
+            `[ARCloud] "${anchor.name}" re-tentativa em ${backoff / 1000}s (${attempts}ª falha)`,
           );
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.warn(`[ARCloud] "${anchor.name}" resolve nativo falhou: ${message}`);
+        } else {
+          attemptsRef.current.delete(anchor.id);
+          retryAtRef.current.delete(anchor.id);
         }
       }
     })();
 
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverAnchors, trackingState, setEntry]);
+  }, [serverAnchors, trackingState, focused, entries, attemptResolve]);
+
+  /** Re-tenta resolves que falharam (refresh explícito do HUD). */
+  const retryFailed = useCallback(() => {
+    attemptsRef.current.clear();
+    retryAtRef.current.clear();
+  }, []);
 
   return {
     /** Mapa pinId -> entrada resolvida visualmente (prioridade máxima). */
     entries,
-    /** Estado do fluxo de hospedagem (UI do modal de criação). */
-    hosting,
+    /** HUD: progresso do resolve em curso (active/progress/message). */
+    resolveHud,
+    /** Pins cloud ainda não localizados (estado honesto — nunca fallback GPS). */
+    pendingIds,
     handleNavigatorReady,
-    setPendingLocalAnchor,
-    hasPendingLocalAnchor,
-    beginScanGuide,
-    hostPendingAnchor,
     removeLocal,
-    /** Registra uma entrada resolvida (alimentado pelo módulo nativo). */
-    setEntry,
+    /** Entry PROVISÓRIA (locationTransform do finishScan) — visível já,
+     *  confirmada pelo resolve em seguida. */
+    setProvisionalEntry,
+    retryFailed,
   };
 }

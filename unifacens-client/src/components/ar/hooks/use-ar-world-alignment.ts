@@ -64,7 +64,13 @@ function robustCircularMean(samples: DeltaSample[]): { value: number; spreadDeg:
   const center = (((Math.atan2(sinSum, cosSum) * 180) / Math.PI) + 360) % 360;
 
   const survivors = samples.filter((s) => circularDev(s.delta, center) <= OUTLIER_REJECT_DEG);
-  if (survivors.length < Math.min(MIN_ROBUST_SAMPLES, samples.length)) return null;
+  // Mínimo de MIN_ROBUST_SAMPLES sobreviventes SEMPRE — lição de device
+  // 2026-11-10 (sessões 14:35-14:41): o min(3, window.length) antigo deixava
+  // a 1ª pose da sessão travar o Δ SOZINHA em 0.0° com headingAcc fake ±0.0°
+  // (placeholder GPS-only) — um Δ errado que difere do real em dezenas de
+  // graus (recalibrações posteriores: 21°, 234°...). Sem 3 amostras
+  // concordantes, não há estimativa.
+  if (survivors.length < MIN_ROBUST_SAMPLES) return null;
 
   const sSin = survivors.reduce((a, s) => a + Math.sin((s.delta * Math.PI) / 180), 0);
   const sCos = survivors.reduce((a, s) => a + Math.cos((s.delta * Math.PI) / 180), 0);
@@ -146,16 +152,28 @@ export function useARWorldAlignment(
         );
         return;
       }
-      if (now - (firstPoseAtRef.current ?? now) >= BEST_EFFORT_AFTER_MS && robust) {
+      if (now - (firstPoseAtRef.current ?? now) >= BEST_EFFORT_AFTER_MS) {
         // Best-effort: melhor Δ aproximado que mundo girado aleatório.
-        deltaRef.current = robust.value;
-        lockedAccuracyRef.current = acc;
-        refineUntilRef.current = now + REFINE_WINDOW_MS;
-        setDelta(robust.value);
-        setStatus('locked');
-        console.warn(
-          `[ARAlign] Δ best-effort: ${robust.value.toFixed(1)}° (spread ${robust.spreadDeg.toFixed(1)}°, ±${acc.toFixed(1)}°) — refinando por ${REFINE_WINDOW_MS / 1000}s`,
-        );
+        // Lote espalhado demais (indoor GPS-only oscila >15° entre amostras,
+        // robust=null): usa média circular SIMPLES da janela — um Δ
+        // aproximado renderiza pins translúcidos (a incerteza já é sinalizada
+        // pelo selo ±Xm do fallback; melhor que tela vazia por Δ eterno).
+        const sinS = window.reduce((a, s) => a + Math.sin((s.delta * Math.PI) / 180), 0);
+        const cosS = window.reduce((a, s) => a + Math.cos((s.delta * Math.PI) / 180), 0);
+        const simpleMean = window.length >= 2
+          ? { value: (((Math.atan2(sinS, cosS) * 180) / Math.PI) + 360) % 360, spreadDeg: Number.POSITIVE_INFINITY }
+          : null;
+        const best = robust ?? simpleMean;
+        if (best) {
+          deltaRef.current = best.value;
+          lockedAccuracyRef.current = acc;
+          refineUntilRef.current = now + REFINE_WINDOW_MS;
+          setDelta(best.value);
+          setStatus('locked');
+          console.warn(
+            `[ARAlign] Δ best-effort: ${best.value.toFixed(1)}° (spread ${robust ? robust.spreadDeg.toFixed(1) : 'alta'}, ±${acc.toFixed(1)}°) — refinando por ${REFINE_WINDOW_MS / 1000}s`,
+          );
+        }
       }
       return;
     }

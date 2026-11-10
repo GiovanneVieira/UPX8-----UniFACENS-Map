@@ -4,29 +4,34 @@ import { useFocusEffect } from "expo-router";
 import ViroARAnchorContainer from "@/components/ar/ViroARAnchorContainer";
 
 /**
- * Tela AR — DESMONTA o container quando a tab perde foco.
+ * Tela AR — DESMONTA o container no blur IMEDIATAMENTE.
  *
- * Motivo: o Tab Navigator mantém a tela montada mesmo em outra tab. A view
- * nativa (GLSurfaceView) é removida da hierarquia, mas os intervals JS
- * (pose poll, âncoras nativas, retry geospatial) continuam chamando o C++
- * morto → SIGSEGV em libviro_renderer.so (nativeGetCameraGeospatialPose etc).
- *
- * Com useFocusEffect: sair da tab → container unmounta → intervals limpam →
- * cena nativa destruída com segurança. Voltar à tab → remonta fresca.
+ * ⚠️ EVOLUÇÃO DA LIÇÃO (2026-11-10, tombstones 15:13/15:20): o keep-alive de
+ * 1.2s PIORAVA o crash — o detach NATIVO (troca de tab) destrói a cena na
+ * hora, mas o gate `focused` NÃO propaga à cena (viroAppProps não re-renderiza
+ * a cena, mesmo mecanismo de "navigator não reconstrói closures" §11), então
+ * o poll seguia 1Hz por +1.2s atirando UIBlocks em cena morta. O unmount
+ * IMEDIATO no blur mata todos os intervals no commit seguinte (cleanup do
+ * React) — a menor janela possível por JS. Resíduo (~janela detach→cleanup):
+ * bug upstream (null check ausente no nativo do Viro 3.1.1).
  */
 export default function ARScreen() {
-  const [isFocused, setIsFocused] = useState(false);
+  const [focused, setIsFocused] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
+      console.log("[ARTab] focus — sessão AR montada");
       setIsFocused(true);
-      return () => setIsFocused(false);
+      return () => {
+        console.log("[ARTab] blur — unmount imediato (mata intervals)");
+        setIsFocused(false);
+      };
     }, []),
   );
 
   return (
     <View style={styles.container}>
-      {isFocused ? <ViroARAnchorContainer /> : null}
+      {focused ? <ViroARAnchorContainer /> : null}
     </View>
   );
 }

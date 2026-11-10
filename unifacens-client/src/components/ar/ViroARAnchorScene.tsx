@@ -127,6 +127,13 @@ export interface ViroARAnchorSceneProps {
   onMarkerFound?: (anchorMap: any) => void;
   onMarkerUpdated?: (anchorMap: any) => void;
   onMarkerRemoved?: () => void;
+  /** Tab focada? false NO INSTANTE do blur — congela chamadas nativas
+   *  (poll geospatial/retries) enquanto o keep-alive do unmount drena os
+   *  UIBlocks interop pendentes (anti-SIGSEGV, §12.12). */
+  focused?: boolean;
+  /** Tracking ≥ 2 (sessão viva) — gates de CHAMADA NATIVA (§12.12); não
+   *  confundir com trackingHealthy (===3) que oculta CONTEÚDO. */
+  trackingActive?: boolean;
   sceneNavigator?: any;
   arSceneNavigator?: any;
 }
@@ -170,11 +177,26 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const geoPoseRef = useRef(viroProps.onGeospatialPose);
   geoStatusRef.current = viroProps.onGeospatialStatus;
   geoPoseRef.current = viroProps.onGeospatialPose;
+  /** Tab focada (false no blur imediato) — congela o poll/retry nativo. */
+  const focusedRef = useRef(viroProps.focused !== false);
+  focusedRef.current = viroProps.focused !== false;
+  /**
+   * Tracking ≥ 2 (sessão viva) — gates de chamada nativa (§12.12), REBAIXADO
+   * de ===3 (lição 14:56-14:57: a cena remonta a cada reentrada e o tracking
+   * oscila 3→1→3; indoor pode ficar em 2 permanente — ===3 matava o poll para
+   * sempre => pose stale => 0 pins). O detach NÃO emite tracking degradado
+   * (tombstone 14:48 sem sinal prévio), então ===3 não protegia o crash de
+   * qualquer forma. ≥2 bloqueia só o estado 1 (mundo morto).
+   */
+  const trackingActiveRef = useRef(viroProps.trackingActive !== false);
+  trackingActiveRef.current = viroProps.trackingActive !== false;
   const geoEnabledRef = useRef(false);
   const navigatorReadyRef = useRef(viroProps.onNavigatorReady);
   navigatorReadyRef.current = viroProps.onNavigatorReady;
   /** Guarda de mount: SIGSEGV se chamarmos nativo após unmount da cena. */
   const sceneAliveRef = useRef(true);
+  /** Contador da fase lenta do poll adaptativo (2 de cada 3 ticks são pulados). */
+  const slowTickRef = useRef(0);
 
   useEffect(() => {
     sceneAliveRef.current = true; // mount
@@ -221,7 +243,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
     let isTrying = false; // guarda local anti-reentrada
 
     const tryEnable = async (): Promise<void> => {
-      if (!sceneAliveRef.current) return; // cena morta → não tocar no nativo
+      if (!sceneAliveRef.current || !focusedRef.current) return; // cena morta/tab blur → não tocar no nativo
       attempts++;
       try {
         const support = (await withTimeout(
@@ -275,8 +297,42 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
       }
     }, RETRY_INTERVAL_MS);
 
+    // Poll 1Hz da pose. poseInFlight: nunca sobrepor chamadas — cada
+    // getCameraGeospatialPose vira um UIBlock interop na fila nativa;
+    // acumular chamadas amplia a janela do race de unmount (SIGSEGV em
+    // nativeGetCameraGeospatialPose, lição 2026-11-10).
+    // ⚠️ WATCHDOG (lição 14:35-14:41): o módulo nativo é one-op-por-vez e a
+    // 2ª chamada pode PENDURAR para sempre (mesma doença do resolveCloudAnchor
+    // "already in progress") — sem watchdog, poseInFlight trava em true, o
+    // poll morre, poseTick congela e o recompute nunca mais roda (pins só
+    // apareciam via refresh). 8s sem resposta = promise perdida, segue.
+    const POSE_CALL_TIMEOUT_MS = 8000;
+    /**
+     * Poll ADAPTATIVO (lição 15:13/15:20 — cada chamada é uma roleta de
+     * UIBlock na janela do detach): 1Hz nos primeiros 30s (Δ travar + pins
+     * nascerem + primeira âncora nativa), depois 2.5s — a pose madura só
+     * alimenta distância de label/re-ancoragem; 60% menos exposição.
+     */
+    const FAST_PHASE_MS = 30_000;
+    const pollStartedAt = Date.now();
+    let poseInFlight = false;
+    let poseCallStartedAt = 0;
     const timer = setInterval(async () => {
       if (!sceneAliveRef.current || !geoEnabledRef.current) return;
+      // Blur da tab OU tracking degradado (sinal do detach!): NÃO chamar o
+      // nativo — cada chamada vira UIBlock interop que pode executar após o
+      // destroy (SIGSEGV §12.12).
+      if (!focusedRef.current || !trackingActiveRef.current) return;
+      // Fase lenta: pós-30s, só um tick a cada 2.5 janelas de 1s do interval.
+      if (Date.now() - pollStartedAt > FAST_PHASE_MS && (slowTickRef.current = (slowTickRef.current + 1) % 3) !== 0) return;
+      if (poseInFlight) {
+        if (Date.now() - poseCallStartedAt < POSE_CALL_TIMEOUT_MS) return;
+        console.warn('[ARGeo] pose pendurada >8s — chamada perdida, renovando poll');
+        poseInFlight = false; // watchdog: a promise anterior está morta
+      }
+      if (!nav?.getCameraGeospatialPose) return;
+      poseInFlight = true;
+      poseCallStartedAt = Date.now();
       try {
         const result = await nav.getCameraGeospatialPose();
         if (result?.success && result.pose) {
@@ -284,6 +340,8 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         }
       } catch {
         // poll silencioso: erros persistentes aparecem no status/habilitação
+      } finally {
+        poseInFlight = false;
       }
     }, 1000);
 
@@ -568,8 +626,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Arial',
     fontSize: 24,
     color: '#FCD34D',
-    textAlignVertical: 'center',
-    textAlign: 'center',
+    textAlignVertical: 'center',    textAlign: 'center',
     fontWeight: 'bold',
   },
 });

@@ -3,22 +3,33 @@ import { StyleSheet, Text, View } from 'react-native';
 
 interface ARReticleProps {
   zoomLevel: number;
-  /** Superfície detectável no centro? Verde = pode criar, vermelho = não. */
-  surfaceAvailable?: boolean;
+  /**
+   * Estado de tracking SLAM (1 indisponível · 2 mapeando · 3 estável) — a
+   * retícula reflete a RIGIDEZ DO MUNDO, sem chamada nativa (lição
+   * 2026-11-10: o background hit-test de 800ms mantinha um UIBlock em
+   * flight quase permanente e cravava NPE/SIGSEGV no detach da tab; a
+   * validação REAL de superfície acontece no clique de criar).
+   * verde = mundo rígido (provavelmente dá pra criar) · âmbar = mapeando ·
+   * vermelho = sem ancoragem visual.
+   */
+  trackingState?: number;
 }
 
 /**
  * Retículo/mira central sobreposto ao feed da câmera. Com zoom ativo
  * (> 1.05x) exibe a mira telescópica de precisão; caso contrário, a
  * mira simples de pontilhado.
- *
- * A cor muda conforme detectação de superfície no background hit-test:
- * verde = hit-test encontraria plano/feature (âncora visual possível),
- * vermelho = sem superfície (GPS-only se salvar agora).
  */
-export const ARReticle: React.FC<ARReticleProps> = ({ zoomLevel, surfaceAvailable }) => {
+export const ARReticle: React.FC<ARReticleProps> = ({ zoomLevel, trackingState }) => {
   const isZoomed = zoomLevel > 1.05;
-  const ringColor = surfaceAvailable === undefined ? '#FFFFFF' : surfaceAvailable ? '#34D399' : '#EF4444';
+  const ringColor =
+    trackingState === undefined
+      ? '#FFFFFF'
+      : trackingState === 3
+        ? '#34D399'
+        : trackingState === 2
+          ? '#FBBF24'
+          : '#EF4444';
 
   return (
     <View style={styles.reticleOverlay} pointerEvents="none">

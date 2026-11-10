@@ -38,6 +38,16 @@ const TRANSITION_TICK_MS = 150;
 const WORLD_FLOOR_Y = -1.5;
 /** Mudança mínima de posição para iniciar transição suave (m). */
 const TRANSITION_MIN_JUMP_M = 0.05;
+/**
+ * Coordenadas de SESSÃO AR vivem a poucas dezenas de metros da origem
+ * (origem = pose do celular no launch). Valores em km indicam datum
+ * errado vazando (ECEF do resolveCloudAnchor 3.0.3 ≈ 6,37 Mm, geodésica
+ * parcial ≈ km) — lição de device 2026-11-10: telemetria [ARProj] reportou
+ * gap de 3.446 km entre nativa e estimativa (P7).
+ */
+const MAX_SESSION_COORD_M = 1000;
+/** Gap nativa↔estimativa acima disto = datum/Δ suspeito (não é ruído de GPS). */
+const SUSPICIOUS_GAP_M = 100;
 
 /** Estado do fallback por pin (estimativa com alvo monótono). */
 interface FallbackState {
@@ -68,6 +78,19 @@ function isValidPosition(pos: [number, number, number]): boolean {
     Number.isFinite(pos[1]) &&
     Number.isFinite(pos[2]) &&
     !(Math.abs(pos[0]) < 0.005 && Math.abs(pos[1]) < 0.005 && Math.abs(pos[2]) < 0.005)
+  );
+}
+
+/**
+ * Posição em coordenadas de SESSÃO AR (metros da origem do SLAM) — rejeita
+ * ECEF/geodésica que vaze de resolves nativos com datum errado (P7).
+ */
+function isSessionPosition(pos: [number, number, number]): boolean {
+  return (
+    isValidPosition(pos) &&
+    Math.abs(pos[0]) <= MAX_SESSION_COORD_M &&
+    Math.abs(pos[1]) <= MAX_SESSION_COORD_M &&
+    Math.abs(pos[2]) <= MAX_SESSION_COORD_M
   );
 }
 
@@ -102,6 +125,12 @@ interface UseARProjectionParams {
   poseTick: GeospatialPose | null;
   /** Bump manual (botão de refresh) — limpa estimativas e re-projeta. */
   reprojectNonce: number;
+  /**
+   * Pins que NUNCA devem cair no fallback GPS (lição E5 da auditoria
+   * 2026-11-10: pins cloud pendentes "pulsando" entre cravado e GPS
+   * destruíam a confiança — estado honesto: invisível até localizar).
+   */
+  noFallbackIds: Set<string>;
 }
 
 export function useARProjection({
@@ -112,6 +141,7 @@ export function useARProjection({
   delta,
   poseTick,
   reprojectNonce,
+  noFallbackIds,
 }: UseARProjectionParams) {
   const [anchors, setAnchors] = useState<Anchor[]>([]);
   /** Momento em que o primeiro serverAnchor chegou sem pin visível. */
@@ -125,6 +155,8 @@ export function useARProjection({
   /** Deps estáveis em refs para o intervalo de animação. */
   const recomputeRef = useRef<() => void>(() => {});
   const [transitionActive, setTransitionActive] = useState(false);
+  /** Pins já avisados por datum inválido (evita spam de log a 1Hz). */
+  const datumWarnedRef = useRef<Set<string>>(new Set());
 
   const recompute = useCallback(() => {
     if (!serverAnchors) {
@@ -171,7 +203,7 @@ export function useARProjection({
       let estimated = false;
       let estimateAccuracyM: number | undefined;
 
-      if (native && isValidPosition(native.position)) {
+      if (native && isSessionPosition(native.position)) {
         // 1. Âncora nativa — ARCore mantém Terra-ancorada. Sempre vence.
         // Telemetria: quão longe a nativa resolveu da estimativa congelada?
         // (diz empiricamente qual fonte está carregando o erro)
@@ -183,9 +215,17 @@ export function useARProjection({
             native.position[2] - estimate.pos[2],
           );
           if (gap > 0.5) {
-            console.log(
-              `[ARProj] "${anchor.name}" âncora nativa resolveu a ${gap.toFixed(1)}m da estimativa (est. ±${estimate.targetAccM.toFixed(0)}m) — nativa vence`,
-            );
+            if (gap > SUSPICIOUS_GAP_M) {
+              // Gap de centenas de metros não é ruído de GPS: é datum ou Δ
+              // incorreto em uma das fontes (lição P7 — 3.446 km era ECEF).
+              console.warn(
+                `[ARProj] "${anchor.name}" gap SUSPEITO de ${gap.toFixed(0)}m (nativa↔estimativa) — conferir datum/Δ antes de confiar`,
+              );
+            } else {
+              console.log(
+                `[ARProj] "${anchor.name}" âncora nativa resolveu a ${gap.toFixed(1)}m da estimativa (est. ±${estimate.targetAccM.toFixed(0)}m) — nativa vence`,
+              );
+            }
           }
         }
         renderPos = native.position;
@@ -208,7 +248,22 @@ export function useARProjection({
           transitionsRef.current.delete(anchor.id);
         }
         fallbackRef.current.delete(anchor.id);
-      } else if (fallbackAllowed && delta !== null && pose) {
+      } else if (native && isValidPosition(native.position)) {
+        // Nativa com posição VÁLIDA mas fora do range de sessão (km) —
+        // ECEF/geo vazando de um resolve com datum errado. Descarta a
+        // entrada e segue no fallback, avisando UMA vez (P7).
+        if (!datumWarnedRef.current.has(anchor.id)) {
+          datumWarnedRef.current.add(anchor.id);
+          console.warn(
+            `[ARProj] "${anchor.name}" âncora nativa com posição fora do range de sessão (${native.position.map((v) => v.toFixed(0)).join(', ')}m) — datum suspeito (ECEF?), usando fallback`,
+          );
+        }
+      } else if (
+        fallbackAllowed &&
+        delta !== null &&
+        pose &&
+        !noFallbackIds.has(anchor.id)
+      ) {
         // 2. Fallback world-stable: camPos + R(Δ)·ENU(pose→pin).
         const { east, north } = geodeticToENU(
           pose.latitude,
@@ -314,6 +369,9 @@ export function useARProjection({
     for (const id of transitionsRef.current.keys()) {
       if (!seen.has(id)) transitionsRef.current.delete(id);
     }
+    for (const id of datumWarnedRef.current) {
+      if (!seen.has(id)) datumWarnedRef.current.delete(id);
+    }
 
     // Timeout best-effort: conta pins esperando sem NENHUM visível.
     if (projected.length === 0 && serverAnchors.length > 0) {
@@ -324,7 +382,7 @@ export function useARProjection({
 
     setAnchors(projected);
     setTransitionActive(transitionsRef.current.size > 0);
-  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef]);
+  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef, noFallbackIds]);
 
   recomputeRef.current = recompute;
 
@@ -333,6 +391,17 @@ export function useARProjection({
   useEffect(() => {
     recompute();
   }, [recompute, poseTick, reprojectNonce]);
+
+  // ── HEARTBEAT (lição 2026-11-10, sessões 14:35-14:41): o recompute era
+  // acionado apenas por poseTick — quando o poll nativo pendura (módulo
+  // one-op-por-vez), poseTick congela, o recompute para de rodar e o
+  // timeout de 25s do fallback NUNCA é re-avaliado (pins invisíveis até um
+  // refresh manual). Heartbeat de 2s garante que timedOut/waitingSince
+  // sejam avaliados mesmo sem poses novas; recompute é idempotente.
+  useEffect(() => {
+    const heartbeat = setInterval(() => recomputeRef.current(), 2000);
+    return () => clearInterval(heartbeat);
+  }, []);
 
   // Anima as transições → nativo a 150ms enquanto houver (só quando ativo).
   useEffect(() => {

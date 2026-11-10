@@ -17,6 +17,9 @@
 10. [Validação Visual e Acessibilidade (UI Visual Validation & WCAG)](#10-validação-visual-e-acessibilidade-ui-visual-validation--wcag)
 11. [Diretrizes de Realidade Aumentada (ViroReact) & Sistema de Coordenadas 3D](#11-diretrizes-de-realidade-aumentada-viroreact--sistema-de-coordenadas-3d)
 12. [Arquitetura de Câmera, Zoom Suave (Smooth 60 FPS) & Troubleshooting](#12-arquitetura-de-câmera-zoom-suave-smooth-60-fps--troubleshooting)
+13. [Autenticação better-auth (JWT, Roles e Secret Storage)](#13-autenticação-better-auth-jwt-roles-e-secret-storage)
+14. [AuthGate, Espelho UniFacens e Matriz de Capacidades (plano v2)](#14-authgate-espelho-unifacens-e-matriz-de-capacidades-plano-v2)
+15. [ViroReact 3.1.x — Providers, Cloud/Geospatial API e Invariantes](#15-viroreact-31x--providers-cloudgeospatial-api-e-invariantes)
 
 ---
 
@@ -326,6 +329,7 @@ No Android (`android.hardware.camera2`), **apenas um cliente pode acessar o sens
  9. **"Artefato azul" cobrindo a tela = visualização de PLANOS detectados, não pin** (lição de device, 2026-11-08): um plano horizontal do tamanho do cômodo renderizado como `ViroQuad` translúcido `#3B82F633`, visto de dentro, ocupa o frustum inteiro abaixo da sua borda distante (linha reta horizontal no topo do feed) — parecia "estar dentro do pin" e ocluía os pins reais. O render visual fica **DESLIGADO** por padrão (`SHOW_DETECTED_PLANES = false` na cena); a *detecção* de planos continua ativa (hit-tests dependem dela). Sintoma correlato: "N ponto(s)" no HUD mas nenhum pin visível — conferir distância (pins do campus projetados a km de casa são subpixel) e overlays antes de culpar a projeção.
 10. **Volume de requests na ARCore API (Cloud Console) = f(tempo de sessão × remounts × âncoras), não loop de useEffect** (2026-11-08): cada sessão com Geospatial ativo gera tráfego contínuo de **localização VPS** (o ARCore consulta o serviço enquanto a câmera tenta localizar; indoor sem match, ele continua tentando) + **1 request por criação/resolução de âncora** (terrain/geospatial). Dev com muitas iterações (cada entrada na tab AR = sessão nova) facilmente casa com centenas/dia — 963 num dia de testes foi isso, não bug. Mitigações do app: criação de âncoras nativas **gateada por pose** (`horizontalAccuracy ≤ 20m` + fresca — resolver âncora com GPS ruim é request fútil), **no-retry em erros fatais** (`NOT_SUPPORTED`/`RESOURCE_EXHAUSTED`/API key), tab focus-gated (sessão vive só com a tab AR aberta). Quota oficial: 1.000 sessões/min ou 100k requests/min por projeto.
 11. **Yaw da câmera para o Δ vem do VETOR `forward`** do `onCameraTransformUpdate` com guarda de horizontalidade (`yawAR = atan2(fwd.x, −fwd.z)`, descartando amostras com componente horizontal < 0.4) — válido para QUALQUER pitch (projeção no plano XZ). ⚠️ `rotation[1]` (euler) foi testado em 2026-11-08 e **garbla o yaw sob câmera inclinada** (a ordem do euler mistura pitch/roll no componente Y) — a pose típica de criar pin mirando o chão — envenenando o Δ da sessão inteira e piorando a precisão de todos os pins. Regressão detectada por device e revertida no mesmo dia. O log `[ARAlign]` imprime heading + Δ no lock — se girar o celular 90° físico e os pins girarem junto, suspeitar primeiro da fonte do yaw.
+12. **SIGSEGV/NPE ao SAIR da tab AR com chamadas nativas periódicas ativas (2026-11-10, 3.1.1)**: **toda** API do navigator/cena (`getCameraGeospatialPose`, `performARHitTestWithPoint`, `createGeospatialAnchor`/`createTerrainAnchor`…) é executada como **UIBlock interop** (`ARSceneModule.java` / `ARSceneNavigatorModule$N` ← `InteropUIBlockListener.didMountItems`) na fila de mount items do frame seguinte. **A janela fatal: o detach NATIVO da view (troca de tab) antecede o blur JS em ~0.5–1s** (provado em device: `onDetachedFromWindow` 14:41:31.497 vs `[ARTab] blur` 14:41:32.024; tombstones 14:26/14:48 cravaram COM todos os gates de foco ativos e o blur nem chegou a logar). Se o destroy/pause da view despacha antes de um UIBlock enfileirado, ele executa com a view nula → **SIGSEGV** (`nativeGetCameraGeospatialPose+44`) ou **NPE** (`performARHitTest on null ViroViewARCore`). Bug upstream (sem null checks no nativo; não consta nos known traps do MCP oficial). **Mitigação em 4 camadas** (nenhuma fecha 100% — o zero é upstream): (a) `ar.tsx` separa `focused` (false NO INSTANTE do blur → `viroAppProps.focused` congela toda chamada nativa nos hooks/cena) de `mounted` (**keep-alive de 1.2s** — UIBlocks pendentes drenam com cena viva); (b) **gate de tracking ≥ 2** (o detach pausa a sessão; `onTrackingUpdated` chega da bridge em ~100ms vs 500–1000ms do blur) — poll/hit-test/tick de âncoras nativas não rodam com tracking 1 (mundo morto). ⚠️ Lição 14:56–14:57: **NÃO use `=== 3`** — a cena remonta a cada reentrada (`internalRemountKey` da lib) e o tracking oscila 3→1→3; indoor pode ficar em 2 (LIMITED) permanente, `===3` mata o poll para sempre => pose stale => 0 pins; e o detach NÃO emite tracking degradado (tombstone 14:48 sem sinal prévio), então `===3` não protegia o crash de qualquer forma. A ocultação de CONTEÚDO continua `=== 3` (§12.8) — gates de CHAMADA NATIVA são `≥ 2`; (c) anti-overlap em cada poll (`poseInFlight`/`hitInFlight`/`processingRef`); (d) watchdog de promises penduradas (o módulo nativo é **one-op-por-vez e a 2ª chamada pode pendurar para sempre** — lição das sessões 14:35–14:41: o poll morria, `poseTick` congelava, o `recompute` nunca mais rodava e o timeout de 25s do fallback nunca era avaliado → pins invisíveis até refresh; fixes: watchdog 8s no poll + heartbeat 2s no recompute). Regra: **nenhuma chamada nativa periódica sem os 4 gates (alive + focused + tracking + in-flight com watchdog)**.
 
 ---
 
@@ -377,3 +381,132 @@ No Android (`android.hardware.camera2`), **apenas um cliente pode acessar o sens
 - **Detalhes da Aula** (`/aula-detalhe?discipline=`): hub alcançado do carrossel da Home, dos cards de Aulas e das disciplinas de Notas/Faltas — salas expandíveis, Turma, Faltas, Notas segmentadas e timeline de Tarefas.
 - **Períodos históricos**: seletor ‹ › + bottom sheet em grade (espelho oficial) percorre todo o histórico (2024/01→2026/02 nos mocks).
 - **Performance do mapa**: JAMAIS use `region` controlado no `MapView` (cada re-render faz o mapa "voar" — inclusive a cada tecla da busca). Use `initialRegion` + `animateCamera` via ref + `React.memo`.
+
+---
+
+## 15. ViroReact 3.1.x — Providers, Cloud/Geospatial API e Invariantes
+
+> Fonte: docs oficiais viro-community.readme.io (provider-setup, cloud-anchors, geospatial, authentication, co-location, advanced-vps, upgrading-to-310) verificadas em 2026-11-10. Seção leva 1 = fatos de documentação; leva 2 (lições de device) entra após o A/B de providers.
+
+### 🔌 15.1 Sistema de Provider (CRÍTICO)
+- **O `provider` é ÚNICO e controla Cloud Anchors + Geospatial SIMULTANEAMENTE** — prop do `<ViroARSceneNavigator>`: `"reactvision" | "arcore" | "none"`. **Default = `"reactvision"` desde v2.53**.
+- **Breaking 3.1.0**: props legadas `cloudAnchorProvider`/`geospatialAnchorProvider` voltaram a ser honradas quando `provider` não está setado (o 3.0 SEMPRE sobrescrevia com `"reactvision"`). App que ainda passa `cloudAnchorProvider="arcore"` e migrou 3.0→3.1 mudou de backend sem perceber.
+- **Trocar provider muda a fonte do `getCameraGeospatialPose`** (motor Δ!): `arcore` = ARCore Geospatial API (VPS/Earth, Terra-ancorada); `reactvision` = SDK ReactVision ("No VPS or ARCore pods required"). Gate obrigatório antes de migrar: lock do Δ <20s, headingAccuracy ≤15° outdoor.
+- **A/B sem rebuild**: o provider é prop JS (Metro/Fast Refresh), mas as credenciais vivem no manifesto. Com `com.google.android.ar.API_KEY` + `com.reactvision.RVApiKey`/`RVProjectId` coexistindo no manifesto, alternar provider vira troca de prop. É por isso que o `build.gradle` injeta TODAS via `manifestPlaceholders` (env `EXPO_PUBLIC_GOOGLE_AR_API_KEY`, `EXPO_PUBLIC_RV_API_KEY`, `EXPO_PUBLIC_RV_PROJECT_ID`) e o `app.config.ts` repassa ao plugin do Viro (prebuilds futuros).
+- Plugin só escreve cada meta-data se a respectiva key existir no config — enviar vazia não polui o manifesto.
+
+### ⚙️ 15.2 API Essencial (contratos JS estáveis entre providers)
+| Método | Retorno / Nota |
+| :--- | :--- |
+| `sceneNavigator.hostCloudAnchor(anchorId, ttlDays)` | `{ success, cloudAnchorId?, error?, state }` — anchorId local vem de `createAnchoredNode(hit)` (válido ~30s pós-hit). |
+| `sceneNavigator.resolveCloudAnchor(cloudAnchorId)` | `{ success, anchor?: { anchorId, cloudAnchorId, position: [x,y,z], rotation, scale, state } }` — **position em coordenadas de SESSÃO** (não ECEF; lições 3.0.3: promise pendurava cross-session e/ou retornava ECEF ~6,37Mm — revalidado no 3.1.x, guard `MAX_SESSION_COORD_M=1000` em `use-ar-projection`). `node` pode ser null. |
+| `getCloudAnchorStatus()` | Poll de progresso do resolve (`onCloudAnchorStateChange` foi REMOVIDO em 3.0.1 — nunca existiu ligado). |
+| `cancelCloudAnchorOperations()` | Funciona desde 3.0.2, **só cancela ops do provider reactvision** (ARCore não tem cancel nativo). |
+| `createGeospatialAnchor(lat, lng, altWGS84, quat?)` / `createTerrainAnchor(lat, lng, altAboveTerrain, quat?)` / `createRooftopAnchor(...)` | Local-only (anchorId = UUID random). Terrain/Rooftop falham sem dados do Google p/ o ponto (erro -20). |
+| `getCameraGeospatialPose()` / `checkVPSAvailability(lat,lng)` / `isGeospatialModeSupported()` / `setGeospatialModeEnabled(bool)` / `getEarthTrackingState()` | Pose: lat/lng/alt/heading + horizontalAccuracy/verticalAccuracy/headingAccuracy (95%). |
+| `startScan()` / `finishScan()` | **Provider reactvision APENAS** (pipeline VPS room-scale; coverage gate ≥40 pontos, ≥1m spread, ≥5 viewpoint pairs). Com `provider="arcore"` falham sempre ("Ancoragem Visual Indisponível"). |
+| `<ViroARCloudAnchor cloudAnchorId onLocalized onLocalizeError>` | Resolve dentro da cena; children no frame resolvido (caminho oficial p/ cross-session, 3.0+). |
+| Helpers | `gpsToArWorld(pose, lat, lng, alt)`, `latLngToMercator(lat, lng)`. |
+| ReactVision-only (client key) | `rvFindNearbyCloudAnchors(lat,lng,raio,limit)` — busca por GPS; máx 50 âncoras num raio de 1.000m. `hostGeospatialAnchor`/`resolveGeospatialAnchor` (persistência no backend RV). |
+
+### 🚦 15.3 `ViroCloudAnchorState` × Causa Raiz × Ação
+| State | Causa | Ação |
+| :--- | :--- | :--- |
+| `ErrorNotAuthorized` | Key inválida/ausente OU API key restrita a apps (package+SHA-1) que não incluem o atual OU Play Services ausente/velho OU ARCore API desabilitada no projeto Google Cloud | `aapt2 dump xmltree --file AndroidManifest.xml base.apk` no APK do device p/ conferir a key mergeada; Cloud Console → APIs & Credentials; `ERROR_NOT_AUTHORIZED` no ARCore cobre todos estes. |
+| `ErrorResourceExhausted` | Quota ARCore: host 30/min, resolve 300/min **por projeto** | Backoff; dev com muitas sessões casa com intermitência. |
+| `ErrorHostingDatasetProcessingFailed` | Poucos dados visuais no entorno (âncora FeaturePoint fraca) | Mover o device pelo ponto (≥30s de tracking), features distintas, luz estável; `startScan` (RV) guia pelo coverage gate. |
+| `ErrorCloudIdNotFound` | TTL expirado ou ID errado | Re-hospedar (API key Google = TTL máx 24h!). |
+| `ErrorResolvingLocalizationNoMatch` | Âncora existe mas NÃO foi vista deste ponto de vista | Sem retry na sessão; geospatial segue. |
+| `ErrorCancelled` | `cancelCloudAnchorOperations()` (só reactvision) | Fluxo normal de saída. |
+
+### 📏 15.4 Quotas, TTL e Autorização
+- **TTL**: `ttlDays` 1–365. **API key do Google = máx 1 dia**; >1 dia exige autorização **keyless** (JWT assinado por service account — ARCore Cloud Anchors Authorization docs) OU provider reactvision (TTL longo nativo — verificar empiricamente).
+- **Management API** (`arcore.googleapis.com/v1beta2/anchors`): **exige OAuth2** — API key NÃO é aceita (401 `CREDENTIALS_MISSING` verificado empiricamente 2026-11-10). Roadmap de renovação/limpeza via backend precisa de service account.
+- ARCore API habilitada no projeto responde 401 de credencial (não 403 `SERVICE_DISABLED`) — diagnóstico rápido por REST.
+
+### 🔑 15.5 Autenticação ReactVision Spatial
+| Credencial | Prefixo | Onde vive | Alcance |
+| :--- | :--- | :--- | :--- |
+| Client key | `rv_client_` | No app (`rvApiKey` + `rvProjectId`) — pública por design | 1 projeto; host/resolve/find de cloud+geospatial anchors, Editor scenes, colocation join |
+| Secret key | `rv_secret_` | Backend/builds internos — NUNCA em app publicado | Todos os projetos do time; list/edit/delete anchors, uploads, AI, mint de user tokens |
+| User token | `rv_ut_` | Mintado pelo backend (1h, `POST /app-user-tokens`) | 1 projeto + 1 usuário; colocation/vps scopes |
+
+- API REST: base `https://platform.reactvision.xyz/functions/v1`, header `x-api-key`.
+- **Custos** (compute pool mensal): Cloud/Geospatial **anchors = incluídos** (sem cobrança por âncora); co-location **$0.01/dev/min** (exige plano pago); Advanced VPS **$0.60/min** de processamento de scan + $0.60/min localização server-mode (plano pago; $5 crédito/mês no Basic, $15 no Pro; spend limit default $100).
+- Chaves erradas para a operação → 403 `API_KEY_TYPE_NOT_ALLOWED` ("This endpoint does not accept this type of API key").
+
+### 🧭 15.6 Advanced VPS (ViroVPS) — o que é (e não é)
+- Workflow: `startRecording`/`stopRecording` → `uploadScanRecording` (location + outputs: map/world_mesh/semantic/mesh/splat/poses) → processamento (map aceito: ≥500 pontos, ≥70% frames localizados, erro mediano ≤10cm) → `<ViroVPS>` track (device mode baixa o `map.rvmap`; server mode $0.60/min) → `<ViroVPSAnchor>` children no frame do mapa.
+- **NÃO é** cloud anchor por pin: mapeia LUGARES (locations) — mudança de arquitetura (pins viram conteúdo ancorado em locais mapeados). Indoor OK, qualquer device iOS/Android. Pago.
+
+### 🔒 15.7 Invariantes do Repo (com 3.1.x)
+1. Provider ÚNICO: cloud + geospatial trocam JUNTOS; avaliar impacto no motor Δ antes de trocar.
+2. Nunca confiar em posição nativa/cloud sem guard de sessão (`|coord| ≤ 1000m`) — ECEF/geo pode vazar (P7).
+3. IDs `coord-*` e `ua-facens-*` = sintéticos, nunca resolvem; `ua-<hex>` = cloud anchor ID real do Google.
+4. Hosting exige âncora LOCAL prévia (`createAnchoredNode` em hit anchorable — ExistingPlaneUsingExtent > FeaturePoint); hit expira ~30s.
+5. `startScan/finishScan` só com provider reactvision.
+6. Manifesto carrega AS DUAS credenciais (AR + RV) — A/B de provider é troca JS.
+7. Management API e TTL>1d (Google) = OAuth/service account; âncoras com API key morrem em 24h.
+8. Poll de `getCameraGeospatialPose` + unmount = SIGSEGV (§12.12): keep-alive 1.2s no blur da tab AR + anti-overlap no poll são OBRIGATÓRIOS; método é UIBlock interop, não chamada síncrona.
+
+### 🔗 15.8 Links Canônicos
+- Overview: https://viro-community.readme.io/docs/overview · Reference: https://viro-community.readme.io/reference/introduction
+- Provider Setup: https://viro-community.readme.io/docs/provider-setup · Cloud Anchors: /docs/cloud-anchors · Geospatial: /docs/geospatial
+- Authentication: /docs/authentication · Studio Setup (custos): /docs/reactvision-studio-setup · Co-Location: /docs/co-location · Advanced VPS: /docs/advanced-vps-and-scanning · Upgrade 3.1: /docs/upgrading-to-310
+- **MCP Server** (docs vivas, platform matrix, validação de cena): `https://mcp.reactvision.xyz/viro` — configurado GLOBAL no opencode (`~/.config/opencode/opencode.json`).
+- Issue-chave provider/keys: ReactVision/viro#498.
+
+### 🏆 15.9 Leva 2 — Veredito do A/B de Providers (2026-11-10, device)
+
+**VEREDITO: `provider="reactvision"` é o provider da épica** (`EXPO_PUBLIC_AR_PROVIDER=reactvision` no `.env`). Evidência empíricas:
+
+| Critério | ReactVision | ARCore |
+| :--- | :--- | :--- |
+| Gate do Δ (D5) | ✅ travou em toda sessão (49.9°/58.7°/59.5°, 5–6 amostras, spread <10°) | ✅ igual |
+| Persistência (D4 ≥30d) | ✅ **90 dias** nativo | ❌ 24h (API key Google) |
+| Qualidade de hosting | ✅ **424–1094 keypoints** (faixa doc: 300–500) | ⚠️ dataset fraco → `DatasetProcessingFailed` |
+| Resolve cross-session | ✅ 2/3 pins (`successful_resolve_count ≥ 1`) | ❌ promise pendurada nativa + matching não fecha indoor |
+| Proximidade GPS | ✅ nearby funcional (raio 500m, client key) | ❌ inexistente |
+
+### 🧭 15.10 Leva 3 — Pipeline OFICIAL implementado (fim da épica de hospedagem)
+
+**Auditoria 2026-11-10 (tarde)**: taxa de resolve 24% (8/33) com keypoints ALTOS → o gargalo era o PIPELINE nosso, não o dataset. Más práticas erradicadas: hosting fora do pipeline oficial (âncora de plano + `hostCloudAnchor` + "escaneio guiado" de timer cego SEM coverage gate), resolve às cegas (sem poll de status, 1 tentativa/sessão), sem reports de resolve, matemática de frame própria (world coords entre sessões), pins cloud "pulsando" para fallback GPS.
+
+**Fluxo NOVO (fidelidade à doc VPS)**:
+1. **Hosting** (`use-anchor-scan.ts`): `startScan()` → usuário **ANDE** pelo entorno (doc: *"walk, don't rotate in place"*) → `getScanStatus()` @1Hz (**coverage gate VISÍVEL na UI**: keyframes X/min, pares de visão, percurso m — cada métrica traz o próprio mínimo) → `finishScan(30d)` → `{cloudAnchorId}` → `getScanDiagnostics()` em falha nomeia o gate curto. **Offset ZERO por construção** (pin = âncora do scan; sem mira, sem frameOffset manual).
+2. **Modal 2 etapas** (`place-anchor-modal.tsx`): ① Escanear (medidores + guia "ANDE/textura/luz") ② Confirmar (nome/salvar). Zero gates de GPS no caminho cloud; lat/lng best-effort (mapa 2D/proximity) — o RV grava GPS preciso no hosting.
+3. **Resolve** (`use-cloud-anchors.ts`): `resolveCloudAnchor` + **poll `getCloudAnchorStatus()` @1Hz** (progress 0–1 + message para o HUD — a promise é silenciosa por design) + **re-tentativa com backoff** (15/30/60s — um tiro por sessão perde resolves) + **`rvTrackCloudAnchorResolution()`** após cada tentativa (best practice: *"report every resolve"*).
+4. **Estado honesto**: pins cloud não-localizados ficam **invisíveis com selo no HUD** ("N p/ aproximar") — `noFallbackIds` na projeção PROÍBE fallback GPS para pins cloud (fim do "pin pulando").
+5. **Aprendizados do processo**: misturar providers no banco (ua- Google vs UUID RV) polui a experiência; espelhos nunca relocalizam (SIFT); `resolve: "Localisation timed out — move closer"` é o SDK guiando o usuário; o RNGH sobre a GLSurfaceView consome toques (se algum dia precisar de toque nativo no Viro, `Gesture.Native()` é o passthrough).
+
+**Removidos**: hit-test manual de criação, `createAnchoredNode`, gates `CREATE_MAX_*`, mira/`frameOffset` manual, `ViroARPlaneSelector` (artefatos azuis), preview bar, `setPendingLocalAnchor`/`hostPendingAnchor` (hosting antigo), timeout cego 45s.
+
+### 📌 15.11 Pin visível NA HORA + física da relocalização (2026-11-10, noite)
+
+**Bug "salvei e o pin não apareceu"**: o estado honesto (sem fallback GPS) deixava o pin INVISÍVEL até o resolve fechar — que demora dezenas de segundos por design. **Fix pelo exemplo oficial `vps-lite-test`**: *"its own locationTransform as a stand-in for a resolved anchor's transform"* — o **`locationTransform` do `finishScan()` é o frame do scan NESSA sessão**. `parseLocationTransform(token)` (export oficial) → 16 floats column-major onde **[12],[13],[14] = translação** = posição de mundo da origem do scan. Fluxo final: save → entry **provisária** (`setProvisionalEntry`) com essa posição → pin na tela **<1s** → o resolve continua elegível para o provisório e **substitui** pela posição definitiva quando confirma (transição suave — sem pulo). `resolveCloudAnchor` também traz `anchor.resolvedTransform` (mesmo formato) — fallback canônico quando `.position` falta. Fila de resolve ordenada por **createdAt DESC** (pin novo primeiro: features do scan em memória = match quase imediato).
+
+**Física da relocalização (resposta a "por que depender de olhar?")**: a posição FÍSICA do pin nunca muda; o que falta é o CELULAR saber onde ELE está. Cada sessão AR nasce com coords arbitrárias (origem = onde o app abriu) — sem relação com sessões anteriores. GPS indoor (±5–15m) não resolve precisão cm. O único mapa do cômodo é o que hospedamos → o SDK só calcula "sessão atual ↔ frame da âncora" **comparando a câmera com o mapa visual** (SIFT). Analogia: chegar de olhos vendados numa sala — o objeto escondido nunca se moveu, mas você só o localiza ao TIRAR A VENDA e reconhecer a sala. O "80% — waiting on a second match" é o SDK pedindo uma segunda visão do lugar; fechado o match, o pin fica cravado mesmo olhando pra outro lado. Outdoor com VPS Google (Street View) dispensa isso — mapa global já existe; indoor não. HUD escalonado: "olhe o ponto" → >25s: "aponte a câmera para onde escaneou".
+
+### 🎯 15.12 VERDADE FINAL: hostCloudAnchor por PONTO ≠ finishScan por SALA (dados da plataforma, 2026-11-10 noite)
+
+**A lição que encerra a saga** (prova: `GET /cloud-anchors/list` com secret key — dados crus da plataforma):
+
+| Caminho | Âncoras | GPS tag | Resolve | Taxa |
+| :--- | :--- | :--- | :--- | :--- |
+| `finishScan()` (frame da SALA) | 5 | **100% NULL** | 1/19 | **5%** |
+| `hostCloudAnchor(plano)` (PONTO) | 3 | **100% ✓** | 10/40 (Armário 7/13) | **25–54%** |
+
+Doc-fonte (`ViroEvents.ts` do repo): *"`hostCloudAnchor()` ties it to a **hand-placed physical anchor**; `finishScan()` (room/building-scale scans) ties it to a [room frame]"*. `finishScan` é para CO-LOCATION (sala compartilhada); **pins de POI = plane/hit + `hostCloudAnchor`** — o guia oficial Cloud Anchors. A lição E1 da auditoria (§15.10) estava MEIA certa: o problema nunca foi o `hostCloudAnchor` — era a UX em volta (gates de GPS, mira confusa). O scan de sala foi um desvio de 2 dias.
+
+**Fluxo FINAL (`use-point-hosting.ts`)**: modal → "Posicionar Ponto" → usuário mira o ponto e **TOCA na retícula** (tap do RNGH, roteado quando phase==='placing') → hit-test pontual 1× → preferir `ExistingPlane*` → `createAnchoredNode` (âncora NO PONTO) → guia 8s "mova ao redor do ponto" (best practice da doc) → `hostCloudAnchor(anchorId, 30d)` → hosted{cloudAnchorId, position=hit} → salvar → **provisória EXATA** (posição do ponto, não da câmera) → resolve confirma.
+
+**Fixes do loop de resolve** (lição dos logs 18:46: `"already in progress" (2ms!)`): backoff **60/90/120s** (sempre > vida nativa ~30s); `"already in progress"` = resolve nativo em curso → **re-check 12s sem penalizar** (não é falha); timeout JS 45s.
+
+**Secret key no backend** (`RV_SECRET_API_KEY` no `.env.api`): o painel `ar/diagnostics` usa `/cloud-anchors/list` (1 request, todas + private); client key permanece só no app. ⚠️ Secret = edit/delete — nunca no client.
+
+**Lições de device:**
+1. **IDs por provider NÃO são intercambiáveis**: `ua-<hex>` = Google (arcore); **UUID = ReactVision**. Pins com ID do provider errado nunca resolvem e poluem a experiência como fallback GPS — classificar antes de tentar resolve (endpoint de diagnóstico faz; `coord-*`/`ua-facens-*` = sintéticos). A "precisão horrível entre sessões" era majoritariamente ESTA divergência no banco.
+2. **Espelho/reflexivo nunca relocaliza** (SIFT): "Teste vr espelho" = 492 keypoints, 9 resolves, 0 sucessos. Superfícies refletivas e lisas = hospedagem proibida por física.
+3. **A API REST RV é o melhor instrumento de diagnóstico**: `GET /cloud-anchors/{id}?project_id=` (client key OK, 300/min) retorna `keypoint_count`, `resolve_count`, `successful_resolve_count`, `average_confidence`, GPS tag e `descriptors_url`. `/cloud-anchors/list` exige **secret key** (criar `rv_secret_` no Editor quando precisar); `/nearby` aceita client key (50 âncoras/1000m, públicas).
+4. **Endpoint de diagnóstico no backend**: `GET /ar/diagnostics/cloud-anchors` (módulo `ar-diagnostics`, `@Public()` — natureza healthcheck) cruza o banco com a API RV e classifica providers. Env: `RV_CLIENT_API_KEY` + `RV_PROJECT_ID` no `.env.api`.
+5. O crash de detach (§12.12) é **provider-agnóstico** (bug comum do viro_core) — reproducido com ambos.

@@ -11,6 +11,7 @@ import { RuntimeConfigModule } from './config/runtime-config.js';
 import { AccessModule } from './common/auth/access.module.js';
 import { HealthController } from './health/health.controller.js';
 import { NavigationModule } from './modules/navigation/navigation.module.js';
+import { ArDiagnosticsModule } from './modules/ar-diagnostics/ar-diagnostics.module.js';
 
 const hasObserveKeys = Boolean(
   process.env.OBSERVE_APP_KEY &&
@@ -31,6 +32,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AdminModule,
     RoutingModule,
     NavigationModule,
+    ArDiagnosticsModule,
     ...(hasObserveKeys
       ? [
           ObserveModule.forRoot({
