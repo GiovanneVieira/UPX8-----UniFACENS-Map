@@ -35,8 +35,35 @@ export default ({ config }: { config: ExpoConfig }): ExpoConfig => {
     );
   }
 
+  /**
+   * Maps SDK NATIVO (react-native-maps): a meta-data
+   * `com.google.android.geo.API_KEY` só nasce no prebuild via
+   * expo.android.config.googleMaps.apiKey — as EXPO_PUBLIC_* alimentam o JS,
+   * o SDK nativo lê o MANIFESTO. Sem isto o APK de release crasha com
+   * IllegalStateException "API key not found" ao montar qualquer MapView
+   * (lição de device 2026-11-11: dev local tinha a meta-data editada à mão
+   * no android/ não-versionado; o build EAS (CNG/prebuild) nasceu sem ela).
+   */
+  const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY;
+  if (!googleMapsApiKey) {
+    console.warn(
+      '[app.config] EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY ausente — o SDK nativo do Maps crashará o app de release em qualquer MapView',
+    );
+  }
+
   return {
     ...config,
+    ...(googleMapsApiKey
+      ? {
+          android: {
+            ...(config.android ?? {}),
+            config: {
+              ...(config.android?.config ?? {}),
+              googleMaps: { apiKey: googleMapsApiKey },
+            },
+          },
+        }
+      : null),
     // EAS Build: projectId da conta Expo (@giovannevqs-team/unifacens-client)
     // — vinculado pelo `eas init` em 2026-11-11. NÃO é secret.
     extra: {
