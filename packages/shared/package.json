@@ -22,7 +22,7 @@
   "type": "module",
   "devDependencies": {
     "@types/node": "^26.6.1",
-    "typescript": "^7.0.2"
+    "typescript": "~5.9.3"
   },
   "dependencies": {
     "zod": "^4.6.5"

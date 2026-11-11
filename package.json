@@ -19,7 +19,8 @@
     "@expo/metro-runtime": "~57.0.15",
     "@types/react": "~19.2.2",
     "cross-env": "^10.1.0",
-    "expo-router": "~57.0.21"
+    "expo-router": "~57.0.21",
+    "typescript": "~5.9.3"
   },
   "workspaces": [
     "./packages/*",
@@ -30,5 +31,8 @@
     "@oxlint-tsgolint/win32-x64": "^7.0.2004",
     "@oxlint/binding-win32-x64-msvc": "^1.89.0",
     "@rolldown/binding-win32-x64-msvc": "^1.2.15"
+  },
+  "overrides": {
+    "typescript": "~5.9.3"
   }
 }
