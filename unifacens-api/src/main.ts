@@ -14,6 +14,7 @@ import { AppModule, ObserveInstrument } from './app.module.js';
 import { API_CONFIG } from './config/runtime-config.js';
 import type { ApiEnvironment } from 'shared';
 import { configureHttp } from './config/configure-http.js';import { BETTER_AUTH, type BetterAuthInstance } from './common/auth/better-auth.js';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS_DIR = path.resolve(__dirname, '../uploads');
@@ -38,6 +39,9 @@ async function bootstrap() {
   const config = app.get<ApiEnvironment>(API_CONFIG);
   const auth = app.get<BetterAuthInstance>(BETTER_AUTH);
   configureHttp(app, config);
+  // Envelope de erro consistente + mapeamento de erros Postgres cruze (FK
+  // RESTRICT, unique, check) — global, cobre todos os módulos.
+  app.useGlobalFilters(new AllExceptionsFilter(config.NODE_ENV));
 
   // Better Auth: o handler exige o corpo bruto da requisição — por isso o
   // body-parser do Nest é desativado e o parsing JSON é restaurado APENAS
@@ -57,6 +61,8 @@ async function bootstrap() {
     .addBearerAuth({ type: 'http', scheme: 'bearer' }, 'admin-bearer')
     .addTag('access', 'Acesso da equipe para edição e exclusão')
     .addTag('anchors', 'Gerenciamento de Google ARCore Cloud Anchors')
+    .addTag('categories', 'Categorias de locais e pontos AR com modelo 3D vinculado')
+    .addTag('models', 'Upload e gestão de modelos 3D (GLB/glTF/OBJ/VRX)')
     .addTag(
       'places',
       'Catálogo de locais do campus, coordenadas e origem das informações',

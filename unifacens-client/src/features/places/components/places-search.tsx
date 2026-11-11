@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from "react-native";
-import { PLACE_CATEGORY_LABELS, placeCategorySchema } from "shared";
+import { useCategoriesQuery } from "@/features/categories/queries/use-categories-query";
 import { FormInputField } from "@/components/ui/form-field";
 import type { usePlacesExplorer } from "../hooks/use-places-explorer";
 
@@ -10,6 +10,9 @@ export function PlacesSearch({
   explorer: Pick<Explorer, "searchForm" | "filters" | "selectCategory">;
 }) {
   const { searchForm, filters, selectCategory } = explorer;
+  // Categorias dinâmicas: criar/editar no admin muda os filtros sem deploy.
+  const categories = useCategoriesQuery();
+  const options = categories.data ?? [];
   return (
     <View className="gap-3">
       <View className="flex-row items-start gap-3">
@@ -49,17 +52,15 @@ export function PlacesSearch({
         >
           <Text className="text-sm text-white">Todas as categorias</Text>
         </Pressable>
-        {placeCategorySchema.options.map((category) => (
+        {options.map((category) => (
           <Pressable
-            key={category}
+            key={category.id}
             accessibilityRole="button"
-            accessibilityState={{ selected: filters.category === category }}
-            onPress={() => selectCategory(category)}
-            className={`min-h-[44px] justify-center rounded-xl border px-3 active:opacity-80 ${filters.category === category ? "border-sky-400 bg-blue-700" : "border-slate-700 bg-slate-900"}`}
+            accessibilityState={{ selected: filters.category === category.slug }}
+            onPress={() => selectCategory(category.slug)}
+            className={`min-h-[44px] justify-center rounded-xl border px-3 active:opacity-80 ${filters.category === category.slug ? "border-sky-400 bg-blue-700" : "border-slate-700 bg-slate-900"}`}
           >
-            <Text className="text-sm text-white">
-              {PLACE_CATEGORY_LABELS[category]}
-            </Text>
+            <Text className="text-sm text-white">{category.label}</Text>
           </Pressable>
         ))}
       </View>

@@ -510,3 +510,52 @@ Doc-fonte (`ViroEvents.ts` do repo): *"`hostCloudAnchor()` ties it to a **hand-p
 3. **A API REST RV é o melhor instrumento de diagnóstico**: `GET /cloud-anchors/{id}?project_id=` (client key OK, 300/min) retorna `keypoint_count`, `resolve_count`, `successful_resolve_count`, `average_confidence`, GPS tag e `descriptors_url`. `/cloud-anchors/list` exige **secret key** (criar `rv_secret_` no Editor quando precisar); `/nearby` aceita client key (50 âncoras/1000m, públicas).
 4. **Endpoint de diagnóstico no backend**: `GET /ar/diagnostics/cloud-anchors` (módulo `ar-diagnostics`, `@Public()` — natureza healthcheck) cruza o banco com a API RV e classifica providers. Env: `RV_CLIENT_API_KEY` + `RV_PROJECT_ID` no `.env.api`.
 5. O crash de detach (§12.12) é **provider-agnóstico** (bug comum do viro_core) — reproducido com ambos.
+
+---
+
+## 16. Storage de Arquivos, Categorias e Modelos 3D (2026-11-11)
+
+### 🗄️ Módulo `storage` — seam ports & adapters
+- **Interface única** `StorageService` (`put`/`delete`/`url`/`keyFor`) com **2 adapters**: `S3StorageAdapter` (produção, **SDK oficial `@aws-sdk/client-s3` v3**, compatível com R2/B2/MinIO via `S3_ENDPOINT`) e `LocalStorageAdapter` (dev/testes, grava sob `uploads/`, URL relativa `/uploads/<key>` servida pelo `express.static`). Seleção por `STORAGE_DRIVER` (`s3` exige `S3_BUCKET/REGION/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PUBLIC_BASE_URL`; ausência = local — testes sem rede). O JSONB `anchors.images` guarda **chaves canônicas**; URLs são resolvidas na serialização (`storage.url`) e `keyFor()` faz o inverso (delete por URL). Legado `/uploads/anchors/...` (disco pré-S3) é transparente nos dois adapters.
+### Layout S3 (pastas sugestivas — chave = escopo, prefixo = ambiente)
+```
+s3://<bucket>/
+├── dev/                      ← NODE_ENV≠production (ou STORAGE_PREFIX=dev)
+│   ├── points/images/{anchorId}/{uuid}.{jpg|png|webp}
+│   └── models/originals/{modelId}/{slug}.{glb|gltf|obj|vrx}
+└── prod/                     ← NODE_ENV=production (Render)
+    ├── points/images/…
+    └── models/originals/…
+```
+O JSONB `anchors.images` e a coluna `models.original_key` guardam a **chave canônica (prefixada)** devolvida por `storage.put()` — ⚠️ services JAMAIS persistem a chave lógica sem prefixo (bug clássico: arquivo gravado em `dev/...` e banco apontando pra raiz). O prefixo é detalhe INTERNO dos adapters (dev/prod no mesmo bucket/disco); `STORAGE_PREFIX` sobrepõe. Chaves legadas sem prefixo (pré-2026-11-11) continuam resolvendo no caminho original — sem migração.
+- **Bucket público de leitura** (URLs estáveis/cacheáveis para AR mobile); client resolve relativas com `resolveAssetUrl()` (`services/api.ts`).
+- **Render free tinha disco efêmero** — todo upload morria no redeploy; este módulo é a cura.
+
+### 🏷️ Categorias — ex-enum virou entidade
+- As 11 categorias hardcoded (`placeCategorySchema` + CHECK + chips) migraram para a tabela `categories` (seed idempotente na migração, slugs preservados, underscore OK: `drinking_fountain`). `places.category` → FK `category_id` (RESTRICT); `anchors` ganharam `category_id` nullable.
+- **Categoria é mandante** da relação 1:1 com `models` (`categories.model_id`, RESTRICT). `GET /categories` (autenticado, qualquer role) retorna `{ id, slug, label, sort, modelId, model: { url, format } | null }` com **UM join** — alimenta filtros de places, form de local, seletor do pin AR e painel admin. Criar/renomear categoria = ação de admin, **sem deploy**.
+- **Deletes em uso → 409** com mensagem amigável (serviço chefa, FK garante). Sem cascatas silenciosas.
+- Filtro de places aceita `category` (slug, compat) OU `categoryId` (canônico).
+
+### 📦 Modelos 3D — formatos aceitos, sem conversão server-side
+- `POST /admin/models` (multipart, 1 arquivo, **1MB**): validação por **magic bytes** (GLB `glTF` magic, glTF 2.0 JSON **com buffers embutidos** — .bin externo recusado, OBJ textual, VRX aceito por extensão). Extensão deve casar com o conteúdo (400 se divergirem).
+- **FBX não é aceito** (decisão 2026-11-11): a conversão server-side foi avaliada e **removida** — o conversor oficial `ViroFBX` é binário **macOS Mach-O** (não roda no Linux da API) e o substituto `FBX2glTF` (facebookincubator, sem manutenção ativa) exigia binário de terceiro pinado na imagem Docker. Custo de manutenção > benefício: **FBX (extensão ou conteúdo) é recusado com 400 orientando exportar GLB** (arquivo único, texturas embutidas). GLB/GLTF/OBJ/VRX são carregados nativamente pelo `Viro3DObject`.
+- O histórico desta decisão vive no git: o seam `MODEL_CONVERTER`/`FBX2glTF` foi implementado e depois revertido — reverter o revert traz a conversão de volta se um dia valer a pena.
+- Renderização AR (`Viro3DObjectPin` na cena): pin com `category.model` → `Viro3DObject source={{ uri: resolveAssetUrl(url) }}` escala pela distância; **fallback honesto** para `ViroBox` quando sem categoria/modelo/erro de load. StyleSheet.create puro (§6).
+- Mobile: modal de criação de pin tem **seletor de categoria** (chips); `createAnchor` envia `categoryId`.
+
+### 🖱️ UX de upload (web)
+- `FileDropZone` (`components/ui/file-drop-zone.web.tsx`): drag & drop HTML5 + teclado (Enter/Space) + validação client espelhando o server (tipo/tamanho) + `aria-live` para erros. Reusada em: imagens de pontos (até 5×5MB) e modelos (1×1MB). Exclusão de imagem individual: `DELETE /anchors/:id/images?key=`.
+- **Preview 3D** (`model-preview-modal.web.tsx`): three.js carregado SOB DEMANDA via CDN ESM (esm.sh) usando `<script type="module">` criado em runtime — ⚠️ **Metro não resolve `import('https://...')`** (vira "Cannot find module"); código em string é a única forma do browser resolver os imports nativamente. Zero impacto no bundle; mobile nem resolve o arquivo (.web.tsx). GLB/GLTF/OBJ renderizam com OrbitControls + auto-rotate; VRX mostra nota (formato proprietário, só no AR). **Exige CORS no bucket S3** (`GET/HEAD` AllowedOrigins) — o GLTFLoader faz fetch do navegador.
+- Contrato de imagens: `addImages`/`removeImage`/`GET /anchors/:id` devolvem **URLs resolvidas** (nunca chaves cruas); delete aceita URL ou chave (`storage.keyFor` normaliza).
+
+### 🧰 Exceções e envelope de erro (2026-11-11)
+- `AllExceptionsFilter` global (`common/filters/`, registrado no main.ts): envelope `{ statusCode, error, message, path, timestamp }` em TODA resposta de erro; preserva corpos custom (`validationErrors` do ZodValidationPipe) apenas anotando path/timestamp; erros **Postgres cruze** são desembrulhados do Drizzle (`.cause`) e mapeados — 23503 FK → 409 amigável por constraint, 23505 unique → 409, 23514 check → 400 (defense in depth sobre os guards dos services); 500 em produção não vaza detalhe interno (stack fica no log do servidor).
+- Exceções de domínio (`common/exceptions/domain.exceptions.ts`): `RecordInUseException` (409 FK em uso), `DuplicatedRecordException` (409 unique), `InvalidModelFileException` (400), `UploadSizeExceededException` (413), `StorageFailureException` (503 — falha de S3/disco não vira 500; `addImages` limpa chaves já gravadas em lote parcial).
+
+### ⚠️ Invariantes
+1. Nunca gravar caminhos absolutos de disco no banco — sempre chaves lógicas do `storageKeys`.
+2. Novos callers de arquivo passam pelo `STORAGE` token — fs/aws-sdk não vaza para services de domínio.
+3. Validação de magic bytes vive SÓ no módulo `models` (`model-file.ts`); FBX é recusado por política (ver seção Modelos 3D).
+4. Uploads de imagem continuam 5×5MB (multer + validação server); modelos 1MB com `PayloadTooLargeException` (413).
+5. `GET /categories` exige sessão autenticada (política identidade-primeiro §13) — o client anexa `getTeamAuthorization()`.

@@ -16,6 +16,65 @@ import {
 import { sql } from 'drizzle-orm';
 import type { NavigationEdge, NavigationNode } from 'shared';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Modelos 3D e categorias (CRUD do painel administrativo).
+// Categoria é a mandante da relação 1:1 com o modelo (categories.model_id).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Modelo 3D publicado (arquivo no S3 + metadados). FBX gera um GLB derivado. */
+export const models = pgTable(
+  'models',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: text('name').notNull(),
+    format: text('format').notNull(),
+    /** Chave lógica no storage (ex.: models/originals/<id>/<slug>.fbx). */
+    originalKey: text('original_key').notNull(),
+    /** Chave do GLB derivado (apenas quando format = 'fbx'). */
+    derivedKey: text('derived_key'),
+    sizeBytes: integer('size_bytes').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      'models_format_values',
+      sql`${table.format} IN ('glb', 'gltf', 'obj', 'fbx', 'vrx')`,
+    ),
+    check('models_size_positive', sql`${table.sizeBytes} > 0`),
+  ],
+);
+
+/** Categorias de locais e pontos AR — ex-enum hardcoded, agora gerenciável. */
+export const categories = pgTable(
+  'categories',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    slug: text('slug').notNull(),
+    label: text('label').notNull(),
+    sort: integer('sort').notNull().default(0),
+    /** Categoria mandante: o modelo que o pin AR da categoria renderiza. */
+    modelId: uuid('model_id').references(() => models.id, {
+      onDelete: 'restrict',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex('categories_slug_key').on(table.slug),
+    check(
+      'categories_slug_format',
+      sql`${table.slug} ~ '^[a-z0-9]+([-_][a-z0-9]+)*$'`,
+    ),
+    check('categories_label_not_blank', sql`length(trim(${table.label})) > 0`),
+  ],
+);
+
 export const anchors = pgTable('anchors', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: text('name').notNull(),
@@ -24,6 +83,10 @@ export const anchors = pgTable('anchors', {
   longDescription: text('long_description'),
   images: jsonb('images').$type<string[]>().default([]),
   placeId: uuid('place_id'),
+  /** Categoria do ponto — define o modelo 3D renderizado no AR. */
+  categoryId: uuid('category_id').references(() => categories.id, {
+    onDelete: 'restrict',
+  }),
   positionX: doublePrecision('position_x'),
   positionY: doublePrecision('position_y'),
   positionZ: doublePrecision('position_z'),
@@ -34,7 +97,7 @@ export const anchors = pgTable('anchors', {
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),
-});
+}, (table) => [index('anchors_category_idx').on(table.categoryId)]);
 
 export type Anchor = typeof anchors.$inferSelect;
 export type NewAnchor = typeof anchors.$inferInsert;
@@ -170,7 +233,9 @@ export const places = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     name: text('name').notNull(),
-    category: text('category').notNull(),
+    categoryId: uuid('category_id')
+      .notNull()
+      .references(() => categories.id, { onDelete: 'restrict' }),
     latitude: doublePrecision('latitude').notNull(),
     longitude: doublePrecision('longitude').notNull(),
     building: text('building'),
@@ -189,17 +254,13 @@ export const places = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index('places_category_idx').on(table.category),
+    index('places_category_idx').on(table.categoryId),
     index('places_name_idx').on(table.name),
     index('places_coordinates_idx').on(table.latitude, table.longitude),
     check('places_latitude_range', sql`${table.latitude} BETWEEN -90 AND 90`),
     check(
       'places_longitude_range',
       sql`${table.longitude} BETWEEN -180 AND 180`,
-    ),
-    check(
-      'places_category_values',
-      sql`${table.category} IN ('building', 'classroom', 'laboratory', 'entrance', 'ramp', 'elevator', 'restroom', 'drinking_fountain', 'cafeteria', 'service', 'other')`,
     ),
     check(
       'places_source_values',

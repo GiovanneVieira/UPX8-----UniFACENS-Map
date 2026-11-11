@@ -1,13 +1,19 @@
 import {
+  adminModelsPageSchema,
   adminPointsPageSchema,
   adminUsersPageSchema,
   anchorDetailSchema,
+  categorySchema,
   updateAdminPointSchema,
   z,
   type AdminListQuery,
+  type Category,
+  type CreateCategoryDto,
+  type Model,
   type UpdateAdminPoint,
+  type UpdateCategoryDto,
 } from 'shared';
-import { getApiBaseUrl } from '@/services/api';
+import { getApiBaseUrl, resolveAssetUrl } from '@/services/api';
 import { getTeamAuthorization } from '@/services/team-authorization';
 import { useAuthStore } from '@/stores/use-auth-store';
 
@@ -34,13 +40,22 @@ async function request<T>(
     if (response.status === 403)
       throw new Error('Acesso exclusivo de administradores.');
     if (response.status === 404)
-      throw new Error('Este ponto não está mais disponível. Atualize a lista.');
+      throw new Error('Este registro não está mais disponível. Atualize a lista.');
     if (response.status === 413)
-      throw new Error('Cada imagem deve ter no máximo 5 MB.');
-    if (!response.ok)
+      throw new Error('Arquivo grande demais. Respeite o limite de tamanho.');
+    if (!response.ok) {
+      // 409 e 400 do backend trazem mensagens prontas para exibir.
+      const detail = (await response.json().catch(() => null)) as
+        | { message?: string | string[] }
+        | null;
+      const message = Array.isArray(detail?.message)
+        ? detail.message[0]
+        : detail?.message;
+      if (message) throw new Error(message);
       throw new Error(
         'Não foi possível concluir a operação. Confira os dados e tente novamente.',
       );
+    }
     return schema.parse(await response.json());
   } catch (error) {
     if (controller.signal.aborted && !init.signal?.aborted)
@@ -58,6 +73,8 @@ async function request<T>(
   }
 }
 
+const imageResultSchema = z.object({ images: z.array(z.string()) });
+
 export const adminApi = {
   points: (query: AdminListQuery, signal: AbortSignal) =>
     request(
@@ -71,6 +88,46 @@ export const adminApi = {
       adminUsersPageSchema,
       { signal },
     ),
+  categories: {
+    list: (signal: AbortSignal) =>
+      request('/categories', z.array(categorySchema), { signal }),
+    create: (dto: CreateCategoryDto) =>
+      request('/categories/admin', categorySchema, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dto),
+      }),
+    update: (id: string, dto: UpdateCategoryDto) =>
+      request(`/categories/admin/${encodeURIComponent(id)}`, categorySchema, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dto),
+      }),
+    remove: (id: string) =>
+      request(
+        `/categories/admin/${encodeURIComponent(id)}`,
+        z.object({ success: z.boolean() }),
+        { method: 'DELETE' },
+      ),
+  },
+  models: {
+    list: (signal: AbortSignal) =>
+      request('/admin/models', adminModelsPageSchema, { signal }),
+    upload: (file: File) => {
+      const body = new FormData();
+      body.append('file', file);
+      return request('/admin/models', adminModelsPageSchema.shape.items.element, {
+        method: 'POST',
+        body,
+      });
+    },
+    remove: (id: string) =>
+      request(
+        `/admin/models/${encodeURIComponent(id)}`,
+        z.object({ success: z.boolean() }),
+        { method: 'DELETE' },
+      ),
+  },
   updatePoint: (id: string, dto: UpdateAdminPoint) =>
     request(`/admin/points/${encodeURIComponent(id)}`, anchorDetailSchema, {
       method: 'PATCH',
@@ -96,16 +153,28 @@ export const adminApi = {
       throw new Error('Envie imagens JPEG, PNG ou WebP de até 5 MB cada.');
     const body = new FormData();
     files.forEach((file) => body.append('files', file));
-    return request(
-      `/anchors/${encodeURIComponent(id)}/images`,
-      z.object({ images: z.array(z.string()) }),
-      { method: 'POST', body },
-    );
+    return request(`/anchors/${encodeURIComponent(id)}/images`, imageResultSchema, {
+      method: 'POST',
+      body,
+    });
   },
+  deleteImage: (id: string, key: string) =>
+    request(
+      `/anchors/${encodeURIComponent(id)}/images?key=${encodeURIComponent(key)}`,
+      imageResultSchema,
+      { method: 'DELETE' },
+    ),
 };
 
+/**
+ * Resolve a URL de exibição de uma imagem de ponto: absolutas (S3) passam
+ * direto; legadas (/uploads/...) ganham a origem da API.
+ */
 export function adminImageUrl(path: string) {
-  if (path.startsWith('/uploads/anchors/')) return `${getApiBaseUrl()}${path}`;
-  if (/^https:\/\//i.test(path)) return path;
+  if (path.startsWith('/uploads/') || path.startsWith('points/'))
+    return resolveAssetUrl(path.startsWith('/') ? path : `/${path}`);
+  if (/^https?:\/\//i.test(path)) return path;
   return undefined;
 }
+
+export type { Category, Model };

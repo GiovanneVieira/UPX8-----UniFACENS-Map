@@ -1,20 +1,41 @@
-import { Injectable, Inject, OnModuleInit } from '@nestjs/common';
-import { eq, desc } from 'drizzle-orm';
+import { Injectable, Inject, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { desc, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import type { Anchor, AnchorDetail, CreateAnchorDto, UpdateAnchorDto } from 'shared';
 import { DRIZZLE } from '../db/database.module.js';
 import type { DrizzleDB } from '../db/database.module.js';
-import { anchors } from '../db/schema.js';
-import type { Anchor, AnchorDetail, CreateAnchorDto, UpdateAnchorDto } from 'shared';
+import { anchors, categories, models } from '../db/schema.js';
+import {
+  assertSafeKey,
+  STORAGE,
+  storageKeys,
+  type StorageAdapter,
+} from '../modules/storage/storage.types.js';
+import { StorageFailureException } from '../common/exceptions/domain.exceptions.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOADS_ROOT = path.resolve(__dirname, '../../uploads');
+/** Row de âncora com a categoria (e modelo) resolvidos em UM join. */
+type AnchorRow = {
+  anchor: typeof anchors.$inferSelect;
+  categoryId: string | null;
+  categorySlug: string | null;
+  categoryLabel: string | null;
+  modelId: string | null;
+  modelKey: string | null;
+  modelDerivedKey: string | null;
+  modelFormat: string | null;
+};
+
+const EXT_BY_MIME: Record<string, string> = {
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
 
 @Injectable()
 export class AnchorsService implements OnModuleInit {
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    @Inject(STORAGE) private readonly storage: StorageAdapter,
+  ) {}
 
   async onModuleInit() {
     if (process.env.NODE_ENV === 'production') return;
@@ -22,29 +43,24 @@ export class AnchorsService implements OnModuleInit {
   }
 
   /**
-   * Retorna todas as âncoras Cloud Anchors registradas no catálogo.
+   * Retorna todas as âncoras Cloud Anchors registradas no catálogo,
+   * com a categoria (e o modelo 3D) embutidas — join único, sem N+1.
    */
   async findAll(): Promise<Anchor[]> {
-    const records = await this.db
-      .select()
-      .from(anchors)
+    const rows = await this.withCategory()
       .orderBy(desc(anchors.createdAt));
-
-    return records.map((record) => this.mapToAnchor(record));
+    return rows.map((row) => this.mapToAnchor(row));
   }
 
   /**
    * Busca uma âncora específica por ID (com imagens e detalhe enriquecido).
    */
   async findById(id: string): Promise<AnchorDetail | null> {
-    const [record] = await this.db
-      .select()
-      .from(anchors)
+    const [row] = await this.withCategory()
       .where(eq(anchors.id, id))
       .limit(1);
-
-    if (!record) return null;
-    return this.mapToDetail(record);
+    if (!row) return null;
+    return this.mapToDetail(row);
   }
 
   /**
@@ -57,6 +73,7 @@ export class AnchorsService implements OnModuleInit {
         name: dto.name,
         cloudAnchorId: dto.cloudAnchorId,
         description: dto.description ?? null,
+        categoryId: dto.categoryId ?? null,
         // positionX/Y/Z permanecem NULL: coordenadas AR de mundo local são
         // session-relative (removidas do contrato — SSOT é lat/lng/alt)
         latitude: dto.latitude ?? null,
@@ -66,7 +83,16 @@ export class AnchorsService implements OnModuleInit {
       })
       .returning();
 
-    return this.mapToAnchor(inserted);
+    return this.mapToAnchor({
+      anchor: inserted,
+      categoryId: null,
+      categorySlug: null,
+      categoryLabel: null,
+      modelId: null,
+      modelKey: null,
+      modelDerivedKey: null,
+      modelFormat: null,
+    });
   }
 
   /**
@@ -79,12 +105,16 @@ export class AnchorsService implements OnModuleInit {
   async update(id: string, dto: UpdateAnchorDto): Promise<Anchor | null> {
     const patch: Partial<typeof anchors.$inferInsert> = {};
     if (dto.cloudAnchorId !== undefined) patch.cloudAnchorId = dto.cloudAnchorId;
+    if (dto.categoryId !== undefined) patch.categoryId = dto.categoryId ?? null;
     if (dto.frameOffset !== undefined) {
       patch.positionX = dto.frameOffset?.[0] ?? null;
       patch.positionY = dto.frameOffset?.[1] ?? null;
       patch.positionZ = dto.frameOffset?.[2] ?? null;
     }
-    if (Object.keys(patch).length === 0) return this.findById(id) as Promise<AnchorDetail | null>;
+    if (Object.keys(patch).length === 0) {
+      const current = await this.findById(id);
+      return current;
+    }
 
     const [updated] = await this.db
       .update(anchors)
@@ -92,11 +122,26 @@ export class AnchorsService implements OnModuleInit {
       .where(eq(anchors.id, id))
       .returning();
     if (!updated) return null;
-    return this.mapToAnchor(updated);
+    const [withCategory] = await this.withCategory()
+      .where(eq(anchors.id, id))
+      .limit(1);
+    return this.mapToAnchor(
+      withCategory ?? {
+        anchor: updated,
+        categoryId: null,
+        categorySlug: null,
+        categoryLabel: null,
+        modelId: null,
+        modelKey: null,
+        modelDerivedKey: null,
+        modelFormat: null,
+      },
+    );
   }
 
   /**
-   * Salva imagens em disco (/uploads/anchors/:id/) e atualiza o JSONB images.
+   * Salva imagens no storage (points/images/{id}/) e atualiza o JSONB images
+   * com as CHAVES lógicas — a URL pública é resolvida na serialização.
    */
   async addImages(id: string, buffers: Buffer[], mimetypes: string[]): Promise<string[]> {
     const [record] = await this.db
@@ -104,28 +149,61 @@ export class AnchorsService implements OnModuleInit {
       .from(anchors)
       .where(eq(anchors.id, id))
       .limit(1);
-    if (!record) return [];
-
-    const anchorDir = path.join(UPLOADS_ROOT, 'anchors', id);
-    fs.mkdirSync(anchorDir, { recursive: true });
+    if (!record) throw new NotFoundException(`Âncora com ID ${id} não encontrada`);
 
     const existing: string[] = Array.isArray(record.images) ? record.images : [];
-    const newPaths: string[] = [];
+    const newKeys: string[] = [];
 
-    for (let i = 0; i < buffers.length; i++) {
-      const ext = mimetypes[i] === 'image/png' ? 'png' : mimetypes[i] === 'image/webp' ? 'webp' : 'jpg';
-      const filename = `${randomUUID()}.${ext}`;
-      fs.writeFileSync(path.join(anchorDir, filename), buffers[i]);
-      newPaths.push(`/uploads/anchors/${id}/${filename}`);
+    try {
+      for (let i = 0; i < buffers.length; i++) {
+        const ext = EXT_BY_MIME[mimetypes[i]] ?? 'jpg';
+        // Chave canônica (prefixada) é a que persiste no JSONB.
+        const stored = await this.storage.put(
+          storageKeys.pointImage(id, `${randomUUID()}.${ext}`),
+          buffers[i],
+          mimetypes[i],
+        );
+        newKeys.push(stored.key);
+      }
+    } catch {
+      // Falha de infra no meio do lote: chaves já gravadas limpam abaixo.
+      await Promise.allSettled(newKeys.map((key) => this.storage.delete(key)));
+      throw new StorageFailureException();
     }
 
-    const updatedImages = [...existing, ...newPaths];
+    const updatedImages = [...existing, ...newKeys];
     await this.db
       .update(anchors)
       .set({ images: updatedImages })
       .where(eq(anchors.id, id));
 
-    return updatedImages;
+    // Contrato consistente: sempre URLs resolvidas (como no mapToDetail).
+    return updatedImages.map((key) => this.storage.url(key));
+  }
+
+  /** Remove UMA imagem do JSONB + do storage (idempotente). Aceita a URL
+   *  serializada (relativa ou pública do S3) ou a chave crua. */
+  async removeImage(id: string, urlOrKey: string): Promise<string[]> {
+    const key = this.storage.keyFor(urlOrKey);
+    assertSafeKey(key);
+    const [record] = await this.db
+      .select()
+      .from(anchors)
+      .where(eq(anchors.id, id))
+      .limit(1);
+    if (!record) throw new NotFoundException(`Âncora com ID ${id} não encontrada`);
+
+    const existing: string[] = Array.isArray(record.images) ? record.images : [];
+    if (!existing.includes(key)) {
+      throw new NotFoundException('Imagem não encontrada neste ponto.');
+    }
+    const updated = existing.filter((entry) => entry !== key);
+    await this.db
+      .update(anchors)
+      .set({ images: updated })
+      .where(eq(anchors.id, id));
+    await this.storage.delete(key).catch(() => undefined);
+    return updated.map((entry) => this.storage.url(entry));
   }
 
   /**
@@ -140,7 +218,26 @@ export class AnchorsService implements OnModuleInit {
     return { success: deleted.length > 0 };
   }
 
-  private mapToAnchor(record: typeof anchors.$inferSelect): Anchor {
+  /** Select base com categoria+modelo em UM join (left — pin pode ser null). */
+  private withCategory() {
+    return this.db
+      .select({
+        anchor: anchors,
+        categoryId: categories.id,
+        categorySlug: categories.slug,
+        categoryLabel: categories.label,
+        modelId: models.id,
+        modelKey: models.originalKey,
+        modelDerivedKey: models.derivedKey,
+        modelFormat: models.format,
+      })
+      .from(anchors)
+      .leftJoin(categories, eq(anchors.categoryId, categories.id))
+      .leftJoin(models, eq(categories.modelId, models.id));
+  }
+
+  private mapToAnchor(row: AnchorRow): Anchor {
+    const record = row.anchor;
     const hasFrameOffset =
       record.positionX !== null &&
       record.positionY !== null &&
@@ -160,14 +257,36 @@ export class AnchorsService implements OnModuleInit {
       frameOffset: hasFrameOffset
         ? [record.positionX as number, record.positionY as number, record.positionZ as number]
         : null,
+      // Categoria + modelo renderizável no AR (null = visual padrão ViroBox).
+      category: row.categoryId
+        ? {
+            id: row.categoryId,
+            slug: row.categorySlug ?? '',
+            label: row.categoryLabel ?? '',
+            modelId: row.modelId,
+            model:
+              row.modelKey
+                ? {
+                    // Renderizável: GLB derivado quando a origem é FBX.
+                    url: this.storage.url(row.modelDerivedKey ?? row.modelKey),
+                    format: row.modelDerivedKey
+                      ? 'glb'
+                      : (row.modelFormat as 'glb' | 'gltf' | 'obj' | 'fbx' | 'vrx'),
+                  }
+                : null,
+          }
+        : null,
     };
   }
 
-  private mapToDetail(record: typeof anchors.$inferSelect): AnchorDetail {
+  private mapToDetail(row: AnchorRow): AnchorDetail {
+    const record = row.anchor;
     return {
-      ...this.mapToAnchor(record),
+      ...this.mapToAnchor(row),
       longDescription: record.longDescription ?? null,
-      images: Array.isArray(record.images) ? record.images : [],
+      images: Array.isArray(record.images)
+        ? record.images.map((key) => this.storage.url(key))
+        : [],
       placeId: record.placeId ?? null,
     };
   }

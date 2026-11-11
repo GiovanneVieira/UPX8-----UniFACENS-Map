@@ -6,6 +6,9 @@ import { AppService } from './app.service.js';
 import { DatabaseModule } from './db/database.module.js';
 import { AnchorsModule } from './anchors/anchors.module.js';
 import { PlacesModule } from './modules/places/places.module.js';
+import { CategoriesModule } from './modules/categories/categories.module.js';
+import { ModelsModule } from './modules/models/models.module.js';
+import { StorageModule } from './modules/storage/storage.module.js';
 import { RoutingModule } from './modules/routing/routing.module.js';
 import { RuntimeConfigModule } from './config/runtime-config.js';
 import { AccessModule } from './common/auth/access.module.js';
@@ -27,8 +30,11 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     RuntimeConfigModule,
     DatabaseModule,
     AccessModule,
+    StorageModule,
     AnchorsModule,
     PlacesModule,
+    CategoriesModule,
+    ModelsModule,
     AdminModule,
     RoutingModule,
     NavigationModule,

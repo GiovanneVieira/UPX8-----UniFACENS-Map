@@ -9,7 +9,7 @@ const API_TIMEOUT_MS = 8000;
 
 export function getApiBaseUrl(): string {
   if (process.env.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL;
+    return process.env.EXPO_PUBLIC_API_URL.replace(/\/+$/, '');
   }
 
   if (Platform.OS === 'web') {
@@ -32,6 +32,16 @@ export function getApiBaseUrl(): string {
 
   // Mobile fallback (se via USB com adb reverse ou emulador)
   return 'http://localhost:8000';
+}
+
+/**
+ * Resolve uma URL de asset devolvida pela API: absolutas (S3 público) passam
+ * direto; relativas (/uploads/... do adapter local de dev) ganham a origem
+ * da API que o dispositivo já alcança.
+ */
+export function resolveAssetUrl(pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  return `${getApiBaseUrl()}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`;
 }
 
 const deleteResultSchema = z.object({ success: z.boolean() });

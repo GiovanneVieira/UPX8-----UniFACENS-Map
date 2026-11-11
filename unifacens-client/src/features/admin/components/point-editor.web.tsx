@@ -1,13 +1,22 @@
 import { useState } from 'react';
 import { useForm } from '@tanstack/react-form';
 import { useMutation } from '@tanstack/react-query';
-import { Image, Modal, ScrollView, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import {
   updateAdminPointSchema,
   type UpdateAdminPoint,
   type AnchorDetail,
 } from 'shared';
 import { adminApi, adminImageUrl } from '../services/admin-api';
+import { useCategoriesQuery } from '@/features/categories/queries/use-categories-query';
+import { FileDropZone } from '@/components/ui/file-drop-zone.web';
+import {
+  PendingImageList,
+  createPendingEntries,
+  type PendingImage,
+} from '@/components/ui/pending-image-list.web';
+import { AdminModalShell } from '@/components/ui/admin-modal-shell.web';
 import { AdminButton, AdminError } from './admin-ui';
 
 export function PointEditor({
@@ -19,33 +28,48 @@ export function PointEditor({
   close: () => void;
   refresh: (message: string, deleted?: boolean) => Promise<void>;
 }) {
-  const [files, setFiles] = useState<File[]>([]);
+  const [pending, setPending] = useState<PendingImage[]>([]);
   const [images, setImages] = useState(point.images);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [message, setMessage] = useState('');
+  const categories = useCategoriesQuery();
+  const categoryOptions = categories.data ?? [];
   const update = useMutation({
     mutationFn: (value: UpdateAdminPoint) =>
       adminApi.updatePoint(point.id, value),
-    onSuccess: async () => {
+    onSuccess: async (updated) => {
       setMessage('Alterações salvas.');
+      setImages(updated.images);
       await refresh('Ponto atualizado.');
     },
   });
   const upload = useMutation({
-    mutationFn: () => adminApi.uploadImages(point.id, files),
+    // A ordem da fila é a ordem do FormData — o servidor grava no JSONB nela.
+    mutationFn: () =>
+      adminApi.uploadImages(point.id, pending.map((entry) => entry.file)),
     onSuccess: async (data) => {
+      pending.forEach((entry) => URL.revokeObjectURL(entry.url));
+      setPending([]);
       setImages(data.images);
-      setFiles([]);
       setMessage('Imagens adicionadas.');
       await refresh('Imagens adicionadas ao ponto.');
+    },
+  });
+  const removeImage = useMutation({
+    mutationFn: (key: string) => adminApi.deleteImage(point.id, key),
+    onSuccess: (data) => {
+      setImages(data.images);
+      setMessage('Imagem removida.');
     },
   });
   const remove = useMutation({
     mutationFn: () => adminApi.deletePoint(point.id),
     onSuccess: () => refresh('Ponto excluído.', true),
   });
-  const busy = update.isPending || upload.isPending || remove.isPending;
-  const error = update.error || upload.error || remove.error;
+  const busy =
+    update.isPending || upload.isPending || remove.isPending || removeImage.isPending;
+  const error =
+    update.error || upload.error || remove.error || removeImage.error;
   function resetMessages() {
     setMessage('');
     update.reset();
@@ -57,6 +81,7 @@ export function PointEditor({
       name: point.name,
       description: point.description ?? '',
       longDescription: point.longDescription ?? '',
+      categoryId: point.category?.id ?? '',
     } as UpdateAdminPoint,
     validators: { onSubmit: updateAdminPointSchema },
     onSubmit: async ({ value }) => {
@@ -65,39 +90,23 @@ export function PointEditor({
     },
   });
   return (
-    <Modal
-      visible
-      transparent
-      animationType="fade"
-      onRequestClose={() => {
-        if (!busy) close();
-      }}
-    >
-      <View className="flex-1 items-center justify-center bg-slate-950/60 p-3 md:p-6">
-        <View
-          accessibilityViewIsModal
-          className="max-h-[95%] w-full max-w-2xl rounded-2xl bg-white"
-        >
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ padding: 24 }}
+    <AdminModalShell visible onClose={() => { if (!busy) close(); }} dismissable={!busy}>
+      <View className="mb-5 flex-row items-center justify-between gap-3">
+        <View className="flex-1">
+          <Text className="text-xs font-bold uppercase tracking-widest text-blue-700">
+            Gestão do campus
+          </Text>
+          <Text
+            accessibilityRole="header"
+            className="mt-2 text-2xl font-bold text-slate-900"
           >
-            <View className="mb-5 flex-row items-center justify-between gap-3">
-              <View className="flex-1">
-                <Text className="text-xs font-bold uppercase tracking-widest text-blue-700">
-                  Gestão do campus
-                </Text>
-                <Text
-                  accessibilityRole="header"
-                  className="mt-2 text-2xl font-bold text-slate-900"
-                >
-                  Editar ponto
-                </Text>
-              </View>
-              <AdminButton onPress={close} disabled={busy}>
-                Fechar
-              </AdminButton>
-            </View>
+            Editar ponto
+          </Text>
+        </View>
+        <AdminButton onPress={close} disabled={busy}>
+          Fechar
+        </AdminButton>
+      </View>
             <View className="gap-4">
               {(['name', 'description', 'longDescription'] as const).map(
                 (name) => (
@@ -147,6 +156,63 @@ export function PointEditor({
                   </form.Field>
                 ),
               )}
+              <Text className="mb-2 text-sm font-semibold text-slate-700">
+                Categoria do ponto
+              </Text>
+              <form.Field name="categoryId">
+                {(field) => (
+                  <View className="mb-3 flex-row flex-wrap gap-2">
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Sem categoria"
+                      accessibilityState={{ selected: !field.state.value }}
+                      disabled={busy}
+                      onPress={() => field.handleChange(null)}
+                      className={`min-h-[44px] justify-center rounded-xl border px-4 py-2 ${!field.state.value ? 'border-blue-600 bg-blue-700' : 'border-slate-300 bg-white'}`}
+                    >
+                      <Text
+                        className={`text-sm font-semibold ${!field.state.value ? 'text-white' : 'text-slate-700'}`}
+                      >
+                        Sem categoria
+                      </Text>
+                    </Pressable>
+                    {categoryOptions.map((category) => {
+                      const selected = field.state.value === category.id;
+                      return (
+                        <Pressable
+                          key={category.id}
+                          accessibilityRole="button"
+                          accessibilityLabel={category.label}
+                          accessibilityState={{ selected }}
+                          disabled={busy}
+                          onPress={() => field.handleChange(category.id)}
+                          className={`min-h-[44px] flex-row items-center gap-1.5 justify-center rounded-xl border px-4 py-2 ${selected ? 'border-blue-600 bg-blue-700' : 'border-slate-300 bg-white'}`}
+                        >
+                          <Text
+                            className={`text-sm font-semibold ${selected ? 'text-white' : 'text-slate-700'}`}
+                          >
+                            {category.label}
+                          </Text>
+                          {selected && category.model && (
+                            <Ionicons name="cube" size={13} color="#bfdbfe" />
+                          )}
+                        </Pressable>
+                      );
+                    })}
+                    {categoryOptions.length === 0 && (
+                      <Text className="text-sm text-slate-500">
+                        {categories.isPending
+                          ? 'Carregando categorias…'
+                          : 'Cadastre categorias na seção Categorias.'}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </form.Field>
+              <Text className="mb-3 text-xs text-slate-500">
+                A categoria define o modelo 3D renderizado no modo AR — o ícone
+                de cubo indica categorias com modelo vinculado.
+              </Text>
               <AdminButton
                 primary
                 disabled={busy}
@@ -163,17 +229,32 @@ export function PointEditor({
                 </Text>
                 <Text className="text-sm text-slate-600">
                   JPEG, PNG ou WebP. Até 5 imagens por envio, com no máximo 5 MB
-                  cada.
+                  cada. Arraste e solte para enviar.
                 </Text>
                 <View className="flex-row flex-wrap gap-2">
                   {images.map((path, index) =>
                     adminImageUrl(path) ? (
-                      <Image
+                      <View
                         key={path}
-                        accessibilityLabel={`Imagem ${index + 1} de ${point.name}`}
-                        source={{ uri: adminImageUrl(path) }}
-                        className="h-24 w-28 rounded-lg bg-slate-100"
-                      />
+                        className="gap-1 rounded-lg border border-slate-200 p-1"
+                      >
+                        <Image
+                          accessibilityLabel={`Imagem ${index + 1} de ${point.name}`}
+                          source={{ uri: adminImageUrl(path) }}
+                          className="h-24 w-28 rounded-lg bg-slate-100"
+                        />
+                        <AdminButton
+                          danger
+                          disabled={busy}
+                          label={`Remover imagem ${index + 1}`}
+                          onPress={() => {
+                            resetMessages();
+                            removeImage.mutate(path);
+                          }}
+                        >
+                          <Ionicons name="trash-outline" size={14} color="#b91c1c" />
+                        </AdminButton>
+                      </View>
                     ) : null,
                   )}
                 </View>
@@ -182,21 +263,31 @@ export function PointEditor({
                     Este ponto ainda não tem imagens.
                   </Text>
                 )}
-                <input
-                  key={images.length}
-                  aria-label="Selecionar imagens do ponto"
-                  type="file"
+                <FileDropZone
                   accept="image/jpeg,image/png,image/webp"
                   multiple
+                  maxSizeBytes={5 * 1024 * 1024}
+                  hint="JPEG, PNG ou WebP · até 5 MB cada · máx 5 por envio"
+                  label="Arraste as imagens do ponto"
                   disabled={busy}
-                  onChange={(event) => {
+                  onFiles={(selected) => {
                     resetMessages();
-                    setFiles(Array.from(event.target.files ?? []));
+                    // Concatena (máx 5 no total) preservando a fila atual.
+                    const additions = createPendingEntries(selected);
+                    setPending((current) => [...current, ...additions].slice(0, 5));
                   }}
-                  style={{ maxWidth: '100%', minHeight: 44, color: '#334155' }}
-                />
+                >
+                  {pending.length ? (
+                    <PendingImageList
+                      entries={pending}
+                      onChange={setPending}
+                      disabled={busy}
+                      max={5}
+                    />
+                  ) : null}
+                </FileDropZone>
                 <AdminButton
-                  disabled={busy || !files.length}
+                  disabled={busy || !pending.length}
                   onPress={() => {
                     resetMessages();
                     upload.mutate();
@@ -204,7 +295,7 @@ export function PointEditor({
                 >
                   {upload.isPending
                     ? 'Enviando…'
-                    : `Adicionar imagens${files.length ? ` (${files.length})` : ''}`}
+                    : `Adicionar imagens${pending.length ? ` (${pending.length})` : ''}`}
                 </AdminButton>
               </View>
               {!!message && (
@@ -256,9 +347,6 @@ export function PointEditor({
                 )}
               </View>
             </View>
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
+    </AdminModalShell>
   );
 }

@@ -9,9 +9,48 @@ import {
 import { Link } from 'expo-router';
 import Head from 'expo-router/head';
 import { Ionicons } from '@expo/vector-icons';
-import { useAdminPanel } from '../hooks/use-admin-panel';
+import { useAdminPanel, type AdminSection } from '../hooks/use-admin-panel';
 import { AdminButton, AdminError, Pagination } from './admin-ui';
 import { PointEditor } from './point-editor.web';
+import { CategoryManager } from './category-manager.web';
+import { ModelManager } from './model-manager.web';
+
+const SECTIONS: Array<{
+  key: AdminSection;
+  label: string;
+  icon: keyof typeof ICONS;
+}> = [
+  { key: 'points', label: 'Pontos do campus', icon: 'location-outline' },
+  { key: 'categories', label: 'Categorias', icon: 'pricetags-outline' },
+  { key: 'models', label: 'Modelos 3D', icon: 'cube-outline' },
+  { key: 'users', label: 'Usuários', icon: 'people-outline' },
+];
+
+const ICONS = {
+  'location-outline': 'location-outline',
+  'pricetags-outline': 'pricetags-outline',
+  'cube-outline': 'cube-outline',
+  'people-outline': 'people-outline',
+} as const;
+
+const SECTION_HEADINGS: Record<AdminSection, { title: string; subtitle: string }> = {
+  points: {
+    title: 'Pontos do campus',
+    subtitle: 'Mantenha as informações, categorias e imagens dos pontos sempre atualizadas.',
+  },
+  categories: {
+    title: 'Categorias',
+    subtitle: 'Organize locais e pontos AR — cada categoria pode renderizar um modelo 3D próprio.',
+  },
+  models: {
+    title: 'Modelos 3D',
+    subtitle: 'Envie GLB, glTF, OBJ ou FBX (convertido para GLB) e vincule às categorias.',
+  },
+  users: {
+    title: 'Usuários cadastrados',
+    subtitle: 'Consulte as contas e os perfis de acesso à plataforma.',
+  },
+};
 
 export function AdminScreen() {
   const panel = useAdminPanel();
@@ -55,27 +94,21 @@ export function AdminScreen() {
             Área de gestão
           </Text>
           <View className="flex-row gap-2 md:flex-col">
-            {(['points', 'users'] as const).map((item) => (
+            {SECTIONS.map((item) => (
               <Pressable
-                key={item}
+                key={item.key}
                 accessibilityRole="button"
-                accessibilityLabel={
-                  item === 'points' ? 'Pontos do campus' : 'Usuários'
-                }
-                accessibilityState={{ selected: section === item }}
-                onPress={() => panel.changeSection(item)}
-                className={`min-h-[48px] flex-1 flex-row items-center gap-3 rounded-xl px-4 py-3 md:flex-none ${section === item ? 'bg-blue-600' : 'bg-slate-900'}`}
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected: section === item.key }}
+                onPress={() => panel.changeSection(item.key)}
+                className={`min-h-[48px] flex-1 flex-row items-center gap-3 rounded-xl px-4 py-3 md:flex-none ${section === item.key ? 'bg-blue-600' : 'bg-slate-900'}`}
               >
                 <Ionicons
-                  name={
-                    item === 'points' ? 'location-outline' : 'people-outline'
-                  }
+                  name={item.icon}
                   size={20}
                   color="white"
                 />
-                <Text className="font-semibold text-white">
-                  {item === 'points' ? 'Pontos do campus' : 'Usuários'}
-                </Text>
+                <Text className="font-semibold text-white">{item.label}</Text>
               </Pressable>
             ))}
           </View>
@@ -115,46 +148,48 @@ export function AdminScreen() {
                   accessibilityRole="header"
                   className="mt-2 text-3xl font-bold text-slate-900"
                 >
-                  {section === 'points'
-                    ? 'Pontos do campus'
-                    : 'Usuários cadastrados'}
+                  {SECTION_HEADINGS[section].title}
                 </Text>
                 <Text className="mt-2 text-base text-slate-600">
-                  {section === 'points'
-                    ? 'Mantenha as informações e imagens dos pontos sempre atualizadas.'
-                    : 'Consulte as contas e os perfis de acesso à plataforma.'}
+                  {SECTION_HEADINGS[section].subtitle}
                 </Text>
               </View>
-              <AdminButton
-                disabled={query.isFetching}
-                onPress={() => void query.refetch()}
-              >
-                {query.isFetching ? 'Atualizando…' : 'Atualizar lista'}
-              </AdminButton>
+              {(section === 'points' || section === 'users') && (
+                <AdminButton
+                  disabled={query.isFetching}
+                  onPress={() => void query.refetch()}
+                >
+                  {query.isFetching ? 'Atualizando…' : 'Atualizar lista'}
+                </AdminButton>
+              )}
             </View>
-            <View className="flex-row items-center gap-5 rounded-2xl border border-slate-200 bg-white p-5">
-              <View className="h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
-                <Ionicons
-                  name={
-                    section === 'points' ? 'location-outline' : 'people-outline'
-                  }
-                  size={24}
-                  color="#1d4ed8"
-                />
+            {(section === 'points' || section === 'users') && (
+              <View className="flex-row items-center gap-5 rounded-2xl border border-slate-200 bg-white p-5">
+                <View className="h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
+                  <Ionicons
+                    name={
+                      section === 'points'
+                        ? 'location-outline'
+                        : 'people-outline'
+                    }
+                    size={24}
+                    color="#1d4ed8"
+                  />
+                </View>
+                <View>
+                  <Text className="text-3xl font-bold text-slate-900">
+                    {query.data?.total ?? '—'}
+                  </Text>
+                  <Text className="text-sm text-slate-500">
+                    {panel.search
+                      ? 'Resultados da consulta'
+                      : section === 'points'
+                        ? 'Pontos cadastrados'
+                        : 'Contas cadastradas'}
+                  </Text>
+                </View>
               </View>
-              <View>
-                <Text className="text-3xl font-bold text-slate-900">
-                  {query.data?.total ?? '—'}
-                </Text>
-                <Text className="text-sm text-slate-500">
-                  {panel.search
-                    ? 'Resultados da consulta'
-                    : section === 'points'
-                      ? 'Pontos cadastrados'
-                      : 'Contas cadastradas'}
-                </Text>
-              </View>
-            </View>
+            )}
             {!!panel.notice && (
               <Text
                 accessibilityLiveRegion="polite"
@@ -163,7 +198,20 @@ export function AdminScreen() {
                 {panel.notice}
               </Text>
             )}
-            <View className="gap-5 rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
+            {section === 'categories' && (
+              <View className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
+                <CategoryManager
+                  notice={(message) => panel.refresh(message)}
+                />
+              </View>
+            )}
+            {section === 'models' && (
+              <View className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
+                <ModelManager notice={(message) => panel.refresh(message)} />
+              </View>
+            )}
+            {(section === 'points' || section === 'users') && (
+              <View className="gap-5 rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
               <View className="gap-2">
                 <Text className="text-sm font-semibold text-slate-700">
                   {section === 'points' ? 'Buscar ponto' : 'Buscar usuário'}
@@ -308,7 +356,8 @@ export function AdminScreen() {
                   />
                 </>
               )}
-            </View>
+              </View>
+            )}
             <Text className="text-xs text-slate-500">
               UniFACENS Map · Gestão do campus
             </Text>

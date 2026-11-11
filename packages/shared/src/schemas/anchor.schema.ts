@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { anchorCategorySchema } from './category.schema.js';
 
 /**
  * Tupla 3D cartesiana [x, y, z] em metros (usada pelo ARCore em tempo de execução).
@@ -33,6 +34,8 @@ export const anchorSchema = z.object({
   createdAt: z.string(),
   arPosition: vector3Schema.optional(),
   distanceMeters: z.number().optional(),
+  /** Categoria do ponto — define o modelo 3D renderizado no AR (null = padrão). */
+  category: anchorCategorySchema.nullable().default(null),
   /** Runtime-only (client): pin sem âncora nativa — projeção estimada. */
   estimated: z.boolean().optional(),
   /** Runtime-only (client): envelope de erro da estimativa (m). */
@@ -57,6 +60,7 @@ export const createAnchorSchema = z.object({
   name: z.string().trim().min(1, 'O nome da âncora é obrigatório').max(255),
   cloudAnchorId: z.string().trim().min(1, 'O Cloud Anchor ID é obrigatório'),
   description: z.string().trim().max(1000).optional().nullable(),
+  categoryId: z.string().uuid('Categoria inválida').optional().nullable(),
   latitude: latitudeRange.optional().nullable(),
   longitude: longitudeRange.optional().nullable(),
   altitude: altitudeRange.optional().nullable(),
@@ -73,9 +77,16 @@ export const updateAnchorSchema = z
   .object({
     cloudAnchorId: z.string().trim().min(1).optional(),
     frameOffset: vector3Schema.optional().nullable(),
+    categoryId: z.string().uuid('Categoria inválida').optional().nullable(),
   })
-  .refine((dto) => dto.cloudAnchorId !== undefined || dto.frameOffset !== undefined, {
-    message: 'Informe ao menos um campo para atualizar',
-  });
+  .refine(
+    (dto) =>
+      dto.cloudAnchorId !== undefined ||
+      dto.frameOffset !== undefined ||
+      dto.categoryId !== undefined,
+    {
+      message: 'Informe ao menos um campo para atualizar',
+    },
+  );
 export type UpdateAnchorDto = z.infer<typeof updateAnchorSchema>;
 

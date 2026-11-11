@@ -5,7 +5,6 @@ import {
   placesPageSchema,
   type CreatePlaceDto,
   type PlacesPage,
-  type PlaceCategory,
   type UpdatePlaceDto,
 } from "shared";
 import { getApiBaseUrl } from "@/services/api";
@@ -14,7 +13,8 @@ import { useAuthStore } from "@/stores/use-auth-store";
 
 export interface PlaceFilters {
   search: string;
-  category?: PlaceCategory;
+  /** Slug da categoria (compatível com os seeds — o filtro é dinâmico). */
+  category?: string;
 }
 
 export async function fetchPlace(id: string, signal: AbortSignal) {

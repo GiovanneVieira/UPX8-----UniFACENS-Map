@@ -3,7 +3,7 @@ import { createPlaceFormSchema } from 'shared';
 
 const form = {
   name: 'Local de exemplo',
-  category: 'building',
+  categoryId: '10000000-0000-4000-8000-000000000002',
   latitude: '-23,4699',
   longitude: '-47.4297',
   building: '',
@@ -35,5 +35,9 @@ describe('Contrato compartilhado do formulário de locais', () => {
     expect(
       createPlaceFormSchema.parse({ ...form, floor: '' }).floor,
     ).toBeNull();
+  });
+  it('exige categoryId em formato UUID (categoria virou entidade)', () => {
+    expect(createPlaceFormSchema.safeParse({ ...form, categoryId: 'building' }).success).toBe(false);
+    expect(createPlaceFormSchema.safeParse({ ...form, categoryId: '' }).success).toBe(false);
   });
 });

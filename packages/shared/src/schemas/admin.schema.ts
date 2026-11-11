@@ -17,6 +17,8 @@ export const updateAdminPointSchema = z
       .optional(),
     description: z.string().trim().max(1000).nullable().optional(),
     longDescription: z.string().trim().max(10000).nullable().optional(),
+    /** Categoria do ponto — define o modelo 3D no AR. Null limpa a categoria. */
+    categoryId: z.string().uuid('Categoria inválida').nullable().optional(),
   })
   .refine(
     (value) => Object.keys(value).length > 0,

@@ -11,9 +11,9 @@ import {
   UseInterceptors,
   UploadedFiles,
   BadRequestException,
+  Query,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { AnchorsService } from './anchors.service.js';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe.js';
 import {
   createAnchorSchema,
@@ -24,8 +24,9 @@ import {
   type CreateAnchorDto,
   type UpdateAnchorDto,
 } from 'shared';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { AdminOnly } from '../common/auth/access.decorators.js';
+import { AnchorsService } from './anchors.service.js';
 
 const MAX_IMAGES = 5;
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -131,6 +132,22 @@ export class AnchorsController {
       uploaded.map((f) => f.mimetype),
     );
 
+    return { images };
+  }
+
+  @Delete(':id/images')
+  @AdminOnly()
+  @ApiBearerAuth('admin-bearer')
+  @ApiQuery({ name: 'key', required: true, description: 'Chave da imagem retornada no campo images' })
+  @ApiOperation({ summary: 'Remover uma imagem do ponto (JSONB + storage)' })
+  async deleteImage(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query('key') key?: string,
+  ): Promise<{ images: string[] }> {
+    if (!key) {
+      throw new BadRequestException('Informe a chave da imagem (query ?key=).');
+    }
+    const images = await this.anchorsService.removeImage(id, key);
     return { images };
   }
 
