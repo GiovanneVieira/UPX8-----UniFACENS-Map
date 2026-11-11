@@ -2,6 +2,7 @@ import React, { FC, useState, useRef, useEffect, useCallback, useMemo } from "re
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -27,17 +28,20 @@ import { useARGeolocation } from "./hooks/use-ar-geolocation";
 import { useARProjection } from "./hooks/use-ar-projection";
 import { useGeospatialPose, isPoseFresh } from "./hooks/use-geospatial-pose";
 import { useNativeAnchors } from "./hooks/use-native-anchors";
-import { useCloudAnchors } from "./hooks/use-cloud-anchors";
+import { useCloudAnchors, isRealCloudAnchorId } from "./hooks/use-cloud-anchors";
 import { usePointHosting } from "./hooks/use-point-hosting";
 import { useARWorldAlignment } from "./hooks/use-ar-world-alignment";
 import { useARZoom } from "./hooks/use-ar-zoom";
-import { ARStatusHud } from "./hud/ar-status-hud";
+import { ARStatusHud, ARTrackingBanner } from "./hud/ar-status-hud";
 import { ARCompassRadiusBar } from "./hud/ar-compass-radius-bar";
+import { ARTopHudStack } from "./hud/ar-top-hud-stack";
 import { ARZoomSelector } from "./hud/ar-zoom-selector";
 import { ARReticle } from "./hud/ar-reticle";
 import { NavInstructionHud } from "./hud/nav-instruction-hud";
 import { PlaceAnchorModal, PlaceAnchorPill } from "./modals/place-anchor-modal";
 import { AnchorListModal } from "./modals/anchor-list-modal";
+import { ARAnchorToast, ANCHOR_TOAST_TTL_MS, type AnchorToastData } from "./hud/ar-anchor-toast";
+import { ARDiagnosticsModal, type ARDiagnosticsContext } from "./modals/ar-diagnostics-modal";
 import { AnchorDetailSheet } from "./modals/anchor-detail-sheet";
 import { useARNavigation } from "@/features/ar/hooks/use-ar-navigation";
 
@@ -46,6 +50,17 @@ const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
 
 /** Acurácia máxima da pose para CRIAR âncoras nativas (economia de quota). */
 const NATIVE_ANCHOR_MAX_POSE_ACCURACY_M = 20;
+
+/**
+ * Background ≥10s → RESET COMPLETO da sessão AR ao voltar (Frente B,
+ * 2026-11-11). O ARCore pode RE-BASAR a origem do mundo no resume (§12.8):
+ * as cloud anchors resolvidas viram posições ESTÁTICAS de sessão e todas
+ * deslocam de uma vez — re-resolve individual não devolve um mundo
+ * coerente. O reset (remount do navigator + estado zerado) re-estabelece
+ * tudo do zero; os ghosts (~15-20s) cobrem a janela. Voltas <10s seguem
+ * no fluxo leve de invalidação por tracking.
+ */
+const SESSION_RESET_AFTER_BG_MS = 10_000;
 
 /** Facade mínima do ref da cena Viro utilizada para hit-tests. */
 interface ViroSceneHitTestRef {
@@ -75,6 +90,10 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   const cameraYawRef = useRef<number>(0);
   const trackingStateRef = useRef<number>(2);
   const [trackingState, setTrackingState] = useState<number>(2);
+  /** Frente C: quando a degradação começou + cooldown da última invalidação. */
+  const trackingDegradedSinceRef = useRef<number | null>(null);
+  const lastInvalidateRef = useRef(0);
+  const cloudInvalidateRef = useRef<(() => void) | null>(null);
 
   const geo = useARGeolocation();
   const geospatial = useGeospatialPose();
@@ -111,7 +130,11 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     serverAnchors: anchorsQuery.data,
     trackingState,
     focused,
+    // Ordena candidatos por proximidade (pin perto = SIFT fecha antes).
+    geoPoseRef: geospatial.poseRef,
   });
+  // Frente C: handleTrackingUpdate (useCallback []) lê via ref.
+  cloudInvalidateRef.current = cloudAnchors.invalidateEntries;
 
   // ── Hosting por PONTO (guia oficial Cloud Anchors, lição definitiva
   //    2026-11-10: dados da plataforma — finishScan: GPS null + 5% resolve;
@@ -143,14 +166,64 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     delta: alignment.delta,
     poseTick: geospatial.pose,
     reprojectNonce,
-    // Pins cloud pendentes NUNCA caem no fallback GPS (E5 — estado honesto).
-    noFallbackIds: cloudAnchors.pendingIds,
+    // Pins cloud pendentes: invisíveis na cortesia, estimativa ghost depois
+    // (isGhost — não selecionável; resolve substitui com transição suave).
+    pendingIds: cloudAnchors.pendingIds,
+    ghostIds: cloudAnchors.ghostIds,
   });
 
   // ── Navegação ────────────────────────────────────────────────────────────
   const [detailSheetVisible, setDetailSheetVisible] = useState(false);
   /** Lista de pontos carregados ("Ir para" — rota AR). */
   const [listVisible, setListVisible] = useState(false);
+  /** Toast de ponto encontrado (cloud resolve / primeiro projetado). */
+  const [anchorToast, setAnchorToast] = useState<AnchorToastData | null>(null);
+
+  /** Fechamento do toast — ESTÁVEL (lição 2026-11-11: arrow inline nas deps
+   *  do efeito do toast reiniciava o timer a cada render de 1Hz da projeção
+   *  → o toast nunca expirava sozinho). */
+  const dismissAnchorToast = useCallback(() => setAnchorToast(null), []);
+
+  // Dispara toast quando cloud anchors RESOLVEM: diff dos ids de entries
+  // (antes: find() no array — anunciava o primeiro pin com entry, não o que
+  // acabou de resolver). Múltiplos no mesmo tick → o mais próximo da câmera.
+  const prevResolvedIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const entries = cloudAnchors.entries;
+    const newIds: string[] = [];
+    for (const id of entries.keys()) {
+      if (!prevResolvedIdsRef.current.has(id)) newIds.push(id);
+    }
+    prevResolvedIdsRef.current = new Set(entries.keys());
+    if (newIds.length === 0) return;
+
+    const cam = cameraPosRef.current;
+    const candidates = (anchorsQuery.data ?? []).filter((a) => newIds.includes(a.id));
+    if (candidates.length === 0) return;
+
+    let best = candidates[0];
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const pin of candidates) {
+      const entry = entries.get(pin.id);
+      if (!entry) continue;
+      const dist = Math.hypot(
+        entry.position[0] - cam[0],
+        entry.position[1] - cam[1],
+        entry.position[2] - cam[2],
+      );
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = pin;
+      }
+    }
+
+    setAnchorToast({
+      name: best.name,
+      distanceM: Number.isFinite(bestDist) ? Number(bestDist.toFixed(0)) : undefined,
+      isCloud: isRealCloudAnchorId(best.cloudAnchorId),
+      expiresAt: Date.now() + ANCHOR_TOAST_TTL_MS,
+    });
+  }, [cloudAnchors.entries, anchorsQuery.data]);
   const [detailAnchor, setDetailAnchor] = useState<Anchor | null>(null);
   const {
     route: arRoute,
@@ -166,6 +239,18 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // ── Estado de UI local ────────────────────────────────────────────────────
   const [radiusFilter, setRadiusFilter] = useState<number>(0);
   const [planeCount, setPlaneCount] = useState<number>(0);
+  /**
+   * Altura do bloco PERSISTENTE da pilha (status + filtros — sempre
+   * presentes), medida via onLayout: âncora ESTÁVEL para os flutuantes
+   * (badge de zoom, botão lista). ⚠️ Lição de device 2026-11-11: ancorar
+   * na altura TOTAL da pilha fazia os flutuantes pularem a cada estado
+   * efêmero (toast de 3.5s, banner de tracking, navegação, fetch).
+   */
+  const [stableHudHeight, setStableHudHeight] = useState(180);
+  /** Modal de diagnóstico do mapeamento (pill de status clicável). */
+  const [diagVisible, setDiagVisible] = useState(false);
+  /** Key do navigator — bump = remount completo (reset de sessão AR). */
+  const [arSessionKey, setArSessionKey] = useState(0);
 
   // ── Background hit-test: REMOVIDO (lição de device 2026-11-10, RedBox
   // "performARHitTest on a null ViroViewARCore" + SIGSEGVs 15:13/15:20) ──
@@ -211,11 +296,12 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
                   : '';
       return `Localizando âncora ${pct > 0 ? `${pct}%` : '…'}${hint ? ` — ${hint}` : ''}`;
     }
-    // Pendentes (não localizados): estado honesto — NUNCA fallback GPS.
-    if (cloudAnchors.pendingIds.size > 0) {
+    // Ghosts (pendentes ≥ cortesia, não localizados): estimativa honesta —
+    // projetados com selo ±Xm; o resolve substitui com transição suave.
+    if (cloudAnchors.ghostIds.size > 0) {
       return cloudAnchors.entries.size > 0
-        ? `${cloudAnchors.entries.size} ponto(s) · ${cloudAnchors.pendingIds.size} p/ aproximar`
-        : `${cloudAnchors.pendingIds.size} âncora(s) — aproxime-se do ponto`;
+        ? `${cloudAnchors.entries.size} ponto(s) · ${cloudAnchors.ghostIds.size} aproximado(s) — aponte a câmera`
+        : `${cloudAnchors.ghostIds.size} ponto(s) aproximado(s) — aponte a câmera`;
     }
     // Mundo AR ainda não alinhado com o Norte → projeção aguardando Δ
     if (alignment.status === "aligning") return "Alinhando AR…";
@@ -238,7 +324,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     alignment.status,
     cloudAnchors.entries,
     cloudAnchors.resolveHud,
-    cloudAnchors.pendingIds,
+    cloudAnchors.ghostIds,
     pointHosting.state,
   ]);
   const cloudStatus = mutationStatus ?? cloudStatusDerived;
@@ -267,8 +353,25 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   const handleTrackingUpdate = useCallback((state: number) => {
     if (state !== 3 && trackingStateRef.current === 3) {
       console.warn(`[ARTrack] tracking degradou (3 → ${state}) — mundo não-rígido, conteúdo AR será ocultado`);
+      trackingDegradedSinceRef.current = Date.now();
     } else if (state === 3 && trackingStateRef.current !== 3) {
       console.log("[ARTrack] tracking estável (3) — mundo rígido novamente");
+      // Frente C: degradação REAL (≥5s — oscilação rápida de remount é
+      // ruído, §12.12) + cooldown → o ARCore pode ter RE-BASADO a origem
+      // do mundo (background/resume, §12.8): re-resolve as cloud anchors
+      // no frame atual; a projeção desliza (jamais salta).
+      const degradedAt = trackingDegradedSinceRef.current;
+      const now = Date.now();
+      if (
+        degradedAt !== null &&
+        now - degradedAt >= 5_000 &&
+        now - lastInvalidateRef.current >= 30_000 &&
+        cloudInvalidateRef.current
+      ) {
+        lastInvalidateRef.current = now;
+        cloudInvalidateRef.current();
+      }
+      trackingDegradedSinceRef.current = null;
     }
     trackingStateRef.current = state;
     setTrackingState(state);
@@ -296,7 +399,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     let bestDot = 0.97;
 
     for (const a of projection.anchors) {
-      if (!a.arPosition) continue;
+      // Ghost = estimativa não confirmada — selecionar abriria detalhe
+      // enganoso; o resolve o tornará selecionável ao cravar.
+      if (!a.arPosition || a.isGhost) continue;
       const dx = a.arPosition[0] - camPos[0];
       const dy = a.arPosition[1] - camPos[1];
       const dz = a.arPosition[2] - camPos[2];
@@ -353,15 +458,150 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     [pointHosting],
   );
 
-  // ── Refresh REAL: refetch + retry de falhas + re-projeção + recalibra Δ ──
-  const handleRefresh = useCallback(() => {
-    void anchorsQuery.refetch();
-    projection.clearFrozen();
-    nativeAnchors.retryFailed();
+  // ── Refresh REAL: invalida cache + cancela pendentes + retry + recalibra ──
+  const handleRefresh = useCallback(async () => {
+    // Feedback imediato
+    setMutationStatus('Atualizando…');
+
+    // 1. Cancela resolves pendentes (SDK: ErrorCancelled — limpa o nativo)
+    try {
+      navigatorRef.current?.cancelCloudAnchorOperations?.();
+    } catch {
+      // best-effort
+    }
+
+    // 2. Zera backoff de retry (tudo elegível imediatamente)
     cloudAnchors.retryFailed();
+    nativeAnchors.retryFailed();
+
+    // 3. Invalida cache do TanStack (força refetch do servidor)
+    await queryClient.invalidateQueries({ queryKey: anchorKeys.lists() });
+
+    // 4. Recalibra Δ + re-projeta estimativas
+    projection.clearFrozen();
     alignment.realign();
     setReprojectNonce((n) => n + 1);
-  }, [anchorsQuery, projection, nativeAnchors, cloudAnchors, alignment]);
+
+    setMutationStatus(null);
+    console.log('[AR Refresh] invalidado + retry zerado + Δ recalibrado');
+  }, [queryClient, projection, nativeAnchors, cloudAnchors, alignment]);
+
+  // ── RESET DE SESSÃO AR pós-background longo (Frente B, 2026-11-11) ──────
+  // Callbacks estáveis (useCallback nos hooks) — o reset não recria por render.
+  const cloudInvalidate = cloudAnchors.invalidateEntries;
+  const nativeResetAll = nativeAnchors.resetAll;
+  const cloudDiagnosticsSnapshot = cloudAnchors.diagnosticsSnapshot;
+  const pointHostingCancel = pointHosting.cancel;
+  const alignmentRealign = alignment.realign;
+  const projectionClearFrozen = projection.clearFrozen;
+
+  const resetARSession = useCallback(() => {
+    console.log('[ARSession] RESET — background longo: mundo pode ter re-basado; recomeçando do zero');
+    // Cancela ops do provider ANTES de destruir a view (best-effort).
+    try {
+      navigatorRef.current?.cancelCloudAnchorOperations?.();
+    } catch {
+      // best-effort
+    }
+    // Estado de sessão zerado: entries/provisórias/pendências (cloud),
+    // âncoras nativas, hosting em curso, Δ (recalibra no mundo novo),
+    // estimativas congeladas.
+    cloudInvalidate();
+    nativeResetAll();
+    pointHostingCancel();
+    alignmentRealign();
+    projectionClearFrozen();
+    setReprojectNonce((n) => n + 1);
+    // Remount do navigator POR ÚLTIMO: a view antiga (com as âncoras
+    // nativas dela) é destruída e a nova nasce limpa — mundo coerente do
+    // zero; ghosts re-nascem (~15-20s) e os resolves re-estabelecem.
+    setArSessionKey((k) => k + 1);
+  }, [
+    cloudInvalidate,
+    nativeResetAll,
+    pointHostingCancel,
+    alignmentRealign,
+    projectionClearFrozen,
+  ]);
+
+  const backgroundAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'background') {
+        // ?? mantém a 1ª marca (inactive transitório do iOS não conta).
+        backgroundAtRef.current ??= Date.now();
+      } else if (state === 'active' && backgroundAtRef.current !== null) {
+        const awayFor = Date.now() - backgroundAtRef.current;
+        backgroundAtRef.current = null;
+        if (awayFor >= SESSION_RESET_AFTER_BG_MS) {
+          resetARSession();
+        } else {
+          console.log(`[ARSession] background curto (${(awayFor / 1000).toFixed(1)}s) — sem reset`);
+        }
+      }
+    });
+    return () => sub.remove();
+  }, [resetARSession]);
+
+  // ── Getters do modal de diagnóstico (Frente D) — PULL sob demanda ──────
+  const getDiagnosticsSnapshot = useCallback(
+    () => cloudDiagnosticsSnapshot(anchorsQuery.data ?? []),
+    [cloudDiagnosticsSnapshot, anchorsQuery.data],
+  );
+
+  const getDiagnosticsContext = useCallback((): ARDiagnosticsContext => {
+    const pose = geospatial.pose;
+    const pinVisuals = new Map<
+      string,
+      { distanceM?: number; estimated?: boolean; estimateAccuracyM?: number; isGhost?: boolean }
+    >();
+    for (const a of projection.anchors) {
+      pinVisuals.set(a.id, {
+        distanceM: a.distanceMeters,
+        estimated: a.estimated,
+        estimateAccuracyM: a.estimateAccuracyM,
+        isGhost: a.isGhost,
+      });
+    }
+    return {
+      trackingState,
+      deltaStatus: alignment.status,
+      deltaValue: alignment.delta,
+      provider:
+        process.env.EXPO_PUBLIC_AR_PROVIDER === 'reactvision' ? 'reactvision' : 'arcore',
+      poseAccM: pose?.horizontalAccuracy ?? null,
+      poseFresh: geospatial.isFresh,
+      totalPins: anchorsQuery.data?.length ?? 0,
+      pinVisuals,
+    };
+  }, [
+    trackingState,
+    alignment.status,
+    alignment.delta,
+    geospatial.pose,
+    geospatial.isFresh,
+    projection.anchors,
+    anchorsQuery.data,
+  ]);
+
+  // ── AUTO-REFRESH LEVE (Frente B, 2026-11-11): enquanto houver pins
+  //    pendentes, a cada 30s re-tenta resolves esgotados + refetch do
+  //    banco. SEM realign do Δ e SEM clearFrozen — esses ficam no refresh
+  //    MANUAL (§11.5: recalibrar Δ sozinho giraria o mundo). Quota ARCore:
+  //    resolve 300/min por projeto — folga. Para sozinho quando nada está
+  //    pendente. */
+  const pendingCount = cloudAnchors.pendingIds.size;
+  const cloudRetryFailed = cloudAnchors.retryFailed;
+  useEffect(() => {
+    if (pendingCount === 0) return;
+    const timer = setInterval(() => {
+      if (!focused || trackingStateRef.current < 2) return;
+      cloudRetryFailed();
+      void queryClient.invalidateQueries({ queryKey: anchorKeys.lists() });
+      console.log('[ARCloud] auto-refresh 30s — re-tentativas + refetch');
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [pendingCount, focused, cloudRetryFailed, queryClient]);
 
   // ── handleCreate: grava o pin com a âncora do SCAN oficial (offset ZERO
   //    por construção — sem mira, sem gates de GPS; lat/lng best-effort só
@@ -526,6 +766,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
           <Animated.View style={[styles.arZoomWrapper, arZoomAnimatedStyle]}>
             <ViroARSceneNavigator
               ref={navigatorRef}
+              // Reset de sessão (Frente B): key bump = remount completo do
+              // nativo — mundo novo coerente pós-background longo.
+              key={arSessionKey}
               // A/B de providers (épica precisão, 2026-11-10): o provider é
               // ÚNICO e troca Cloud + Geospatial JUNTOS (§15.1 AGENTS.MD).
               // "arcore" (default) ⇄ "reactvision" via EXPO_PUBLIC_AR_PROVIDER
@@ -540,19 +783,124 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         </View>
       </GestureDetector>
 
-      {zoomLevel > 1.05 ? (
+      {/* ══ PILHA DO TOPO (ARTopHudStack) — status → banner de tracking →
+          pílula de hosting → filtros (carousel) → navegação → toast, em
+          FLUXO vertical: quando um elemento aparece, tudo abaixo desce.
+          Sobreposição impossível por construção (lição 2026-11-11: o banner
+          de tracking renderizava ATRÁS da barra de filtros — absolute +
+          números mágicos espalhados por 6 componentes). */}
+      <ARTopHudStack>
+        {/* Bloco PERSISTENTE (status + filtros) — altura estável medida por
+            onLayout: os flutuantes ancoram AQUI e nunca pulam. */}
         <View
-          style={[
-            styles.zoomBadge,
-            {
-              top: Math.max(insets.top + 98, 138),
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 5,
-            },
-          ]}
-          pointerEvents="none"
-        >
+          style={styles.stableHudBlock}
+          onLayout={(e) => setStableHudHeight(e.nativeEvent.layout.height)}>
+          <ARStatusHud
+            cloudStatus={cloudStatus}
+            trackingState={trackingState}
+            isFetching={anchorsQuery.isFetching}
+            calibratedLabel={null}
+            gpsAccuracyMeters={geo.userCoords.accuracy}
+            vpsAccuracyMeters={
+              geospatial.isFresh ? (geospatial.pose?.horizontalAccuracy ?? null) : null
+            }
+            onOpenCalibration={() => {}}
+            onRefresh={handleRefresh}
+            onOpenDiagnostics={() => setDiagVisible(true)}
+          />
+
+          <ARCompassRadiusBar
+            heading={geo.userTrueHeading}
+            radiusFilter={radiusFilter}
+            onRadiusChange={setRadiusFilter}
+          />
+        </View>
+
+        {/* Efêmeros abaixo — entram/saem SEM mover os flutuantes. */}
+        <ARTrackingBanner trackingState={trackingState} />
+
+        {/* Pílula das fases de hosting — linha própria na pilha (antes:
+            absolute top insets+58 colidia com os filtros). Toques seguem
+            atravessando (fora do Modal — lição 2026-11-10). */}
+        {modalVisible && hostingPhaseActive ? (
+          <PlaceAnchorPill
+            hosting={pointHosting.state}
+            guideProgress={guideProgress}
+            onClose={() => {
+              setModalVisible(false);
+              pointHosting.cancel();
+            }}
+          />
+        ) : null}
+
+        {/* HUD de Navegação AR — linhas da pilha (sem absolute/zIndex). */}
+        {arRoute.arrived ? (
+          <View style={styles.navHud} pointerEvents="none">
+            <View style={[styles.navHudPill, styles.arrivedPill]}>
+              <Ionicons name="flag" size={16} color="#34D399" />
+              <Text style={styles.navHudText}>Você chegou 🎉</Text>
+            </View>
+          </View>
+        ) : arRoute.active ? (
+          <View style={styles.navHud} pointerEvents="box-none">
+            <View style={styles.navHudStack}>
+              <View style={styles.navHudPill}>
+                <Ionicons
+                  name={arRoute.isRerouting ? "refresh" : "navigate"}
+                  size={16}
+                  color={arRoute.isRerouting ? "#FCD34D" : "#34D399"}
+                />
+                <Text style={styles.navHudText}>
+                  {arRoute.isRerouting
+                    ? "Recalculando..."
+                    : `${arRoute.targetName} · ${arRoute.distanceRemaining} m`}
+                </Text>
+                <TouchableOpacity
+                  onPress={stopNavigation}
+                  style={styles.navHudStopBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Encerrar navegação">
+                  <Ionicons name="close-circle" size={20} color="#FDA4AF" />
+                </TouchableOpacity>
+              </View>
+              <NavInstructionHud
+                instruction={arRoute.instruction}
+                metersToTurn={arRoute.metersToTurn}
+                headingToPathDeg={arRoute.headingToPathDeg}
+                userHeadingDeg={geo.userTrueHeading}
+              />
+            </View>
+          </View>
+        ) : arRoute.isLoading ? (
+          <View style={styles.navHud} pointerEvents="none">
+            <View style={styles.navHudPill}>
+              <ActivityIndicator size="small" color="#34D399" />
+              <Text style={styles.navHudText}>Calculando rota...</Text>
+            </View>
+          </View>
+        ) : arRoute.error ? (
+          <View style={styles.navHud} pointerEvents="none">
+            <View
+              style={[
+                styles.navHudPill,
+                { backgroundColor: "rgba(69, 26, 3, 0.92)", borderColor: "#B45309" },
+              ]}>
+              <Ionicons name="warning" size={16} color="#FDBA74" />
+              <Text style={[styles.navHudText, { color: "#FED7AA" }]}>
+                {arRoute.error}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
+        {/* Toast de ponto encontrado (cloud resolve) — última linha. */}
+        <ARAnchorToast toast={anchorToast} onDismiss={dismissAnchorToast} />
+      </ARTopHudStack>
+
+      {/* ══ FLUTUANTES abaixo da pilha — âncora dinâmica (onLayout), sem
+          número mágico: badge de zoom + retícula + seletor + botão lista. */}
+      {zoomLevel > 1.05 ? (
+        <View style={[styles.zoomBadge, { top: stableHudHeight + 8 }]} pointerEvents="none">
           <Ionicons name="search" size={12} color="#FFFFFF" />
           <Text style={styles.zoomBadgeText}>
             Zoom: {zoomLevel.toFixed(1)}x
@@ -571,7 +919,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       <TouchableOpacity
         onPress={() => setListVisible(true)}
         activeOpacity={0.8}
-        style={[styles.listBtn, { top: Math.max(insets.top + 108, 148) }]}
+        style={[styles.listBtn, { top: stableHudHeight + 8 }]}
         accessibilityRole="button"
         accessibilityLabel="Listar pontos carregados">
         <Ionicons name="list" size={20} color="#67E8F9" />
@@ -581,27 +929,6 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
           </View>
         ) : null}
       </TouchableOpacity>
-
-      {/* Refresh REAL: refetch + re-enfileira âncoras falhas + limpa projeções
-          congeladas + recalibração EXPLÍCITA do Δ (única forma de re-alinhar). */}
-      <ARStatusHud
-        cloudStatus={cloudStatus}
-        trackingState={trackingState}
-        isFetching={anchorsQuery.isFetching}
-        calibratedLabel={null}
-        gpsAccuracyMeters={geo.userCoords.accuracy}
-        vpsAccuracyMeters={
-          geospatial.isFresh ? (geospatial.pose?.horizontalAccuracy ?? null) : null
-        }
-        onOpenCalibration={() => {}}
-        onRefresh={handleRefresh}
-      />
-
-      <ARCompassRadiusBar
-        heading={geo.userTrueHeading}
-        radiusFilter={radiusFilter}
-        onRadiusChange={setRadiusFilter}
-      />
 
       {isAdmin ? (
         <View
@@ -687,80 +1014,6 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         }
       />
 
-      {/* HUD de Navegação AR */}
-      {arRoute.arrived ? (
-        <View
-          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
-          pointerEvents="none"
-        >
-          <View style={[styles.navHudPill, styles.arrivedPill]}>
-            <Ionicons name="flag" size={16} color="#34D399" />
-            <Text style={styles.navHudText}>Você chegou 🎉</Text>
-          </View>
-        </View>
-      ) : arRoute.active ? (
-        <View
-          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
-          pointerEvents="box-none"
-        >
-          <View style={styles.navHudStack}>
-            <View style={styles.navHudPill}>
-              <Ionicons
-                name={arRoute.isRerouting ? "refresh" : "navigate"}
-                size={16}
-                color={arRoute.isRerouting ? "#FCD34D" : "#34D399"}
-              />
-              <Text style={styles.navHudText}>
-                {arRoute.isRerouting
-                  ? "Recalculando..."
-                  : `${arRoute.targetName} · ${arRoute.distanceRemaining} m`}
-              </Text>
-              <TouchableOpacity
-                onPress={stopNavigation}
-                style={styles.navHudStopBtn}
-                accessibilityRole="button"
-                accessibilityLabel="Encerrar navegação"
-              >
-                <Ionicons name="close-circle" size={20} color="#FDA4AF" />
-              </TouchableOpacity>
-            </View>
-            <NavInstructionHud
-              instruction={arRoute.instruction}
-              metersToTurn={arRoute.metersToTurn}
-              headingToPathDeg={arRoute.headingToPathDeg}
-              userHeadingDeg={geo.userTrueHeading}
-            />
-          </View>
-        </View>
-      ) : arRoute.isLoading ? (
-        <View
-          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
-          pointerEvents="none"
-        >
-          <View style={styles.navHudPill}>
-            <ActivityIndicator size="small" color="#34D399" />
-            <Text style={styles.navHudText}>Calculando rota...</Text>
-          </View>
-        </View>
-      ) : arRoute.error ? (
-        <View
-          style={[styles.navHud, { top: Math.max(insets.top + 148, 188) }]}
-          pointerEvents="none"
-        >
-          <View
-            style={[
-              styles.navHudPill,
-              { backgroundColor: "rgba(69, 26, 3, 0.92)", borderColor: "#B45309" },
-            ]}
-          >
-            <Ionicons name="warning" size={16} color="#FDBA74" />
-            <Text style={[styles.navHudText, { color: "#FED7AA" }]}>
-              {arRoute.error}
-            </Text>
-          </View>
-        </View>
-      ) : null}
-
       <PlaceAnchorModal
         visible={modalVisible && !hostingPhaseActive}
         isSaving={isSaving}
@@ -787,22 +1040,14 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         }}
       />
 
-      {/* Pílula das fases ativas — overlay DENTRO da árvore (não Modal):
-          toques atravessam até a câmera; insets reais do container. */}
-      {modalVisible && hostingPhaseActive ? (
-        <View
-          style={[styles.hostingPillWrapper, { top: insets.top + 58 }]}
-          pointerEvents="box-none">
-          <PlaceAnchorPill
-            hosting={pointHosting.state}
-            guideProgress={guideProgress}
-            onClose={() => {
-              setModalVisible(false);
-              pointHosting.cancel();
-            }}
-          />
-        </View>
-      ) : null}
+      {/* ══ DIAGNÓSTICO DO MAPEAMENTO (Frente D) — pill de status clicável.
+          Dados por PULL (getters) + refresh 1s no próprio modal. */}
+      <ARDiagnosticsModal
+        visible={diagVisible}
+        onClose={() => setDiagVisible(false)}
+        getSnapshot={getDiagnosticsSnapshot}
+        getContext={getDiagnosticsContext}
+      />
     </View>
   );
 };
@@ -840,13 +1085,9 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: '800',
   },
-  /** Wrapper da pílula de hosting — deixa toques passarem (box-none no JSX). */
-  hostingPillWrapper: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    zIndex: 60,
-    elevation: 60,
+  /** Bloco persistente da pilha (status + filtros) — altura estável. */
+  stableHudBlock: {
+    gap: 8,
   },
   rootContainer: {
     flex: 1,
@@ -865,8 +1106,10 @@ const styles = StyleSheet.create({
   },
   zoomBadge: {
     position: "absolute",
-    top: 138,
     alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
     backgroundColor: "rgba(37, 99, 235, 0.92)",
     paddingHorizontal: 14,
     paddingVertical: 6,
@@ -931,14 +1174,9 @@ const styles = StyleSheet.create({
   },
   // ══ MODO PREVIEW: REMOVIDO (lição 2026-11-10 — o fluxo oficial de scan não
   //    usa mira/preview; styles órfãos limpos na Fase 4 do fix cloud) ═════
+  /** Linha da pilha do topo (ARTopHudStack) — sem absolute/números mágicos. */
   navHud: {
-    position: "absolute",
-    top: 188,
-    left: 16,
-    right: 16,
     alignItems: "center",
-    zIndex: 30,
-    elevation: 30,
   },
   navHudStack: {
     alignItems: "center",

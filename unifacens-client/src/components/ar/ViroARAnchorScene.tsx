@@ -63,6 +63,27 @@ ViroMaterials.createMaterials({
     diffuseColor: '#FFFFFF00', // Invisível — seleção é por retícula, não por raycast
     lightingModel: 'Constant',
   },
+  // GHOST (pin cloud pendente): materiais translúcidos via DIFFUSE TEXTURE
+  // com alpha — o único blend COMPROVADO em device neste app (chevrons da
+  // rota, anel de incerteza). ⚠️ Lição de device 2026-11-11 (3 rounds):
+  // NEM `opacity` no nó, NEM `shaderOverrides` (ausente na 3.1.1), NEM
+  // alpha hex no diffuseColor do cubo translúcida o pin. Textura branca
+  // a~30% × diffuseColor ciano = ghost translúcido inequívoco.
+  ghostPin: {
+    diffuseColor: '#7DD3FC',
+    diffuseTexture: require('../../../assets/images/ar/ghost-fill.png'),
+    lightingModel: 'Constant',
+  },
+  ghostStem: {
+    diffuseColor: '#7DD3FC',
+    diffuseTexture: require('../../../assets/images/ar/ghost-fill.png'),
+    lightingModel: 'Constant',
+  },
+  // Anel de incerteza no plano do ghost (raio = estimateAccuracyM).
+  uncertaintyRing: {
+    diffuseTexture: require('../../../assets/images/ar/uncertainty-ring.png'),
+    lightingModel: 'Constant',
+  },
   // MODO PREVIEW: âmbar vibrante — inconfundível com os pins regulares
   previewPin: {
     diffuseColor: '#F59E0B',
@@ -530,32 +551,56 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           anchor.estimated && typeof anchor.estimateAccuracyM === 'number'
             ? ` ±${Math.round(anchor.estimateAccuracyM)}m`
             : '';
-        const labelText = `${anchor.name}\n${distLabel} m${estimateSuffix}`;
+        // Ghost (cloud pendente): prefixo ≈ + anel de incerteza no chão.
+        const isGhost = anchor.isGhost === true;
+        const labelText = isGhost
+          ? `≈ ${anchor.name}\n${distLabel} m${estimateSuffix}`
+          : `${anchor.name}\n${distLabel} m${estimateSuffix}`;
+        const ringRadiusM =
+          isGhost && typeof anchor.estimateAccuracyM === 'number'
+            ? Math.max(1, Math.min(15, anchor.estimateAccuracyM))
+            : 0;
 
         return (
           <ViroNode
             key={anchor.id || `anchor-${index}`}
-            position={renderPos}
-            opacity={anchor.estimated ? 0.6 : 1}>
+            position={renderPos}>
+            {/* Anel de incerteza — o envelope de erro vira informação
+                visual: raio = acurácia da estimativa, achatado no plano. */}
+            {ringRadiusM > 0 ? (
+              <ViroQuad
+                width={ringRadiusM * 2}
+                height={ringRadiusM * 2}
+                rotation={[-90, 0, 0]}
+                position={[0, -0.3 * scaleFactor, 0]}
+                materials={['uncertaintyRing']}
+              />
+            ) : null}
             {/* HIT AREA visual reduzida (debug): só um pouco maior que o pin
-                para validar que a seleção é pela retícula, não pela hitbox. */}
-            <ViroBox
-              scale={[Math.max(0.5, 0.35 * scaleFactor), Math.max(0.7, 0.45 * scaleFactor), Math.max(0.5, 0.35 * scaleFactor)]}
-              position={[0, 0.15 * scaleFactor, 0]}
-              materials={['anchorHitArea']}
-            />
+                para validar que a seleção é pela retícula, não pela hitbox.
+                Ghost NÃO tem hitbox — não é selecionável (e menos geometria
+                = menos suspeito de oclusão no blend). */}
+            {!isGhost ? (
+              <ViroBox
+                scale={[Math.max(0.5, 0.35 * scaleFactor), Math.max(0.7, 0.45 * scaleFactor), Math.max(0.5, 0.35 * scaleFactor)]}
+                position={[0, 0.15 * scaleFactor, 0]}
+                materials={['anchorHitArea']}
+              />
+            ) : null}
 
-            {/* Cubo 3D representando a âncora com escala dinâmica adaptativa */}
+            {/* Cubo 3D representando a âncora com escala dinâmica adaptativa.
+                Ghost: material translúcido PRÓPRIO (paleta não se aplica —
+                identidade visual de estimativa). */}
             <ViroBox
               scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
-              materials={[materialName]}
+              materials={[isGhost ? 'ghostPin' : materialName]}
             />
 
             {/* Haste inferior de sustentação visual */}
             <ViroBox
               position={[0, -0.18 * scaleFactor, 0]}
               scale={[0.02 * scaleFactor, 0.2 * scaleFactor, 0.02 * scaleFactor]}
-              materials={['pinStem']}
+              materials={[isGhost ? 'ghostStem' : 'pinStem']}
             />
 
             {/* Rótulo de texto FLUTUANTE — grande e legível com distância */}

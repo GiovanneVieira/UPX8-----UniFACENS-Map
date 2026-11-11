@@ -25,6 +25,12 @@ export interface Anchor {
   estimated?: boolean;
   /** Runtime-only (client): envelope de erro da estimativa (m). */
   estimateAccuracyM?: number;
+  /**
+   * Runtime-only (client): pin cloud pendente de resolve projetado como
+   * estimativa "ghost" (não selecionável; substituído com transição suave
+   * pelo resolve — one-way, jamais volta a GPS depois de cravado).
+   */
+  isGhost?: boolean;
 }
 
 export type AnchorCoordinate = Anchor;

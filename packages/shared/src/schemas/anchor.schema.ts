@@ -38,6 +38,12 @@ export const anchorSchema = z.object({
   /** Runtime-only (client): envelope de erro da estimativa (m). */
   estimateAccuracyM: z.number().optional(),
   /**
+   * Runtime-only (client): pin cloud PENDENTE de resolve projetado como
+   * estimativa "ghost" — não selecionável; o resolve o substitui com
+   * transição suave (one-way: nunca volta a GPS depois de cravado).
+   */
+  isGhost: z.boolean().optional(),
+  /**
    * Offset do pin no frame da âncora de NUVEM visual (Cloud Anchor). Ao
    * contrário do antigo `position` (session-relative, lixo entre sessões),
    * o frame da cloud anchor é estável — o offset persiste com significado.

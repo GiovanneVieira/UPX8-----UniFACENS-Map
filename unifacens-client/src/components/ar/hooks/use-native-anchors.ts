@@ -290,9 +290,25 @@ const withTimeout = async <T,>(
     return () => clearInterval(timer);
   }, []);
 
+  /**
+   * Zera TODO o estado de âncoras nativas (reset de sessão AR — Frente B,
+   * 2026-11-11: background ≥10s → remount do navigator → as âncoras nativas
+   *  da view antiga morrem com ela; este limpa a memoria do hook para o
+   * mundo novo recomeçar do zero).
+   */
+  const resetAll = useCallback(() => {
+    entriesRef.current.clear();
+    pendingRef.current = [];
+    createdRef.current.clear();
+    inFlightRef.current.clear();
+    retriesRef.current.clear();
+    failedRef.current.clear();
+    nativeIdsRef.current.clear();
+    setEntries(new Map());
+  }, []);
+
   /** Re-enfileira pins que esgotaram retries (refresh manual explícito). */
-  const retryFailed = useCallback(() => {
-    if (failedRef.current.size === 0) return;
+  const retryFailed = useCallback(() => {    if (failedRef.current.size === 0) return;
     const anchors = serverAnchorsRef.current;
     if (!anchors) return;
     const ids = [...failedRef.current];
@@ -366,5 +382,7 @@ const withTimeout = async <T,>(
     addLocal,
     /** Re-enfileira pins falhos (refresh manual). */
     retryFailed,
+    /** Zera todo o estado (reset de sessão AR pós-background longo). */
+    resetAll,
   };
 }

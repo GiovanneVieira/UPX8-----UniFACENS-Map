@@ -1,7 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ARTickerText } from './ar-ticker-text';
 
 interface ARStatusHudProps {
   cloudStatus: string;
@@ -15,12 +15,33 @@ interface ARStatusHudProps {
   vpsAccuracyMeters?: number | null;
   onOpenCalibration: () => void;
   onRefresh: () => void;
+  /** Abre o modal de diagnóstico do mapeamento (pill de status clicável). */
+  onOpenDiagnostics?: () => void;
 }
+
+/**
+ * Banner âmbar de tracking — LINHA EFÊMERA própria na pilha do topo (fora
+ * do bloco estável: entra/sai conforme o tracking 2↔3 sem mover os
+ * flutuantes ancorados abaixo da pilha, lição de device 2026-11-11).
+ */
+export const ARTrackingBanner: React.FC<{ trackingState: number }> = ({ trackingState }) => {
+  if (trackingState === 3) return null;
+  return (
+    <View style={styles.trackingBanner}>
+      <Ionicons name="warning" size={13} color="#FCD34D" />
+      <Text style={styles.trackingBannerText}>
+        {trackingState === 2
+          ? 'SLAM limitado: aponte para objetos com textura e mova devagar'
+          : 'Rastreamento indisponível: ambiente sem ancoragem visual'}
+      </Text>
+    </View>
+  );
+};
 
 /**
  * HUD superior da tela AR: status da nuvem (pontos/carregamento/erro),
  * indicador de tracking SLAM, origem ativa (marco calibrado ou GPS) e
- * ações de calibração/atualização.
+ * ações de calibração/atualização. Linha do bloco estável da pilha.
  */
 export const ARStatusHud: React.FC<ARStatusHudProps> = ({
   cloudStatus,
@@ -31,27 +52,38 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
   vpsAccuracyMeters,
   onOpenCalibration,
   onRefresh,
+  onOpenDiagnostics,
 }) => {
-  const insets = useSafeAreaInsets();
   const trackingDotColor =
     trackingState === 3 ? '#34D399' : trackingState === 2 ? '#FBBF24' : '#EF4444';
   // Origem exibida: marco calibrado > pose VPS (Terra) > GPS cru
   const originLabel = calibratedLabel ?? (vpsAccuracyMeters != null ? `VPS ±${Math.round(vpsAccuracyMeters)}m` : `GPS ±${Math.round(gpsAccuracyMeters)}m`);
 
   return (
-    <View
-      style={[styles.topHudWrapper, { top: Math.max(insets.top + 8, 48) }]}
-      pointerEvents="box-none">
+    <View style={styles.topHudWrapper} pointerEvents="box-none">
       <View style={styles.topHudRow}>
-        <View style={[styles.hudPill, styles.hudPillBlue]}>
+        {/* Pill de status — CLICÁVEL: abre o modal de diagnóstico do
+            mapeamento. O texto anima em reveal cíclico (typewriter):
+            mensagens de progresso do resolve são longas e a pill é estreita. */}
+        <TouchableOpacity
+          onPress={onOpenDiagnostics}
+          disabled={!onOpenDiagnostics}
+          activeOpacity={0.75}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Status do mapeamento — detalhes"
+          style={[styles.hudPill, styles.hudPillBlue, styles.hudPillShrink]}>
           <View style={[styles.statusDot, { backgroundColor: trackingDotColor }]} />
-          <Text style={styles.hudPillTextWhite}>{cloudStatus}</Text>
-        </View>
+          <ARTickerText text={cloudStatus} style={styles.hudPillTextWhite} />
+          {onOpenDiagnostics ? (
+            <Ionicons name="information-circle-outline" size={13} color="#93C5FD" />
+          ) : null}
+        </TouchableOpacity>
 
         <TouchableOpacity
           onPress={onOpenCalibration}
           activeOpacity={0.8}
-          style={[styles.hudPill, calibratedLabel ? styles.hudPillEmerald : styles.hudPillCyan]}>
+          style={[styles.hudPill, calibratedLabel ? styles.hudPillEmerald : styles.hudPillCyan, styles.hudPillShrink]}>
           {calibratedLabel ? (
             <Ionicons name="location" size={13} color="#34D399" />
           ) : vpsAccuracyMeters != null ? (
@@ -59,9 +91,12 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           ) : (
             <Ionicons name="navigate-outline" size={13} color="#67E8F9" />
           )}
-          <Text style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}>
-            {originLabel}
-          </Text>
+          {/* Origem usa a mesma janela deslizante (prefixo+… → desliza →
+              volta) quando transborda. */}
+          <ARTickerText
+            text={originLabel}
+            style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}
+          />
         </TouchableOpacity>
 
         <View style={styles.hudActionsRow}>
@@ -78,40 +113,27 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           </TouchableOpacity>
         </View>
       </View>
-
-      {/* Banner de tracking: sem ancoragem visual estável (state 3), o quadro
-          do mundo do ARCore não fica rígido e nenhum ponto AR pode ficar
-          cravado — aviso prominente em vez de apenas o pontinho colorido. */}
-      {trackingState !== 3 ? (
-        <View style={styles.trackingBanner}>
-          <Ionicons name="warning" size={13} color="#FCD34D" />
-          <Text style={styles.trackingBannerText}>
-            {trackingState === 2
-              ? 'SLAM limitado: aponte para objetos com textura e mova devagar'
-              : 'Rastreamento indisponível: ambiente sem ancoragem visual'}
-          </Text>
-        </View>
-      ) : null}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
+  /** Linha da pilha do topo (ARTopHudStack) — sem position absolute. */
   topHudWrapper: {
-    position: 'absolute',
-    top: 50,
-    left: 16,
-    right: 16,
-    zIndex: 20,
-    elevation: 20,
+    alignSelf: 'stretch',
   },
   topHudRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'nowrap',
+    gap: 6,
+  },
+  hudPillShrink: {
+    flexShrink: 1,
+    minWidth: 0,
   },
   trackingBanner: {
-    marginTop: 8,
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',

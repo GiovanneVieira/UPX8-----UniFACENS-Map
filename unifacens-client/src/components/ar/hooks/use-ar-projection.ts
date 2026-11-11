@@ -13,13 +13,18 @@ import { isPoseFresh, type GeospatialPose } from './use-geospatial-pose';
  *    certo (padrão Live View), e desliza (jamais salta) para a âncora
  *    nativa quando ela resolve.
  *
- * Pin invisível APENAS quando não há âncora nativa, nem Δ travado + pose.
+ * Pins cloud PENDENTES de resolve: invisíveis durante a cortesia
+ * (GHOST_GRACE_MS) e depois projetados como estimativa "ghost" (isGhost —
+ * não selecionável). O resolve o substitui com transição suave — ONE-WAY
+ * por construção (E5 preservada: sem oscilação cravado↔GPS).
  */
 
 /** Acurácia máxima da pose para o fallback projetar pins (m). */
 const FALLBACK_MAX_ACCURACY_M = 10;
-/** Sem pins visíveis por este tempo → usa qualquer pose (best-effort). */
-const FALLBACK_TIMEOUT_MS = 25_000;
+/** Sem pins visíveis por este tempo → usa qualquer pose (best-effort).
+ *  15s desde 2026-11-11 (eram 25s): antecipa o ghost — o "aparecer" é
+ *  perceptível e o anel de incerteza honesta o envelope de erro. */
+const FALLBACK_TIMEOUT_MS = 15_000;
 /** Acurácia de pose que congela a estimativa de vez (m). */
 const FREEZE_ACCURACY_M = 6;
 /** Ticks SEM melhora de acurácia após os quais a estimativa congela (platô). */
@@ -126,11 +131,17 @@ interface UseARProjectionParams {
   /** Bump manual (botão de refresh) — limpa estimativas e re-projeta. */
   reprojectNonce: number;
   /**
-   * Pins que NUNCA devem cair no fallback GPS (lição E5 da auditoria
-   * 2026-11-10: pins cloud pendentes "pulsando" entre cravado e GPS
-   * destruíam a confiança — estado honesto: invisível até localizar).
+   * Pins cloud aguardando resolve (useCloudAnchors): invisíveis durante a
+   * cortesia (agora < GHOST_GRACE_MS) — resolve rápido fecha antes do
+   * ghost nascer.
    */
-  noFallbackIds: Set<string>;
+  pendingIds: ReadonlySet<string>;
+  /**
+   * Pins cloud pendentes ELEGÍVEIS a ghost (≥ cortesia): projetam como
+   * estimativa com `isGhost` (não selecionável; o resolve o substitui com
+   * transição suave — one-way, jamais regressa a GPS).
+   */
+  ghostIds: ReadonlySet<string>;
 }
 
 export function useARProjection({
@@ -141,11 +152,18 @@ export function useARProjection({
   delta,
   poseTick,
   reprojectNonce,
-  noFallbackIds,
+  pendingIds,
+  ghostIds,
 }: UseARProjectionParams) {
   const [anchors, setAnchors] = useState<Anchor[]>([]);
-  /** Momento em que o primeiro serverAnchor chegou sem pin visível. */
-  const waitingSinceRef = useRef<number | null>(null);
+  /**
+   * Desde quando cada pin candidato ao fallback está INVISÍVEL (per-pin).
+   * ⚠️ Lição de device 2026-11-11: o best-effort por TIMEOUT era GLOBAL (só
+   * contava com a tela toda vazia) — com UM pin já visível (ex.: cloud
+   * resolvida), os demais nunca ganhavam best-effort e ficavam presos no
+   * gate de acurácia (indoor GPS raramente ≤10m) → "só um anchor renderiza".
+   */
+  const waitingSinceRef = useRef<Map<string, number>>(new Map());
   /** Estimativas de fallback por pin. */
   const fallbackRef = useRef<Map<string, FallbackState>>(new Map());
   /** Última posição renderizada por pin (para transições suaves). */
@@ -163,7 +181,7 @@ export function useARProjection({
       fallbackRef.current.clear();
       renderedRef.current.clear();
       transitionsRef.current.clear();
-      waitingSinceRef.current = null;
+      waitingSinceRef.current.clear();
       setTransitionActive(false);
       setAnchors([]);
       return;
@@ -172,17 +190,27 @@ export function useARProjection({
     const pose = geoPoseRef.current;
     const camPos = cameraPosRef.current;
     const now = Date.now();
-    const timedOut =
-      waitingSinceRef.current !== null && now - waitingSinceRef.current >= FALLBACK_TIMEOUT_MS;
-    // ⚠️ Frescor OBRIGATÓRIO: pos = camPos(agora) + R(Δ)·ENU(pose→pin) — se a
-    // pose estiver STALE, o camPos avança com o usuário e o ENU fica congelado
-    // no valor velho => o pin anda JUNTO com o usuário 1:1 (bug de device
-    // 2026-11-08: "os pontos saíram junto comigo" ao sair de casa).
-    const fallbackAllowed =
-      delta !== null &&
-      pose !== null &&
-      isPoseFresh(pose) &&
-      (pose.horizontalAccuracy <= FALLBACK_MAX_ACCURACY_M || timedOut);
+    // Gate estrito de acurácia (comum a todos os pins); o best-effort por
+    // timeout é avaliado PER-PIN dentro do loop.
+    const strictAccuracyOk = pose !== null && pose.horizontalAccuracy <= FALLBACK_MAX_ACCURACY_M;
+
+    // ⚠️ Frescor OBRIGATÓRIO (gate abaixo): pos = camPos(agora) + R(Δ)·ENU(
+    // pose→pin) — se a pose estiver STALE, o camPos avança com o usuário e o
+    // ENU fica congelado no valor velho => o pin anda JUNTO com o usuário
+    // 1:1 (bug de device 2026-11-08: "os pontos saíram junto comigo").
+    /** Best-effort PER-PIN: candidato invisível há ≥ FALLBACK_TIMEOUT_MS. */
+    const pinBestEffort = (id: string, atNow: number, strictOk: boolean): boolean => {
+      if (strictOk) {
+        waitingSinceRef.current.delete(id);
+        return true;
+      }
+      const since = waitingSinceRef.current.get(id);
+      if (since === undefined) {
+        waitingSinceRef.current.set(id, atNow);
+        return false;
+      }
+      return atNow - since >= FALLBACK_TIMEOUT_MS;
+    };
 
     const projected: Anchor[] = [];
     const seen = new Set<string>();
@@ -202,6 +230,8 @@ export function useARProjection({
       let renderPos: [number, number, number] | null = null;
       let estimated = false;
       let estimateAccuracyM: number | undefined;
+      /** Pendente elegível: estimativa "ghost" (não selecionável). */
+      const isGhost = ghostIds.has(anchor.id);
 
       if (native && isSessionPosition(native.position)) {
         // 1. Âncora nativa — ARCore mantém Terra-ancorada. Sempre vence.
@@ -248,6 +278,7 @@ export function useARProjection({
           transitionsRef.current.delete(anchor.id);
         }
         fallbackRef.current.delete(anchor.id);
+        waitingSinceRef.current.delete(anchor.id);
       } else if (native && isValidPosition(native.position)) {
         // Nativa com posição VÁLIDA mas fora do range de sessão (km) —
         // ECEF/geo vazando de um resolve com datum errado. Descarta a
@@ -259,10 +290,13 @@ export function useARProjection({
           );
         }
       } else if (
-        fallbackAllowed &&
         delta !== null &&
         pose &&
-        !noFallbackIds.has(anchor.id)
+        isPoseFresh(pose) &&
+        // Pendente de resolve cloud: invisível na cortesia, ghost depois.
+        (!pendingIds.has(anchor.id) || ghostIds.has(anchor.id)) &&
+        // Acurácia estrita OU best-effort per-pin após FALLBACK_TIMEOUT_MS.
+        (strictAccuracyOk || pinBestEffort(anchor.id, now, strictAccuracyOk))
       ) {
         // 2. Fallback world-stable: camPos + R(Δ)·ENU(pose→pin).
         const { east, north } = geodeticToENU(
@@ -299,6 +333,24 @@ export function useARProjection({
             frozen: false,
           };
           fallbackRef.current.set(anchor.id, fb);
+          // Pin JÁ visível antes (ex.: cravado antes de invalidação pós
+          // re-basing — Frente C): desliza até a nova estimativa, jamais
+          // pula (mesma mecânica da chegada da âncora nativa).
+          const prevRendered = renderedRef.current.get(anchor.id);
+          if (
+            prevRendered &&
+            Math.hypot(
+              prevRendered[0] - target[0],
+              prevRendered[1] - target[1],
+              prevRendered[2] - target[2],
+            ) > TRANSITION_MIN_JUMP_M
+          ) {
+            transitionsRef.current.set(anchor.id, {
+              from: prevRendered,
+              to: target,
+              startAt: now,
+            });
+          }
         } else if (!fb.frozen || acc <= fb.targetAccM * LATE_IMPROVEMENT_FACTOR) {
           // Alvo só melhora com acurácia MELHOR (convergência monótona).
           if (acc < fb.targetAccM) {
@@ -355,6 +407,7 @@ export function useARProjection({
           distanceMeters: Number(dist.toFixed(2)),
           estimated,
           estimateAccuracyM,
+          isGhost,
         });
       }
     }
@@ -372,17 +425,13 @@ export function useARProjection({
     for (const id of datumWarnedRef.current) {
       if (!seen.has(id)) datumWarnedRef.current.delete(id);
     }
-
-    // Timeout best-effort: conta pins esperando sem NENHUM visível.
-    if (projected.length === 0 && serverAnchors.length > 0) {
-      if (waitingSinceRef.current === null) waitingSinceRef.current = Date.now();
-    } else {
-      waitingSinceRef.current = null;
+    for (const id of waitingSinceRef.current.keys()) {
+      if (!seen.has(id)) waitingSinceRef.current.delete(id);
     }
 
     setAnchors(projected);
     setTransitionActive(transitionsRef.current.size > 0);
-  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef, noFallbackIds]);
+  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef, pendingIds, ghostIds]);
 
   recomputeRef.current = recompute;
 
@@ -414,7 +463,7 @@ export function useARProjection({
   const clearFrozen = useCallback(() => {
     fallbackRef.current.clear();
     transitionsRef.current.clear();
-    waitingSinceRef.current = null;
+    waitingSinceRef.current.clear();
   }, []);
 
   /** Remove a âncora das listas locais (exclusão otimista). */

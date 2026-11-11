@@ -28,8 +28,11 @@ const DELTA_SAMPLES = 6;
 const MIN_ROBUST_SAMPLES = 3;
 /** Outlier: amostra além disso do centro do lote é descartada. */
 const OUTLIER_REJECT_DEG = 15;
-/** Sem lock bom até aqui → trava best-effort e abre janela de refinamento. */
-const BEST_EFFORT_AFTER_MS = 20_000;
+/** Sem lock bom até aqui → trava best-effort e abre janela de refinamento.
+ *  15s desde 2026-11-11 (eram 20s): antecipa o ghost e a ordenação por
+ *  proximidade — se 3 amostras concordantes não fecharam em 15s @1Hz, o
+ *  lote está ruim mesmo (janela de refinamento segue disponível). */
+const BEST_EFFORT_AFTER_MS = 15_000;
 /** Duração da janela de refinamento pós-lock best-effort. */
 const REFINE_WINDOW_MS = 10_000;
 /** Amostra com esta acurácia congela o Δ de vez dentro da janela. */
