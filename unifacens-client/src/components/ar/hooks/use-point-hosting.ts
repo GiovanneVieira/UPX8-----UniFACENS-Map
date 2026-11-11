@@ -21,11 +21,19 @@ import { isUsablePoint } from 'shared';
 /** TTL do hosting em dias (D4 ≥30). */
 const HOST_TTL_DAYS = 30;
 /**
- * Guia "mova ao redor do ponto" antes de hospedar (best practice da doc:
- * "move the phone around the anchor a little before hosting" — dataset fraco
- * = ErrorHostingDatasetProcessingFailed, a falha dominante em device).
+ * Guia "ande ao redor do ponto" antes de hospedar (best practice da doc:
+ * "move the phone around the anchor a little before hosting" — dataset
+ * fraco = ErrorHostingDatasetProcessingFailed, a falha dominante em
+ * device).
+ *
+ * 20s desde 2026-11-11 (eram 10s): mais tempo ANDANDO ao redor do ponto
+ * = mais viewpoints = mais keypoints triangulados = taxa de resolve maior
+ * (evidência do próprio painel: 2847kp→64% de resolve vs 682kp→29%).
+ * ⚠️ O que paga é a DIVERSIDADE DE ÂNGULOS (paralaxe), não o relógio —
+ * girar no lugar não adiciona quase nada; e o Viro dropa features a >3m
+ * do centróide da câmera (raio útil ~0,5–1,5m).
  */
-const GUIDE_MS = 10_000;
+export const GUIDE_MS = 20_000;
 /** Timeout JS das chamadas nativas (hit-test/create/host). */
 const CALL_TIMEOUT_MS = 30_000;
 /** Janela do hit do tap expira ~30s — a âncora criada dele não. */

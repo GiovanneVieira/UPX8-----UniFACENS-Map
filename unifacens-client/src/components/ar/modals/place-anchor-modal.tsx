@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import type { PointHostingPhase } from '../hooks/use-point-hosting';
+import { GUIDE_MS, type PointHostingPhase } from '../hooks/use-point-hosting';
 import type { Category } from 'shared';
 
 interface PlaceAnchorModalProps {
@@ -69,7 +69,7 @@ export const PlaceAnchorPill: React.FC<{
         <>
           <Ionicons name="walk" size={18} color="#FCD34D" />
           <Text style={styles.pillText}>
-            Mova o celular ao redor do ponto ({Math.ceil((1 - guideProgress) * 10)}s)
+            Ande ao redor do ponto variando o ângulo ({Math.ceil((1 - guideProgress) * (GUIDE_MS / 1000))}s)
           </Text>
           <View style={styles.guideBar}>
             <View style={[styles.guideBarFill, { width: `${guideProgress * 100}%` }]} />

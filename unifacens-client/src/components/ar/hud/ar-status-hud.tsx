@@ -81,8 +81,11 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
         </TouchableOpacity>
 
         <TouchableOpacity
-          onPress={onOpenCalibration}
+          onPress={onOpenDiagnostics ?? onOpenCalibration}
           activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Detalhes de precisão"
           style={[styles.hudPill, calibratedLabel ? styles.hudPillEmerald : styles.hudPillCyan, styles.hudPillShrink]}>
           {calibratedLabel ? (
             <Ionicons name="location" size={13} color="#34D399" />
@@ -91,12 +94,19 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           ) : (
             <Ionicons name="navigate-outline" size={13} color="#67E8F9" />
           )}
-          {/* Origem usa a mesma janela deslizante (prefixo+… → desliza →
-              volta) quando transborda. */}
-          <ARTickerText
-            text={originLabel}
-            style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}
-          />
+          {/* Origem: badge SIMPLES truncada (decisão 2026-11-11 — sem
+              marquee aqui). Wrapper com piso no PRÓPRIO container (a lição
+              do spacer ladrão) + Text com ellipsis: sem overflow, sem
+              flicker (±3m→±4m não pulsa a largura). Clique = detalhes de
+              precisão (modal de diagnóstico: pose ±/stale, Δ, tracking). */}
+          <View style={styles.originTextWrap}>
+            <Text
+              style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}
+              numberOfLines={1}
+              ellipsizeMode="tail">
+              {originLabel}
+            </Text>
+          </View>
         </TouchableOpacity>
 
         <View style={styles.hudActionsRow}>
@@ -196,6 +206,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  /** Wrapper do texto de origem: piso no PRÓPRIO container (anti-flicker
+   *  ±3m→±4m) — nunca spacer irmão (ladrão de espaço do flex). */
+  originTextWrap: {
+    minWidth: 92,
+    flexShrink: 1,
+  },
   hudIconBtn: {
     width: 40,
     height: 40,
@@ -205,8 +221,5 @@ const styles = StyleSheet.create({
     borderColor: '#334155',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  hudIconBtnText: {
-    fontSize: 16,
   },
 });

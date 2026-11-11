@@ -29,7 +29,7 @@ import { useARProjection } from "./hooks/use-ar-projection";
 import { useGeospatialPose, isPoseFresh } from "./hooks/use-geospatial-pose";
 import { useNativeAnchors } from "./hooks/use-native-anchors";
 import { useCloudAnchors, isRealCloudAnchorId } from "./hooks/use-cloud-anchors";
-import { usePointHosting } from "./hooks/use-point-hosting";
+import { usePointHosting, GUIDE_MS } from "./hooks/use-point-hosting";
 import { useARWorldAlignment } from "./hooks/use-ar-world-alignment";
 import { useARZoom } from "./hooks/use-ar-zoom";
 import { ARStatusHud, ARTrackingBanner } from "./hud/ar-status-hud";
@@ -587,24 +587,25 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     anchorsQuery.data,
   ]);
 
-  // ── AUTO-REFRESH LEVE (Frente B, 2026-11-11): enquanto houver pins
-  //    pendentes, a cada 30s re-tenta resolves esgotados + refetch do
-  //    banco. SEM realign do Δ e SEM clearFrozen — esses ficam no refresh
-  //    MANUAL (§11.5: recalibrar Δ sozinho giraria o mundo). Quota ARCore:
-  //    resolve 300/min por projeto — folga. Para sozinho quando nada está
-  //    pendente. */
+  // ── AUTO-REFRESH LEVE (Frente B + quota v2, 2026-11-11): enquanto houver
+  //    pins pendentes, a cada 30s re-passa o loop (NUDGE — sem zerar
+  //    backoffs: quem falhou espera a janela ou uma mudança de contexto) +
+  //    refetch do banco. SEM realign do Δ e SEM clearFrozen — esses ficam
+  //    no refresh MANUAL (§11.5: recalibrar Δ sozinho giraria o mundo).
+  //    Quota ARCore: resolve 300/min por projeto — folga. Para sozinho
+  //    quando nada está pendente. */
   const pendingCount = cloudAnchors.pendingIds.size;
-  const cloudRetryFailed = cloudAnchors.retryFailed;
+  const cloudNudge = cloudAnchors.nudge;
   useEffect(() => {
     if (pendingCount === 0) return;
     const timer = setInterval(() => {
       if (!focused || trackingStateRef.current < 2) return;
-      cloudRetryFailed();
+      cloudNudge();
       void queryClient.invalidateQueries({ queryKey: anchorKeys.lists() });
-      console.log('[ARCloud] auto-refresh 30s — re-tentativas + refetch');
+      console.log('[ARCloud] auto-refresh 30s — re-passada (backoffs respeitados) + refetch');
     }, 30_000);
     return () => clearInterval(timer);
-  }, [pendingCount, focused, cloudRetryFailed, queryClient]);
+  }, [pendingCount, focused, cloudNudge, queryClient]);
 
   // ── handleCreate: grava o pin com a âncora do SCAN oficial (offset ZERO
   //    por construção — sem mira, sem gates de GPS; lat/lng best-effort só
@@ -758,7 +759,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     }
     const startedAt = pointHosting.state.startedAt;
     const timer = setInterval(() => {
-      setGuideProgress(Math.min(1, (Date.now() - startedAt) / 10000));
+      setGuideProgress(Math.min(1, (Date.now() - startedAt) / GUIDE_MS));
     }, 250);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps

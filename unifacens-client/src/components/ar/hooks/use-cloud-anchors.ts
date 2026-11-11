@@ -41,7 +41,28 @@ const OP_TIMEOUT_MS = 35_000;
  * already in progress (2ms!)" em cima do resolve anterior ainda vivo
  * (lição de device 2026-11-10 noite, logs 18:46-18:47).
  */
-const RETRY_BACKOFF_MS = [60_000, 90_000, 120_000];
+/**
+ * Backoff de re-tentativa por pin (economia de quota, 2026-11-11 v2: eram
+ * [60,90,120]s — com o auto-refresh zerando, um pin NoMatch era re-tentado
+ * ~60×/h para sempre; cada tentativa fútil = 1 get de descritores + 1
+ * report). SEMPRE acima da vida nativa do resolve (~30s): backoffs curtos
+ * disparavam "already in progress (2ms!)" (lição 2026-11-10).
+ */
+const RETRY_BACKOFF_MS = [60_000, 120_000, 180_000];
+/**
+ * Reset de backoff por MUDANÇA DE CONTEXTO (o melhor dos dois mundos):
+ * re-tentar parado no mesmo lugar sem apontar = physics não mudou = quota
+ * queimada. Andou >8m ou virou o corpo >90° desde a última tentativa do
+ * pin = informação nova = elegível IMEDIATAMENTE (v. plano quota v2).
+ */
+const CONTEXT_RESET_MOVED_M = 8;
+const CONTEXT_RESET_TURNED_DEG = 90;
+/**
+ * Cap de candidatos por passada em DEV (economia de quota): bancos de dev
+ * cheios de pins de cômodos diferentes — resolver só os mais próximos
+ * corta a maioria dos NoMatch. Release resolve todos.
+ */
+const MAX_CANDIDATES_PER_PASS = __DEV__ ? 3 : Number.POSITIVE_INFINITY;
 /** "already in progress": re-checar após este intervalo (sem penalizar). */
 const IN_PROGRESS_RECHECK_MS = 12_000;
 /**
@@ -207,6 +228,7 @@ export function useCloudAnchors({
     setEntries(new Map(entriesRef.current));
     pendingSinceRef.current.delete(pinId);
     lastMessageRef.current.delete(pinId);
+    attemptContextRef.current.delete(pinId);
     setPendingIds((prev) => {
       if (!prev.has(pinId)) return prev;
       const next = new Set(prev);
@@ -410,6 +432,10 @@ export function useCloudAnchors({
   const retryAtRef = useRef<Map<string, number>>(new Map());
   /** Pins com resolve NATIVO em curso ("already in progress") — aguardar. */
   const inProgressRef = useRef<Set<string>>(new Set());
+  /** Pose da última tentativa por pin — reset de backoff por mudança (v2). */
+  const attemptContextRef = useRef<Map<string, { lat: number; lng: number; heading: number }>>(
+    new Map(),
+  );
   /** Driver de re-passada: refresh explícito OU tick periódico. */
   const [loopNonce, setLoopNonce] = useState(0);
 
@@ -458,6 +484,17 @@ export function useCloudAnchors({
 
     /** Pós-processamento comum (backoff / re-check "already in progress"). */
     const settle = (anchor: Anchor, ok: boolean) => {
+      // Contexto da tentativa (para o reset de backoff por mudança — v2):
+      // guardado ANTES do resultado, com a pose do momento da tentativa.
+      if (pose) {
+        attemptContextRef.current.set(anchor.id, {
+          lat: pose.latitude,
+          lng: pose.longitude,
+          heading: pose.heading,
+        });
+      } else {
+        attemptContextRef.current.delete(anchor.id);
+      }
       if (ok) {
         attemptsRef.current.delete(anchor.id);
         retryAtRef.current.delete(anchor.id);
@@ -485,9 +522,34 @@ export function useCloudAnchors({
     (async () => {
       const nav = navigatorRef.current;
       if (!nav?.resolveCloudAnchor) return;
-      const queue = candidates.filter(
-        (a) => Date.now() >= (retryAtRef.current.get(a.id) ?? 0),
-      );
+
+      // Reset por MUDANÇA DE CONTEXTO (v2): backoff vencido OU contexto
+      // novo (andou >8m / virou >90° desde a última tentativa do pin) —
+      // re-tentar com a câmera apontando para o lugar é a tentativa que
+      // FECHA; re-tentar parado no mesmo lugar é quota queimada.
+      const contextResets = (a: Anchor): boolean => {
+        const ctx = attemptContextRef.current.get(a.id);
+        if (!ctx || !pose) return false;
+        const { east, north } = geodeticToENU(
+          ctx.lat,
+          ctx.lng,
+          0,
+          pose.latitude,
+          pose.longitude,
+          0,
+        );
+        if (Math.hypot(east, north) > CONTEXT_RESET_MOVED_M) return true;
+        const turned = Math.abs(((pose.heading - ctx.heading + 540) % 360) - 180);
+        return turned > CONTEXT_RESET_TURNED_DEG;
+      };
+      const queue = candidates
+        .filter(
+          (a) =>
+            Date.now() >= (retryAtRef.current.get(a.id) ?? 0) || contextResets(a),
+        )
+        // Cap (dev): só os N mais próximos — pins de outros cômodos são
+        // NoMatch quase certo; ghosts cobrem o visual deles.
+        .slice(0, MAX_CANDIDATES_PER_PASS);
 
       // Experimento (dev): 2 primeiros elegíveis EM PARALELO — ver doc da
       // flag. O resultado do 2º no logcat responde se o lock é por âncora.
@@ -533,8 +595,19 @@ export function useCloudAnchors({
   const retryFailed = useCallback(() => {
     attemptsRef.current.clear();
     retryAtRef.current.clear();
+    attemptContextRef.current.clear();
     // ⚠️ Zerar refs NÃO dispara o effect do loop — o bump do nonce sim
     // (lição de device 2026-11-11: "refresh não faz nada").
+    setLoopNonce((n) => n + 1);
+  }, []);
+
+  /**
+   * Re-passada LEVE (auto-refresh 30s): bump do nonce SEM zerar backoffs —
+   * quem falhou espera a janela (ou uma mudança de contexto); quem está
+   * elegível é tentado. Diferente do retryFailed (botão manual = escolha
+   * explícita do usuário, zera tudo). Economia de quota v2, 2026-11-11.
+   */
+  const nudge = useCallback(() => {
     setLoopNonce((n) => n + 1);
   }, []);
 
@@ -553,6 +626,7 @@ export function useCloudAnchors({
     setEntries(new Map());
     attemptsRef.current.clear();
     retryAtRef.current.clear();
+    attemptContextRef.current.clear();
     setLoopNonce((n) => n + 1);
   }, []);
 
@@ -604,6 +678,8 @@ export function useCloudAnchors({
      *  confirmada pelo resolve em seguida. */
     setProvisionalEntry,
     retryFailed,
+    /** Re-passada leve sem zerar backoffs (auto-refresh 30s — quota v2). */
+    nudge,
     /** Invalida entries e re-resolve tudo (tracking recuperado pós-degradação
      *  — mundo pode ter re-basado; Frente C). */
     invalidateEntries,
