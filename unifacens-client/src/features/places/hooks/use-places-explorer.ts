@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useForm } from "@tanstack/react-form";
-import { placesQuerySchema, type Place, type PlaceCategory } from "shared";
+import { placesQuerySchema, type Place } from "shared";
 import { usePlacesStore } from "@/stores/use-places-store";
 import { useShallow } from "zustand/react/shallow";
 import { usePlaceQuery, usePlacesQuery } from "../queries/use-places-query";
@@ -28,7 +28,7 @@ export function usePlacesExplorer() {
       setFilters((current) => ({ ...current, search: value.search.trim() }));
     },
   });
-  function selectCategory(category?: PlaceCategory) {
+  function selectCategory(category?: string) {
     selectPlace(null);
     setFilters((current) => ({ ...current, category }));
   }

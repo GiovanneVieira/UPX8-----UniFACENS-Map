@@ -10,7 +10,7 @@ import { placePositionSchema, type PlacePosition } from "shared";
 
 const defaultValues: PlaceFormValues = {
   name: "",
-  category: "building",
+  categoryId: "",
   latitude: "",
   longitude: "",
   building: "",
@@ -30,7 +30,7 @@ export function usePlaceForm(
     defaultValues: initialPlace
       ? {
           name: initialPlace.name,
-          category: initialPlace.category,
+          categoryId: initialPlace.category.id,
           latitude: String(initialPlace.latitude),
           longitude: String(initialPlace.longitude),
           building: initialPlace.building ?? "",

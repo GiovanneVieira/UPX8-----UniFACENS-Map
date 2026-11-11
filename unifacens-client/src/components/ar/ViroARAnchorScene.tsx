@@ -6,12 +6,14 @@ import {
   ViroText,
   ViroNode,
   ViroQuad,
+  Viro3DObject,
   ViroAmbientLight,
   ViroDirectionalLight,
   ViroMaterials,
 } from '@reactvision/react-viro';
 import type { Anchor } from 'shared';
 import { isUsablePoint } from 'shared';
+import { resolveAssetUrl } from '@/services/api';
 import type { RouteChevron } from '@/features/ar/hooks/use-ar-navigation';
 import type { GeospatialPose } from './hooks/use-geospatial-pose';
 
@@ -107,8 +109,7 @@ ViroMaterials.createMaterials({
  */
 const SHOW_DETECTED_PLANES = false;
 
-export interface ViroARAnchorSceneProps {
-  anchors?: Anchor[];
+export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
   /**
    * Superfície detectável no centro da tela (retícula)? Muda a cor da
    * retícula: verde = pode criar pin, vermelho = sem superfície.
@@ -158,6 +159,51 @@ export interface ViroARAnchorSceneProps {
   sceneNavigator?: any;
   arSceneNavigator?: any;
 }
+
+/**
+ * Modelo 3D da categoria do pin (Viro3DObject com fallback honesto):
+ * falha de load (URL inválida, formato, memória) degrada para o cubo
+ * padrão — nunca tela vazia. Regra de Ouro §6: StyleSheet.create puro.
+ */
+const Viro3DObjectPin: FC<{
+  anchor: Anchor;
+  scaleFactor: number;
+  materialName: string;
+}> = ({ anchor, scaleFactor, materialName }) => {
+  const [failed, setFailed] = useState(false);
+  const model = anchor.category?.model ?? null;
+  if (!model || failed) {
+    // Fallback: cubo padrão (mesmo visual dos pins sem categoria).
+    return (
+      <ViroBox
+        scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
+        materials={[materialName]}
+      />
+    );
+  }
+  const typeByFormat: Record<string, 'GLB' | 'GLTF' | 'OBJ' | 'VRX'> = {
+    glb: 'GLB',
+    gltf: 'GLTF',
+    obj: 'OBJ',
+    vrx: 'VRX',
+    // FBX sempre chega aqui como GLB derivado (url aponta pro derived/).
+    fbx: 'GLB',
+  };
+  return (
+    <Viro3DObject
+      source={{ uri: resolveAssetUrl(model.url) }}
+      type={typeByFormat[model.format] ?? 'GLB'}
+      scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
+      position={[0, 0.05 * scaleFactor, 0]}
+      onError={() => {
+        console.warn(
+          `[ARPin] Falha ao carregar modelo da categoria "${anchor.category?.label}" — fallback para o cubo.`,
+        );
+        setFailed(true);
+      }}
+    />
+  );
+};
 
 export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   // Extrai propriedades dinâmicas do viroAppProps
@@ -588,13 +634,22 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
               />
             ) : null}
 
-            {/* Cubo 3D representando a âncora com escala dinâmica adaptativa.
-                Ghost: material translúcido PRÓPRIO (paleta não se aplica —
-                identidade visual de estimativa). */}
-            <ViroBox
-              scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
-              materials={[isGhost ? 'ghostPin' : materialName]}
-            />
+            {/* Corpo do pin — merge 2026-11-11: GHOST mantém o cubo
+                translúcido PRÓPRIO (identidade de estimativa — modelo 3D
+                opaco não comunica incerteza); pin NORMAL usa o modelo 3D
+                da categoria (fallback honesto para o cubo da paleta). */}
+            {isGhost ? (
+              <ViroBox
+                scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
+                materials={['ghostPin']}
+              />
+            ) : (
+              <Viro3DObjectPin
+                anchor={anchor}
+                scaleFactor={scaleFactor}
+                materialName={materialName}
+              />
+            )}
 
             {/* Haste inferior de sustentação visual */}
             <ViroBox

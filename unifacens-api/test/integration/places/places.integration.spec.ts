@@ -13,21 +13,11 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { eq } from 'drizzle-orm';
 import { placeSchema, placesPageSchema } from 'shared';
 import { DRIZZLE, type DrizzleDB } from '../../../src/db/database.module.js';
-import { places } from '../../../src/db/schema.js';
+import { categories, places } from '../../../src/db/schema.js';
 import { PlacesController } from '../../../src/modules/places/places.controller.js';
 import { PlacesService } from '../../../src/modules/places/places.service.js';
 import { PlacesRepository } from '../../../src/modules/places/places.repository.js';
 
-const payload = {
-  name: 'Exemplo — Laboratório',
-  category: 'laboratory',
-  latitude: -23.4699,
-  longitude: -47.4297,
-  building: 'Bloco de demonstração',
-  floor: 0,
-  description: 'Coordenadas ilustrativas, sem levantamento presencial.',
-  source: 'demo',
-};
 const absentId = '10000000-0000-4000-8000-000000000001';
 
 describe('Places: HTTP, Zod e PostgreSQL real', () => {
@@ -35,6 +25,19 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
   let pool: pg.Pool | undefined;
   let app: INestApplication;
   let db: DrizzleDB;
+  let laboratoryId = '';
+  let entranceId = '';
+
+  const payload = () => ({
+    name: 'Exemplo — Laboratório',
+    categoryId: laboratoryId,
+    latitude: -23.4699,
+    longitude: -47.4297,
+    building: 'Bloco de demonstração',
+    floor: 0,
+    description: 'Coordenadas ilustrativas, sem levantamento presencial.',
+    source: 'demo' as const,
+  });
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer('postgres:16-alpine')
@@ -47,6 +50,11 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
         new URL('../../../drizzle', import.meta.url),
       ),
     });
+    // A migração semeia as 11 categorias ex-hardcoded — resolvemos os ids.
+    const seeded = await db.select().from(categories);
+    laboratoryId = seeded.find((row) => row.slug === 'laboratory')!.id;
+    entranceId = seeded.find((row) => row.slug === 'entrance')!.id;
+    expect(seeded.length).toBe(11);
     const module = await Test.createTestingModule({
       controllers: [PlacesController],
       providers: [
@@ -78,13 +86,15 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
   it('cadastra, normaliza e persiste um local sem cloudAnchorId', async () => {
     const created = await request(app.getHttpServer())
       .post('/places')
-      .send({ ...payload, name: '  Exemplo — Lab  ' })
+      .send({ ...payload(), name: '  Exemplo — Lab  ' })
       .expect(201);
     const place = placeSchema.parse(created.body);
     expect(place.name).toBe('Exemplo — Lab');
     expect(place.verificationStatus).toBe('unverified');
     expect(place.verifiedAt).toBeNull();
     expect(place.floor).toBe(0);
+    // Categoria volta como referência aninhada (id/slug/label).
+    expect(place.category).toMatchObject({ slug: 'laboratory', label: 'Laboratório' });
     const fetched = await request(app.getHttpServer())
       .get(`/places/${place.id}`)
       .expect(200);
@@ -97,7 +107,7 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
       .post('/places')
       .send({
         name: 'Exemplo',
-        category: 'entrance',
+        categoryId: entranceId,
         latitude: 0,
         longitude: 0,
       })
@@ -106,27 +116,32 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
     expect(response.body.building).toBeNull();
   });
 
-  it.each([
-    { ...payload, name: ' ' },
-    { ...payload, latitude: 91 },
-    { ...payload, longitude: -181 },
-    { ...payload, category: 'accessible' },
-    { ...payload, floor: 1.5 },
-    { ...payload, verificationStatus: 'verified' },
-    { ...payload, verifiedAt: new Date().toISOString() },
-  ])('rejeita payload inválido ou verificação forjada: %j', async (invalid) => {
+  it('recusa categoria inexistente com 404 antes de violar a FK', async () => {
     await request(app.getHttpServer())
       .post('/places')
-      .send(invalid)
+      .send({ ...payload(), categoryId: absentId })
+      .expect(404);
+  });
+
+  it.each([
+    { name: ' ' },
+    { latitude: 91 },
+    { longitude: -181 },
+    { categoryId: 'not-a-uuid' },
+    { floor: 1.5 },
+  ])('rejeita payload inválido: %j', async (invalid) => {
+    await request(app.getHttpServer())
+      .post('/places')
+      .send({ ...payload(), ...invalid })
       .expect(400);
     expect(await db.select().from(places)).toHaveLength(0);
   });
 
   it('combina busca por nome/bloco, categoria e paginação estável', async () => {
     await db.insert(places).values([
-      { ...payload, name: 'Exemplo A' },
-      { ...payload, name: 'Exemplo B' },
-      { ...payload, name: 'Exemplo C', category: 'entrance' },
+      { ...payload(), name: 'Exemplo A' },
+      { ...payload(), name: 'Exemplo B' },
+      { ...payload(), name: 'Exemplo C', categoryId: entranceId },
     ]);
     const first = await request(app.getHttpServer())
       .get('/places')
@@ -145,12 +160,18 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
       })
       .expect(200);
     expect(second.body.items[0].name).toBe('Exemplo B');
+    // Filtro canônico por id devolve o mesmo conjunto.
+    const byId = await request(app.getHttpServer())
+      .get('/places')
+      .query({ categoryId: laboratoryId })
+      .expect(200);
+    expect(byId.body.total).toBe(2);
   });
 
   it('trata % e _ como texto literal na busca', async () => {
     await db.insert(places).values([
-      { ...payload, name: 'Exemplo 50%_teste' },
-      { ...payload, name: 'Exemplo outro' },
+      { ...payload(), name: 'Exemplo 50%_teste' },
+      { ...payload(), name: 'Exemplo outro' },
     ]);
     const response = await request(app.getHttpServer())
       .get('/places')
@@ -164,17 +185,26 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
     { limit: 0 },
     { limit: 101 },
     { offset: -1 },
-    { category: 'fake' },
+    { categoryId: 'not-a-uuid' },
     { unexpected: 'field' },
   ])('rejeita filtros inválidos: %j', async (query) => {
     await request(app.getHttpServer()).get('/places').query(query).expect(400);
+  });
+
+  it('slug de categoria desconhecido filtra para página vazia (não é erro)', async () => {
+    await db.insert(places).values(payload());
+    const response = await request(app.getHttpServer())
+      .get('/places')
+      .query({ category: 'slug-que-nao-existe' })
+      .expect(200);
+    expect(response.body).toEqual({ items: [], total: 0 });
   });
 
   it('editar um local invalida a verificação e preserva a origem não enviada', async () => {
     const [original] = await db
       .insert(places)
       .values({
-        ...payload,
+        ...payload(),
         verificationStatus: 'verified',
         verifiedAt: new Date(),
       })
@@ -199,7 +229,7 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
   });
 
   it('rejeita atualização vazia e confirmação de verificação pela API', async () => {
-    const [original] = await db.insert(places).values(payload).returning();
+    const [original] = await db.insert(places).values(payload()).returning();
     await request(app.getHttpServer())
       .patch(`/places/${original.id}`)
       .send({})
@@ -211,7 +241,7 @@ describe('Places: HTTP, Zod e PostgreSQL real', () => {
   });
 
   it('exclui local e retorna 404 para registros ausentes', async () => {
-    const [original] = await db.insert(places).values(payload).returning();
+    const [original] = await db.insert(places).values(payload()).returning();
     await request(app.getHttpServer())
       .delete(`/places/${original.id}`)
       .expect(200);

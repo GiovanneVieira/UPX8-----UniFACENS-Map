@@ -11,6 +11,10 @@ import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers
 import { AnchorsController } from '../../../src/anchors/anchors.controller.js';
 import { AnchorsService } from '../../../src/anchors/anchors.service.js';
 import { DRIZZLE } from '../../../src/db/database.module.js';
+import { STORAGE } from '../../../src/modules/storage/storage.types.js';
+import { LocalStorageAdapter } from '../../../src/modules/storage/local.adapter.js';
+import * as os from 'node:os';
+import * as fs from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +47,7 @@ describe('Anchors Integration with Testcontainers (Google Cloud Anchors & Real P
     const db = drizzle({ client: pool });
 
     // 4. Cria o TestingModule do NestJS com serviços reais
+    //    (storage em disco temporário — sem rede)
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [AnchorsController],
       providers: [
@@ -50,6 +55,12 @@ describe('Anchors Integration with Testcontainers (Google Cloud Anchors & Real P
         {
           provide: DRIZZLE,
           useValue: db,
+        },
+        {
+          provide: STORAGE,
+          useValue: new LocalStorageAdapter(
+            fs.mkdtempSync(path.join(os.tmpdir(), 'anchors-storage-')),
+          ),
         },
       ],
     }).compile();

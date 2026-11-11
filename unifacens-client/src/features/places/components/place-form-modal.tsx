@@ -8,13 +8,12 @@ import {
   View,
 } from "react-native";
 import {
-  PLACE_CATEGORY_LABELS,
   PLACE_SOURCE_LABELS,
-  placeCategorySchema,
   placeSourceSchema,
   type Place,
   placePositionFormSchema,
 } from "shared";
+import { useCategoriesQuery } from "@/features/categories/queries/use-categories-query";
 import { FormInputField } from "@/components/ui/form-field";
 import { usePlaceForm } from "../hooks/use-place-form";
 import PlacePositionMap from "./place-position-map";
@@ -67,6 +66,8 @@ export function PlaceFormModal({
     positionNotice,
     selectPosition,
   } = usePlaceForm(onSaved, initialPlace);
+  const categories = useCategoriesQuery();
+  const categoryOptions = categories.data ?? [];
   return (
     <Modal
       visible
@@ -181,25 +182,32 @@ export function PlaceFormModal({
               <Text className="mb-2 text-sm font-semibold text-slate-200">
                 Categoria
               </Text>
-              <form.Field name="category">
+              <form.Field name="categoryId">
                 {(field) => (
                   <View className="mb-4 flex-row flex-wrap gap-2">
-                    {placeCategorySchema.options.map((category) => (
+                    {categoryOptions.map((category) => (
                       <Pressable
-                        key={category}
+                        key={category.id}
                         accessibilityRole="button"
-                        accessibilityLabel={`${PLACE_CATEGORY_LABELS[category]}${field.state.value === category ? ", selecionada" : ""}`}
+                        accessibilityLabel={`${category.label}${field.state.value === category.id ? ", selecionada" : ""}`}
                         accessibilityState={{
-                          selected: field.state.value === category,
+                          selected: field.state.value === category.id,
                         }}
-                        onPress={() => field.handleChange(category)}
-                        className={`min-h-[44px] justify-center rounded-xl border px-3 active:opacity-80 ${field.state.value === category ? "border-sky-400 bg-blue-700" : "border-slate-700 bg-slate-900"}`}
+                        onPress={() => field.handleChange(category.id)}
+                        className={`min-h-[44px] justify-center rounded-xl border px-3 active:opacity-80 ${field.state.value === category.id ? "border-sky-400 bg-blue-700" : "border-slate-700 bg-slate-900"}`}
                       >
                         <Text className="text-sm text-white">
-                          {PLACE_CATEGORY_LABELS[category]}
+                          {category.label}
                         </Text>
                       </Pressable>
                     ))}
+                    {categoryOptions.length === 0 && (
+                      <Text className="text-sm text-slate-400">
+                        {categories.isPending
+                          ? "Carregando categorias…"
+                          : "Nenhuma categoria disponível."}
+                      </Text>
+                    )}
                   </View>
                 )}
               </form.Field>

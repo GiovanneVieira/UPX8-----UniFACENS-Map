@@ -14,14 +14,15 @@ import { AdminService } from '../../../src/modules/admin/admin.service.js';
 import { AdminRepository } from '../../../src/modules/admin/admin.repository.js';
 import { JwtAdminGuard } from '../../../src/common/auth/jwt-admin.guard.js';
 import { API_CONFIG } from '../../../src/config/runtime-config.js';
+import { STORAGE } from '../../../src/modules/storage/storage.types.js';
 
 const id = '199b4685-03c5-46a7-adc7-027af35262c5';
-const record = {
+const baseRecord = {
   id,
   name: 'Biblioteca',
   description: 'Acervo',
   longDescription: null,
-  images: [],
+  images: [] as string[],
   placeId: null,
   latitude: -23.47,
   longitude: -47.43,
@@ -30,9 +31,26 @@ const record = {
   cloudAnchorId: 'test',
   createdAt: new Date('2026-11-01T12:00:00Z'),
 };
+/** Shape do join com categoria devolvido pelo repository. */
+const joinedRecord = {
+  anchor: baseRecord,
+  categoryId: null,
+  categorySlug: null,
+  categoryLabel: null,
+  modelId: null,
+  modelKey: null,
+  modelDerivedKey: null,
+  modelFormat: null,
+};
+/** Shape serializado esperado pelo mock do AnchorsService. */
+const detailRecord = {
+  ...baseRecord,
+  createdAt: baseRecord.createdAt.toISOString(),
+  category: null,
+};
 const repository = {
-  listPoints: vi.fn(async () => ({ items: [record], total: 1 })),
-  listUsers: vi.fn(async () => ({
+  listPoints: vi.fn(async () => ({ items: [joinedRecord], total: 1 })),
+  findPointById: vi.fn(async () => joinedRecord),  listUsers: vi.fn(async () => ({
     items: [
       {
         id: 'user1',
@@ -41,14 +59,16 @@ const repository = {
         role: 'admin',
         emailVerified: true,
         banned: null,
-        createdAt: record.createdAt,
+        createdAt: baseRecord.createdAt,
         password: 'must-not-leak',
       },
     ],
     total: 1,
   })),
   updatePoint: vi.fn(async (key: string, dto: object) =>
-    key === id ? { ...record, ...dto } : undefined,
+    // Mutando baseRecord: joinedRecord.anchor é a mesma referência, então
+    // a releitura do findPointById reflete a edição (como o service faz).
+    key === id ? Object.assign(baseRecord, dto) : undefined,
   ),
 };
 
@@ -90,9 +110,19 @@ describe('Painel administrativo HTTP', () => {
         {
           provide: AnchorsService,
           useValue: {
-            findById: async () => record,
+            findById: async () => detailRecord,
             addImages: async () => ['/uploads/anchors/test.png'],
             remove: async () => ({ success: true }),
+          },
+        },
+        {
+          provide: STORAGE,
+          useValue: {
+            driver: 'local',
+            url: (key: string) =>
+              key.startsWith('/uploads/') ? key : `/uploads/${key}`,
+            put: async (key: string) => ({ key, url: `/uploads/${key}` }),
+            delete: async () => undefined,
           },
         },
         JwtAdminGuard,
@@ -207,7 +237,7 @@ describe('Painel administrativo HTTP', () => {
       .send({ name: ' Nome novo ', description: '' })
       .expect(200);
     expect(response.body.name).toBe('Nome novo');
-    expect(response.body.latitude).toBe(record.latitude);
+    expect(response.body.latitude).toBe(baseRecord.latitude);
     await request(app.getHttpServer())
       .patch(`/admin/points/${id}`)
       .set('Authorization', `Bearer ${admin}`)

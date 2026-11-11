@@ -44,6 +44,7 @@ import { ARAnchorToast, ANCHOR_TOAST_TTL_MS, type AnchorToastData } from "./hud/
 import { ARDiagnosticsModal, type ARDiagnosticsContext } from "./modals/ar-diagnostics-modal";
 import { AnchorDetailSheet } from "./modals/anchor-detail-sheet";
 import { useARNavigation } from "@/features/ar/hooks/use-ar-navigation";
+import { useCategoriesQuery } from "@/features/categories/queries/use-categories-query";
 
 // Constante estática da cena inicial para nunca recriar a instância nativa do ViroARSceneNavigator
 const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
@@ -77,6 +78,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // ── Server State (TanStack Query v5 — AGENTS.MD §8) ─────────────────────
   const queryClient = useQueryClient();
   const anchorsQuery = useAnchorsQuery();
+  const categoriesQuery = useCategoriesQuery();
   const createAnchorMutation = useCreateAnchorMutation();
   const deleteAnchorMutation = useDeleteAnchorMutation();
   const [isSaving, setIsSaving] = useState(false);
@@ -261,6 +263,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   const [modalVisible, setModalVisible] = useState(false);
   const [anchorName, setAnchorName] = useState("");
   const [anchorDescription, setAnchorDescription] = useState("");
+  const [anchorCategoryId, setAnchorCategoryId] = useState<string | null>(null);
 
   // ── Status do HUD (pipeline oficial: scan → hosted; resolve → progresso
   //    real; pendentes = estado honesto "aproxime-se") ──────────────────────
@@ -646,6 +649,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         name: anchorName.trim(),
         cloudAnchorId: hosted.cloudAnchorId,
         description: anchorDescription.trim() || undefined,
+        categoryId: anchorCategoryId ?? undefined,
         latitude: targetLat,
         longitude: targetLon,
         altitude: Number(targetAlt.toFixed(2)),
@@ -668,6 +672,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       setMutationStatus(null);
       setAnchorName("");
       setAnchorDescription("");
+      setAnchorCategoryId(null);
       setModalVisible(false);
       pointHosting.cancel();
 
@@ -1023,6 +1028,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         onAnchorNameChange={setAnchorName}
         anchorDescription={anchorDescription}
         onAnchorDescriptionChange={setAnchorDescription}
+        categories={categoriesQuery.data ?? []}
+        selectedCategoryId={anchorCategoryId}
+        onSelectCategory={setAnchorCategoryId}
         onCreate={handleCreate}
         onClose={() => {
           setModalVisible(false);

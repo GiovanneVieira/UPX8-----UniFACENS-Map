@@ -1,33 +1,9 @@
 import { z } from "zod";
+import { categoryRefSchema } from "./category.schema.js";
 
-export const placeCategorySchema = z.enum([
-  "building",
-  "classroom",
-  "laboratory",
-  "entrance",
-  "ramp",
-  "elevator",
-  "restroom",
-  "drinking_fountain",
-  "cafeteria",
-  "service",
-  "other",
-]);
-export type PlaceCategory = z.infer<typeof placeCategorySchema>;
-
-export const PLACE_CATEGORY_LABELS: Record<PlaceCategory, string> = {
-  building: "Prédio",
-  classroom: "Sala",
-  laboratory: "Laboratório",
-  entrance: "Entrada",
-  ramp: "Rampa",
-  elevator: "Elevador",
-  restroom: "Banheiro",
-  drinking_fountain: "Bebedouro",
-  cafeteria: "Cantina",
-  service: "Serviço",
-  other: "Outro",
-};
+// As categorias de locais são entidades gerenciadas no painel administrativo
+// (tabela `categories` + GET /categories). O enum hardcoded foi migrado para
+// seed — labels e listas vêm da API (Single Source of Truth: banco).
 
 export const placeSourceSchema = z.enum([
   "team_report",
@@ -43,7 +19,7 @@ export const PLACE_SOURCE_LABELS = {
 // Encontrar um recurso não certifica sua condição física nem uma rota até ele.
 export const createPlaceSchema = z.strictObject({
   name: z.string().trim().min(1, "Informe o nome do local").max(255),
-  category: placeCategorySchema,
+  categoryId: z.string().uuid("Selecione uma categoria válida"),
   latitude: z
     .number({ error: "Informe uma latitude válida em graus decimais" })
     .finite()
@@ -88,7 +64,7 @@ export const placePositionFormSchema = z.object({
 export const createPlaceFormSchema = z
   .strictObject({
     name: z.string(),
-    category: placeCategorySchema,
+    categoryId: z.string().uuid("Selecione uma categoria"),
     latitude: coordinateInput,
     longitude: coordinateInput,
     building: z
@@ -127,6 +103,7 @@ export type UpdatePlaceDto = z.infer<typeof updatePlaceSchema>;
 
 export const placeSchema = createPlaceSchema.extend({
   id: z.string().uuid(),
+  category: categoryRefSchema,
   building: z.string().nullable(),
   floor: z.number().int().nullable(),
   description: z.string().nullable(),
@@ -139,7 +116,10 @@ export type Place = z.infer<typeof placeSchema>;
 
 export const placesQuerySchema = z.strictObject({
   search: z.string().trim().max(100).optional(),
-  category: placeCategorySchema.optional(),
+  /** Filtro por slug da categoria (compatível com os 11 seeds). */
+  category: z.string().trim().max(60).optional(),
+  /** Filtro por id da categoria (forma canônica). */
+  categoryId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

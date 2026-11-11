@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, Text, View } from "react-native";
-import { PLACE_CATEGORY_LABELS, PLACE_SOURCE_LABELS, type Place } from "shared";
+import { PLACE_SOURCE_LABELS, type Place } from "shared";
 
 /** Card memoizado: a lista re-renderiza apenas quando place/selected mudam. */
 export const PlaceCard = React.memo(function PlaceCard({
@@ -23,12 +23,12 @@ export const PlaceCard = React.memo(function PlaceCard({
       onPress={onSelect}
       accessibilityRole="button"
       accessibilityState={{ selected }}
-      accessibilityLabel={`Ver detalhes de ${place.name}, ${PLACE_CATEGORY_LABELS[place.category]}`}
+      accessibilityLabel={`Ver detalhes de ${place.name}, ${place.category.label}`}
       className={`min-h-[44px] rounded-2xl border p-4 active:opacity-80 ${selected ? "border-sky-400 bg-slate-800" : "border-slate-700 bg-slate-900"}`}
     >
       <View className="flex-row flex-wrap items-center justify-between gap-2">
         <Text className="text-xs font-semibold text-sky-300">
-          {PLACE_CATEGORY_LABELS[place.category]}
+          {place.category.label}
         </Text>
         <Text className="text-xs text-amber-200">
           {place.source === "demo"

@@ -19,6 +19,7 @@ import pg from 'pg';
 import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { eq } from 'drizzle-orm';
 import { toNodeHandler } from 'better-auth/node';
 import { apiEnvironmentSchema } from 'shared';
 import { API_CONFIG } from '../../../src/config/runtime-config.js';
@@ -37,7 +38,12 @@ import { PlacesRepository } from '../../../src/modules/places/places.repository.
 import { AnchorsController } from '../../../src/anchors/anchors.controller.js';
 import { AnchorsService } from '../../../src/anchors/anchors.service.js';
 import { DRIZZLE, type DrizzleDB } from '../../../src/db/database.module.js';
-import { anchors, places } from '../../../src/db/schema.js';
+import { STORAGE } from '../../../src/modules/storage/storage.types.js';
+import { LocalStorageAdapter } from '../../../src/modules/storage/local.adapter.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { anchors, categories, places } from '../../../src/db/schema.js';
 
 const origin = 'https://campus.example.org';
 const adminFixture = {
@@ -50,7 +56,8 @@ const commonFixture = {
 };
 const publicPlace = {
   name: 'Exemplo público',
-  category: 'entrance',
+  // Preenchido no beforeAll com o id da categoria seedada 'entrance'.
+  categoryId: '',
   latitude: 0,
   longitude: 0,
   source: 'demo',
@@ -124,6 +131,13 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     await migrate(db, {
       migrationsFolder: fileURLToPath(new URL('../../../drizzle', import.meta.url)),
     });
+    // Resolve o id da categoria seedada 'entrance' (enum → tabela).
+    const [entrance] = await db
+      .select()
+      .from(categories)
+      .where(eq(categories.slug, 'entrance'))
+      .limit(1);
+    publicPlace.categoryId = entrance.id;
 
     const config = apiEnvironmentSchema.parse({
       NODE_ENV: 'production',
@@ -152,6 +166,12 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
         { provide: API_CONFIG, useValue: config },
         { provide: DRIZZLE, useValue: db },
         { provide: 'PG_POOL', useValue: pool },
+        {
+          provide: STORAGE,
+          useValue: new LocalStorageAdapter(
+            fs.mkdtempSync(path.join(os.tmpdir(), 'auth-storage-')),
+          ),
+        },
         {
           provide: BETTER_AUTH,
           useFactory: (database: DrizzleDB) => createBetterAuth(config, database),

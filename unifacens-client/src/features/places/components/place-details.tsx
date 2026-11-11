@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from "react-native";
-import { PLACE_CATEGORY_LABELS, PLACE_SOURCE_LABELS, type Place } from "shared";
+import { PLACE_SOURCE_LABELS, type Place } from "shared";
 
 export function PlaceDetails({
   place,
@@ -39,7 +39,7 @@ export function PlaceDetails({
         </Pressable>
       ) : null}
       <Text className="mt-2 text-sm text-sky-300">
-        {PLACE_CATEGORY_LABELS[place.category]}
+        {place.category.label}
       </Text>
       {place.description ? (
         <Text className="mt-3 text-base text-slate-200">

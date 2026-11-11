@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import type { PointHostingPhase } from '../hooks/use-point-hosting';
+import type { Category } from 'shared';
 
 interface PlaceAnchorModalProps {
   visible: boolean;
@@ -26,6 +27,10 @@ interface PlaceAnchorModalProps {
   onAnchorNameChange: (value: string) => void;
   anchorDescription: string;
   onAnchorDescriptionChange: (value: string) => void;
+  /** Categorias disponíveis (com modelo 3D vinculado, se houver). */
+  categories: Category[];
+  selectedCategoryId: string | null;
+  onSelectCategory: (id: string | null) => void;
   /** Salva o pin (só com phase 'hosted'). */
   onCreate: () => void;
   onClose: () => void;
@@ -109,6 +114,9 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   onAnchorNameChange,
   anchorDescription,
   onAnchorDescriptionChange,
+  categories,
+  selectedCategoryId,
+  onSelectCategory,
   onCreate,
   onClose,
 }) => {
@@ -241,6 +249,53 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                     maxLength={280}
                     accessibilityLabel="Descrição do ponto"
                   />
+                  <Text style={styles.inputLabel}>Categoria (opcional)</Text>
+                  <Text style={styles.helperText}>
+                    A categoria define o modelo 3D que marca o ponto no AR.
+                  </Text>
+                  <View style={styles.categoryWrap}>
+                    <TouchableOpacity
+                      onPress={() => onSelectCategory(null)}
+                      style={[
+                        styles.categoryChip,
+                        !selectedCategoryId && styles.categoryChipActive,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: !selectedCategoryId }}
+                      accessibilityLabel="Sem categoria">
+                      <Text
+                        style={[
+                          styles.categoryChipText,
+                          !selectedCategoryId && styles.categoryChipTextActive,
+                        ]}>
+                        Sem categoria
+                      </Text>
+                    </TouchableOpacity>
+                    {categories.map((category) => (
+                      <TouchableOpacity
+                        key={category.id}
+                        onPress={() => onSelectCategory(category.id)}
+                        style={[
+                          styles.categoryChip,
+                          selectedCategoryId === category.id &&
+                            styles.categoryChipActive,
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          selected: selectedCategoryId === category.id,
+                        }}
+                        accessibilityLabel={category.label}>
+                        <Text
+                          style={[
+                            styles.categoryChipText,
+                            selectedCategoryId === category.id &&
+                              styles.categoryChipTextActive,
+                          ]}>
+                          {category.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
                   <View style={styles.modalActionsRow}>
                     <TouchableOpacity onPress={requestClose} disabled={isSaving} style={styles.cancelButton}>
                       <Text style={styles.cancelButtonText}>Cancelar</Text>
@@ -442,6 +497,39 @@ const styles = StyleSheet.create({
   textArea: {
     minHeight: 64,
     textAlignVertical: 'top',
+  },
+  helperText: {
+    color: '#94A3B8',
+    fontSize: 11.5,
+    marginBottom: 8,
+  },
+  categoryWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  categoryChip: {
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 40,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+  },
+  categoryChipActive: {
+    borderColor: '#60A5FA',
+    backgroundColor: '#1D4ED8',
+  },
+  categoryChipText: {
+    color: '#CBD5E1',
+    fontSize: 12.5,
+    fontWeight: '600',
+  },
+  categoryChipTextActive: {
+    color: '#FFFFFF',
   },
   modalActionsRow: {
     flexDirection: 'row',
