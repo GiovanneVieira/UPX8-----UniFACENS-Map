@@ -15,14 +15,17 @@ name: EAS Build (Android)
 on:
   push:
     branches: [main]
+    # ⚠️ paths + paths-ignore JUNTOS no mesmo evento = workflow inválido
+    # (falha sem job — regra do GitHub Actions, igua branches/branches-ignore).
+    # Exclusões vão como negação '!': dispara se casa um positive E NENHUM
+    # negative.
     paths:
       - 'unifacens-client/**'
       - 'packages/shared/**'
       - 'package-lock.json'
       - '.github/workflows/eas-build.yml'
-    paths-ignore:
-      - '**/*.md'
-      - 'unifacens-client/docs/**'
+      - '!**/*.md'
+      - '!unifacens-client/docs/**'
   workflow_dispatch:
     inputs:
       profile:
