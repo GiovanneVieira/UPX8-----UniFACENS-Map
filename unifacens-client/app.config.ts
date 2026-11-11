@@ -37,6 +37,15 @@ export default ({ config }: { config: ExpoConfig }): ExpoConfig => {
 
   return {
     ...config,
+    // EAS Build: projectId da conta Expo (@giovannevqs-team/unifacens-client)
+    // — vinculado pelo `eas init` em 2026-11-11. NÃO é secret.
+    extra: {
+      ...(config.extra ?? {}),
+      eas: {
+        ...(config.extra?.eas ?? {}),
+        projectId: 'ae6304bc-05e5-4a87-afa7-3b3e648c9cce',
+      },
+    },
     plugins: (config.plugins ?? []).map((plugin) => {
       if (Array.isArray(plugin) && plugin[0] === '@reactvision/react-viro') {
         return [

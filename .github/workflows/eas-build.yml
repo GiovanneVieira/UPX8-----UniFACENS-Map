@@ -1,0 +1,72 @@
+# EAS Build (Android) — dispara em push na main que toca o client/shared
+# (mudanças significativas) ou manualmente (escolhe o profile).
+#
+# Pré-requisitos (uma única vez — ver docs/eas-deploy.md):
+#   1. GitHub Secret: EXPO_TOKEN (expo.dev → Account Settings → Access Tokens)
+#   2. EAS Environment Variables (preview+production): as EXPO_PUBLIC_* de
+#      produção (API_URL, AR/RV keys, Maps) — NÃO vão no eas.json (commitado)
+#      nem nos secrets do GitHub (o build roda na NUVEM EAS, não no runner).
+#   3. app.config.ts: extra.eas.projectId preenchido pelo `eas init`.
+#
+# Quota: plano free EAS = 30 builds/mês — concurrency cancela builds
+# superseded e o filtro de paths evita disparos irrelevantes.
+name: EAS Build (Android)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'unifacens-client/**'
+      - 'packages/shared/**'
+      - 'package-lock.json'
+      - '.github/workflows/eas-build.yml'
+    paths-ignore:
+      - '**/*.md'
+      - 'unifacens-client/docs/**'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Profile do EAS'
+        type: choice
+        default: preview
+        options: [preview, production]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eas-build
+  cancel-in-progress: true
+
+jobs:
+  eas-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: unifacens-client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # Instala o monorepo inteiro (raiz) — o postinstall do client builda
+      # o packages/shared (dist/) — requisito do EAS em monorepos.
+      - name: Instalar dependências (raiz do monorepo)
+        run: npm ci
+        working-directory: .
+
+      # Redundância de segurança: dist garantido mesmo se o postinstall
+      # for removido algum dia.
+      - name: Buildar packages/shared
+        run: npm run build --workspace=shared
+        working-directory: .
+
+      - name: Submeter build ao EAS (nuvem)
+        run: npx eas-cli@latest build --platform android --profile "${{ inputs.profile || 'preview' }}" --non-interactive --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
