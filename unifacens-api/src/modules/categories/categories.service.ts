@@ -128,6 +128,7 @@ export class CategoriesService {
           ? {
               url: this.storage.url(renderableKey),
               format: renderableFormat as 'glb' | 'gltf' | 'obj' | 'fbx' | 'vrx',
+              boundingBox: row.model.boundingBox ?? null,
             }
           : null,
     };

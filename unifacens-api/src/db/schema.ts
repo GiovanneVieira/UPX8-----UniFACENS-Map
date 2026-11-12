@@ -33,6 +33,16 @@ export const models = pgTable(
     /** Chave do GLB derivado (apenas quando format = 'fbx'). */
     derivedKey: text('derived_key'),
     sizeBytes: integer('size_bytes').notNull(),
+    /**
+     * Bounding box canônico do modelo {min,max} em coordenadas do arquivo —
+     * computado 1× no upload (parser puro GLB/GLTF/OBJ, sem three.js; VRX
+     * fica null). Preview web e Viro3DObjectPin (AR) derivam scale/offset
+     * daqui: modelo recentralizado e normalizado em TODOS os consumers.
+     */
+    boundingBox: jsonb('bounding_box').$type<{
+      min: [number, number, number];
+      max: [number, number, number];
+    } | null>(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),

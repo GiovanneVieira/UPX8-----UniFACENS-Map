@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -127,6 +128,20 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   const busy = hosting.phase === 'hosting' || isSaving;
   const requestClose = () => {
     if (busy) return;
+    // Guard anti-órfãs (2026-11-12): em 'hosted' a âncora JÁ existe na
+    // plataforma (TTL 30d) mas o registro no banco só nasce no "Salvar" —
+    // fechar aqui descartaria o cloudAnchorId silenciosamente. Confirmar.
+    if (hosting.phase === 'hosted') {
+      Alert.alert(
+        'Descartar ponto?',
+        'O escaneamento já foi registrado na plataforma e será perdido se você sair agora.',
+        [
+          { text: 'Continuar editando', style: 'cancel' },
+          { text: 'Descartar ponto', style: 'destructive', onPress: onClose },
+        ],
+      );
+      return;
+    }
     onClose();
   };
 

@@ -3,13 +3,18 @@ import {
   adminPointsPageSchema,
   adminUsersPageSchema,
   anchorDetailSchema,
+  anchorSchema,
   categorySchema,
+  createAnchorSchema,
+  orphanAnchorSchema,
   updateAdminPointSchema,
   z,
   type AdminListQuery,
   type Category,
+  type CreateAnchorDto,
   type CreateCategoryDto,
   type Model,
+  type OrphanAnchor,
   type UpdateAdminPoint,
   type UpdateCategoryDto,
 } from 'shared';
@@ -88,6 +93,19 @@ export const adminApi = {
       adminUsersPageSchema,
       { signal },
     ),
+  /** Âncoras órfãs: hospedadas na plataforma RV sem registro no banco. */
+  orphanAnchors: (signal: AbortSignal) =>
+    request('/admin/orphan-anchors', z.array(orphanAnchorSchema), { signal }),
+  /**
+   * Adoção: registra no banco um pin reaproveitando o cloudAnchorId já
+   * hospedado (sem re-hospedar — o pin passa a resolver normalmente).
+   */
+  adoptOrphan: (dto: CreateAnchorDto) =>
+    request('/anchors', anchorSchema, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(createAnchorSchema.parse(dto)),
+    }),
   categories: {
     list: (signal: AbortSignal) =>
       request('/categories', z.array(categorySchema), { signal }),
@@ -177,4 +195,4 @@ export function adminImageUrl(path: string) {
   return undefined;
 }
 
-export type { Category, Model };
+export type { Category, Model, OrphanAnchor };

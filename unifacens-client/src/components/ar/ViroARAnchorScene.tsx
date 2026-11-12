@@ -189,12 +189,32 @@ const Viro3DObjectPin: FC<{
     // FBX sempre chega aqui como GLB derivado (url aponta pro derived/).
     fbx: 'GLB',
   };
+  // Bbox canônico (computado no upload): normaliza a maior dimensão para
+  // 0.35m×scaleFactor e centraliza o modelo no eixo do pin com a BASE
+  // assentada ~5cm acima do chão — mesmo arquivo com pivô deslocado nasce
+  // NO ponto (bug "modelo longe da âncora", 2026-11-12). Sem bbox
+  // (legado/VRX) mantém a escala fixa histórica.
+  const baseScale = 0.35 * scaleFactor;
+  let scale: [number, number, number] = [baseScale, baseScale, baseScale];
+  let position: [number, number, number] = [0, 0.05 * scaleFactor, 0];
+  if (model.boundingBox) {
+    const { min, max } = model.boundingBox;
+    const sizeX = max[0] - min[0];
+    const sizeY = max[1] - min[1];
+    const sizeZ = max[2] - min[2];
+    const maxDim = Math.max(sizeX, sizeY, sizeZ) || 1;
+    const k = baseScale / maxDim;
+    const centerX = (min[0] + max[0]) / 2;
+    const centerZ = (min[2] + max[2]) / 2;
+    scale = [k, k, k];
+    position = [-centerX * k, -min[1] * k + 0.05 * scaleFactor, -centerZ * k];
+  }
   return (
     <Viro3DObject
       source={{ uri: resolveAssetUrl(model.url) }}
       type={typeByFormat[model.format] ?? 'GLB'}
-      scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
-      position={[0, 0.05 * scaleFactor, 0]}
+      scale={scale}
+      position={position}
       onError={() => {
         console.warn(
           `[ARPin] Falha ao carregar modelo da categoria "${anchor.category?.label}" — fallback para o cubo.`,

@@ -15,6 +15,7 @@ import { API_CONFIG } from './config/runtime-config.js';
 import type { ApiEnvironment } from 'shared';
 import { configureHttp } from './config/configure-http.js';import { BETTER_AUTH, type BetterAuthInstance } from './common/auth/better-auth.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
+import { requestLoggingMiddleware } from './common/middleware/request-logging.middleware.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS_DIR = path.resolve(__dirname, '../uploads');
@@ -47,6 +48,10 @@ async function bootstrap() {
   // body-parser do Nest é desativado e o parsing JSON é restaurado APENAS
   // para as rotas fora de /auth, montadas depois do handler.
   const expressInstance = app.getHttpAdapter().getInstance();
+  // Access log global (Frente 1): registrado ANTES de TUDO para cobrir /auth
+  // (better-auth), /uploads (estático) e todas as rotas Nest. Não lê o body —
+  // o handler do better-auth exige o corpo bruto.
+  expressInstance.use(requestLoggingMiddleware());
   expressInstance.use('/auth', toNodeHandler(auth));
   expressInstance.use('/uploads', express.static(UPLOADS_DIR, { fallthrough: false }));
   expressInstance.use(express.json({ limit: '1mb' }));

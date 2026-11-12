@@ -23,3 +23,4 @@ export * from './utils/navigation-route.js';
 export * from './constants/campus.js';
 
 export * from './schemas/admin.schema.js';
+export * from './schemas/orphan-anchor.schema.js';

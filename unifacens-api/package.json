@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1166.0",
+    "@better-auth/expo": "^1.7.22",
     "@nestjs/common": "^12.0.1",
     "@nestjs/core": "^12.0.1",
     "@nestjs/observe": "^0.1.8",

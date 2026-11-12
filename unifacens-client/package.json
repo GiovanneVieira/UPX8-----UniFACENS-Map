@@ -52,6 +52,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
+    "manifest:check": "node scripts/assert-manifest.mjs",
     "start": "cross-env EXPO_UNSAFE_DOTENV_KEYS=REACT_NATIVE_PACKAGER_HOSTNAME expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "cross-env EXPO_UNSAFE_DOTENV_KEYS=REACT_NATIVE_PACKAGER_HOSTNAME expo run:android",

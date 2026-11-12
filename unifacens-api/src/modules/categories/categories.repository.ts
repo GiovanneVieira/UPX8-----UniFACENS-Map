@@ -14,6 +14,7 @@ export interface CategoryWithModel {
     format: string;
     originalKey: string;
     derivedKey: string | null;
+    boundingBox: { min: [number, number, number]; max: [number, number, number] } | null;
   } | null;
 }
 
@@ -37,6 +38,7 @@ export class CategoriesRepository {
         modelFormat: models.format,
         modelOriginalKey: models.originalKey,
         modelDerivedKey: models.derivedKey,
+        modelBoundingBox: models.boundingBox,
       })
       .from(categories)
       .leftJoin(models, eq(categories.modelId, models.id))
@@ -53,6 +55,7 @@ export class CategoriesRepository {
             format: row.modelFormat as string,
             originalKey: row.modelOriginalKey as string,
             derivedKey: row.modelDerivedKey,
+            boundingBox: row.modelBoundingBox ?? null,
           }
         : null,
     }));

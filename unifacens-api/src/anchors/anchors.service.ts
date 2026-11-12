@@ -23,6 +23,10 @@ type AnchorRow = {
   modelKey: string | null;
   modelDerivedKey: string | null;
   modelFormat: string | null;
+  modelBoundingBox: {
+    min: [number, number, number];
+    max: [number, number, number];
+  } | null;
 };
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -92,6 +96,7 @@ export class AnchorsService implements OnModuleInit {
       modelKey: null,
       modelDerivedKey: null,
       modelFormat: null,
+      modelBoundingBox: null,
     });
   }
 
@@ -135,6 +140,7 @@ export class AnchorsService implements OnModuleInit {
         modelKey: null,
         modelDerivedKey: null,
         modelFormat: null,
+        modelBoundingBox: null,
       },
     );
   }
@@ -230,6 +236,7 @@ export class AnchorsService implements OnModuleInit {
         modelKey: models.originalKey,
         modelDerivedKey: models.derivedKey,
         modelFormat: models.format,
+        modelBoundingBox: models.boundingBox,
       })
       .from(anchors)
       .leftJoin(categories, eq(anchors.categoryId, categories.id))
@@ -272,6 +279,7 @@ export class AnchorsService implements OnModuleInit {
                     format: row.modelDerivedKey
                       ? 'glb'
                       : (row.modelFormat as 'glb' | 'gltf' | 'obj' | 'fbx' | 'vrx'),
+                    boundingBox: row.modelBoundingBox ?? null,
                   }
                 : null,
           }
