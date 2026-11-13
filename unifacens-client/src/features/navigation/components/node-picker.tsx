@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
-import type { NavigationNode } from "shared";
+import { filterNavigationPoints } from "shared";
 import { SelectionControl } from "./selection-control";
 
 export function NodePicker({
@@ -10,7 +10,7 @@ export function NodePicker({
   onChange,
 }: {
   label: string;
-  nodes: NavigationNode[];
+  nodes: readonly { id: string; name: string; description?: string | null }[];
   value: string;
   onChange: (value: string) => void;
 }) {
@@ -20,11 +20,7 @@ export function NodePicker({
   const id = useId();
   const trigger = useRef<View>(null);
   const selected = nodes.find((node) => node.id === value);
-  const matches = nodes.filter((node) =>
-    node.name
-      .toLocaleLowerCase("pt-BR")
-      .includes(search.trim().toLocaleLowerCase("pt-BR")),
-  );
+  const matches = filterNavigationPoints(nodes, search);
   return (
     <View className="gap-2">
       <Text className="font-semibold text-slate-200">{label}</Text>
@@ -54,7 +50,7 @@ export function NodePicker({
               setSearch(text);
               setLimit(20);
             }}
-            placeholder="Nome do ponto"
+            placeholder="Nome ou referência do ponto"
             placeholderTextColor="#94a3b8"
             className="min-h-[48px] rounded-lg border border-slate-500 bg-slate-800 px-3 text-white"
           />
@@ -78,7 +74,14 @@ export function NodePicker({
                 }}
                 className={`min-h-[48px] justify-center rounded-lg border px-3 py-3 active:opacity-80 ${value === node.id ? "border-sky-300 bg-blue-800" : "border-slate-600 bg-slate-800"}`}
               >
-                <Text className="text-white">{node.name}</Text>
+                <View className="gap-1">
+                  <Text className="text-white">{node.name}</Text>
+                  {node.description ? (
+                    <Text className="text-sm text-slate-300">
+                      {node.description}
+                    </Text>
+                  ) : null}
+                </View>
               </SelectionControl>
             ))}
           </View>

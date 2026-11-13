@@ -1,14 +1,15 @@
 import { useForm } from "@tanstack/react-form";
 import {
-  navigationPlanFormSchema,
-  type NavigationGraph,
-  type NavigationPlanFormValues,
+  navigationAnchorPlanFormSchema,
+  type NavigationAnchorPlanFormValues,
 } from "shared";
-import { useNavigationRouteMutation } from "../queries/use-navigation-query";
+import { useAnchorNavigationRouteMutation } from "../queries/use-navigation-query";
 
-export const navigationPlanDefaults: NavigationPlanFormValues = {
-  originNodeId: "",
-  destinationNodeId: "",
+const defaults: NavigationAnchorPlanFormValues = {
+  originAnchorId: "",
+  destinationAnchorId: "",
+  networkKey: "",
+  mode: "navigation",
   stepFree: false,
   avoidLifts: false,
   requireHandrail: false,
@@ -19,27 +20,20 @@ export const navigationPlanDefaults: NavigationPlanFormValues = {
   maxDownhillSlopePercent: "",
   maxCrossSlopePercent: "",
 };
-
-export function useNavigationPlan(graph: NavigationGraph) {
-  const mutation = useNavigationRouteMutation({
-    networkId: graph.id,
-    version: graph.version,
-  });
+export function useNavigationPlan() {
+  const mutation = useAnchorNavigationRouteMutation();
   const form = useForm({
-    defaultValues: navigationPlanDefaults,
+    defaultValues: defaults,
     listeners: { onChange: () => mutation.reset() },
     validators: {
-      onChange: navigationPlanFormSchema,
-      onSubmit: navigationPlanFormSchema,
+      onChange: navigationAnchorPlanFormSchema,
+      onSubmit: navigationAnchorPlanFormSchema,
     },
     onSubmit: async ({ value }) => {
-      const request = navigationPlanFormSchema.parse(value);
-      request.mode =
-        graph.dataSource === "demo" ? "demonstration" : "navigation";
       try {
-        await mutation.mutateAsync(request);
+        await mutation.mutateAsync(navigationAnchorPlanFormSchema.parse(value));
       } catch {
-        // A mutação preserva o erro para nova tentativa, sem perder o formulário.
+        /* A mutation mantém o erro e o formulário para nova tentativa. */
       }
     },
   });

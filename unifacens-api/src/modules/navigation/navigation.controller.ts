@@ -31,6 +31,8 @@ import {
   type NavigationNetworksQuery,
   type NavigationRequest,
   type PublishNavigationNetworkDto,
+  navigationAnchorRequestSchema,
+  type NavigationAnchorRequest,
 } from 'shared';
 import {
   AdminOnly,
@@ -116,6 +118,33 @@ export class NavigationController {
     @Req() request: Request,
   ) {
     return this.service.publish(params, dto, request.user!.id);
+  }
+
+  @Post(':networkId/versions/:version/route-by-anchors')
+  @AuthenticatedRead()
+  @HttpCode(200)
+  @ApiParam({ name: 'networkId', description: 'Identificador da rede' })
+  @ApiParam({ name: 'version', description: 'Versão publicada ativa' })
+  @ApiOperation({
+    summary: 'Calcular percurso acessível para um ponto AR por sua identidade',
+  })
+  @ApiBody({
+    schema: z.toJSONSchema(navigationAnchorRequestSchema, {
+      target: 'openapi-3.0',
+    }) as SchemaObject,
+  })
+  routeByAnchors(
+    @Param(new ZodValidationPipe(navigationNetworkParamsSchema))
+    params: NavigationNetworkParams,
+    @Body(new ZodValidationPipe(navigationAnchorRequestSchema))
+    dto: NavigationAnchorRequest,
+    @Req() request: Request,
+  ) {
+    return this.service.routeByAnchors(
+      params,
+      dto,
+      request.user?.role === 'admin',
+    );
   }
 
   @Post(':networkId/versions/:version/route')

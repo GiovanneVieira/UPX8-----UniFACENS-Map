@@ -221,8 +221,8 @@ export function RoutePreview({
         Chegada: {nodes.get(result.nodeIds[result.nodeIds.length - 1])?.name}
       </Text>
       <Text className="text-sm text-slate-300">
-        Esta tela planeja a chegada ao acesso do prédio. Acompanhamento por
-        localização e orientação até salas ainda não estão disponíveis.
+        Esta tela planeja a chegada ao ponto AR selecionado. Acompanhamento por
+        localização ainda não está disponível nesta tela.
       </Text>
     </View>
   );

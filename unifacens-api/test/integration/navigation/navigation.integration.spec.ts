@@ -33,6 +33,7 @@ import {
   navigationVersions,
   navigationNodes,
   navigationEdges,
+  anchors,
 } from '../../../src/db/schema.js';
 import { makeNavigationGraph } from '../../unit/navigation/navigation.fixture.js';
 
@@ -182,6 +183,7 @@ describe('Navegação: persistência, publicação, JWT e cálculo por HTTP', ()
 
   beforeEach(async () => {
     await db.delete(navigationNetworks);
+    await db.delete(anchors);
   });
   afterAll(async () => {
     await app?.close();
@@ -562,5 +564,293 @@ describe('Navegação: persistência, publicação, JWT e cálculo por HTTP', ()
       summary: expect.any(String),
       security: [{ 'admin-bearer': [] }],
     });
+  });
+
+  const originAnchorId = '10000000-0000-4000-8000-000000000001';
+  const destinationAnchorId = '10000000-0000-4000-8000-000000000002';
+  const unmappedAnchorId = '10000000-0000-4000-8000-000000000003';
+  const missingAnchorId = '10000000-0000-4000-8000-000000000004';
+  const anchorRequest = {
+    origin: { anchorId: originAnchorId },
+    destination: { anchorId: destinationAnchorId },
+    mode: 'demonstration',
+  };
+  async function mappedGraph() {
+    await db.insert(anchors).values([
+      {
+        id: originAnchorId,
+        name: 'Entrada AR fictícia',
+        cloudAnchorId: 'synthetic-origin',
+      },
+      {
+        id: destinationAnchorId,
+        name: 'Jardim AR fictício',
+        description: 'Ao lado da biblioteca',
+        cloudAnchorId: 'synthetic-destination',
+      },
+      {
+        id: unmappedAnchorId,
+        name: 'Outro local AR fictício',
+        cloudAnchorId: 'synthetic-unmapped',
+      },
+    ]);
+    const value = graph();
+    Object.assign(value.nodes[0], { anchorId: originAnchorId });
+    Object.assign(value.nodes[2], {
+      anchorId: destinationAnchorId,
+      kind: 'reference',
+    });
+    return value;
+  }
+
+  it('persiste a identidade das âncoras e calcula para qualquer categoria de ponto AR', async () => {
+    await publish(await mappedGraph());
+    const stored = await http(versionPath, 'GET', undefined, userJwt);
+    expect(stored.body.graph.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'origin', anchorId: originAnchorId }),
+        expect.objectContaining({
+          id: 'building-access',
+          kind: 'reference',
+          anchorId: destinationAnchorId,
+        }),
+      ]),
+    );
+    const result = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      anchorRequest,
+      userJwt,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: 'ok', distanceMeters: 20 });
+    const stepFree = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      { ...anchorRequest, needs: { stepFree: true } },
+      userJwt,
+    );
+    expect(stepFree.body).toMatchObject({
+      status: 'ok',
+      distanceMeters: 70,
+      edgeIds: ['sidewalk', 'ramp'],
+    });
+  });
+
+  it('mantém vínculo após renomear a âncora e aceita origem por nó conhecido', async () => {
+    await publish(await mappedGraph());
+    await db
+      .update(anchors)
+      .set({ name: 'Nome alterado' })
+      .where(eq(anchors.id, destinationAnchorId));
+    const result = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      { ...anchorRequest, origin: { nodeId: 'origin' } },
+      userJwt,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: 'ok', distanceMeters: 20 });
+  });
+
+  it('calcula no modo real com referencial local conferido sem exigir GPS na âncora', async () => {
+    const value = await mappedGraph();
+    value.dataSource = 'field_survey';
+    value.nodes.forEach((node, index) => {
+      node.position = {
+        kind: 'local',
+        referenceId: 'synthetic-survey',
+        xMeters: index * 10,
+        yMeters: 0,
+      };
+    });
+    expect((await http(root, 'POST', value)).status).toBe(201);
+    expect(
+      (
+        await http(`${versionPath}/publish`, 'POST', {
+          review: {
+            evidenceIds: ['synthetic-review-not-campus'],
+            validUntil: new Date(Date.now() + 3600000).toISOString(),
+          },
+        })
+      ).status,
+    ).toBe(200);
+    const result = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      { ...anchorRequest, mode: 'navigation', needs: { stepFree: true } },
+      userJwt,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      status: 'ok',
+      dataSource: 'field_survey',
+      distanceMeters: 70,
+    });
+  });
+
+  it('distingue âncora existente sem percurso de âncora inexistente', async () => {
+    await publish(await mappedGraph());
+    const unmapped = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      { ...anchorRequest, destination: { anchorId: unmappedAnchorId } },
+      userJwt,
+    );
+    expect(unmapped.status).toBe(200);
+    expect(unmapped.body).toMatchObject({
+      status: 'anchor_not_in_network',
+      unmappedAnchorIds: [unmappedAnchorId],
+    });
+    const missing = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      { ...anchorRequest, destination: { anchorId: missingAnchorId } },
+      userJwt,
+    );
+    expect(missing.status).toBe(404);
+    expect(missing.body.message).toContain('AR');
+  });
+
+  it('exige sessão, valida IDs e mantém proteção de demonstração na consulta por âncora', async () => {
+    await publish(await mappedGraph());
+    expect(
+      (
+        await http(
+          `${versionPath}/route-by-anchors`,
+          'POST',
+          anchorRequest,
+          null,
+        )
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await http(
+          `${versionPath}/route-by-anchors`,
+          'POST',
+          { ...anchorRequest, destination: { anchorId: 'inválido' } },
+          userJwt,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await http(
+          `${versionPath}/route-by-anchors`,
+          'POST',
+          { ...anchorRequest, graph: graph() },
+          userJwt,
+        )
+      ).status,
+    ).toBe(400);
+    const realMode = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      { ...anchorRequest, mode: 'navigation' },
+      userJwt,
+    );
+    expect(realMode.body.status).toBe('demo_not_allowed');
+  });
+
+  it('não consulta rascunhos/histórico por âncora e não relaxa restrições em caminho bloqueado', async () => {
+    const value = await mappedGraph();
+    await http(root, 'POST', value);
+    expect(
+      (
+        await http(
+          `${versionPath}/route-by-anchors`,
+          'POST',
+          anchorRequest,
+          userJwt,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await http(`${versionPath}/route-by-anchors`, 'POST', anchorRequest))
+        .status,
+    ).toBe(409);
+    await http(`${versionPath}/publish`, 'POST', {});
+    value.version = 'closed-for-anchors';
+    value.edges[2].availability = { status: 'closed' };
+    const newPath = await publish(value);
+    expect(
+      (
+        await http(
+          `${versionPath}/route-by-anchors`,
+          'POST',
+          anchorRequest,
+          userJwt,
+        )
+      ).status,
+    ).toBe(404);
+    const closed = await http(
+      `${newPath}/route-by-anchors`,
+      'POST',
+      { ...anchorRequest, needs: { stepFree: true } },
+      userJwt,
+    );
+    expect(closed.body.status).toBe('no_route');
+  });
+
+  it('recusa vínculos inexistentes ou ambíguos sem persistência parcial', async () => {
+    const value = await mappedGraph();
+    Object.assign(value.nodes[2], { anchorId: missingAnchorId });
+    expect((await http(root, 'POST', value)).status).toBe(400);
+    expect(await db.select().from(navigationNetworks)).toHaveLength(0);
+    Object.assign(value.nodes[2], { anchorId: originAnchorId });
+    expect((await http(root, 'POST', value)).status).toBe(400);
+    expect(await db.select().from(navigationNodes)).toHaveLength(0);
+  });
+
+  it('preserva a rede ao remover uma âncora e recusa novo cálculo pelo ID removido', async () => {
+    await publish(await mappedGraph());
+    await db.delete(anchors).where(eq(anchors.id, destinationAnchorId));
+    const result = await http(
+      `${versionPath}/route-by-anchors`,
+      'POST',
+      anchorRequest,
+      userJwt,
+    );
+    expect(result.status).toBe(404);
+    const stored = await http(versionPath);
+    expect(stored.body.graph.nodes).toHaveLength(3);
+    expect(stored.body.graph.edges).toHaveLength(3);
+    expect(
+      (await http(`${versionPath}/route`, 'POST', routeRequest, userJwt)).body
+        .status,
+    ).toBe('ok');
+  });
+
+  it('aplica a migration de vínculos duas vezes sem alterar registros e impõe unicidade no banco', async () => {
+    await publish(await mappedGraph());
+    const migration = await readFile(
+      new URL(
+        '../../../drizzle/20261113174144_navigation_anchor_links/migration.sql',
+        import.meta.url,
+      ),
+      'utf8',
+    );
+    await pool!.query(migration);
+    await pool!.query(migration);
+    const stored = await http(versionPath);
+    expect(
+      stored.body.graph.nodes.find(
+        (node: { id: string }) => node.id === 'origin',
+      ).anchorId,
+    ).toBe(originAnchorId);
+    await expect(
+      db
+        .insert(navigationNodes)
+        .values({
+          networkId: 'synthetic-navigation',
+          version: 'test-v1',
+          id: 'ambiguous',
+          name: 'Duplicado',
+          kind: 'reference',
+          anchorId: originAnchorId,
+        }),
+    ).rejects.toThrow();
+    expect((await db.select().from(navigationNodes)).length).toBe(3);
   });
 });

@@ -12,12 +12,46 @@ const { chromium } = require("playwright");
 const { default: AxeBuilder } = require("@axe-core/playwright");
 
 async function main() {
-  const { navigationGraphSchema, findNavigationRoute } = await import("shared");
+  const {
+    navigationGraphSchema,
+    findNavigationRoute,
+    navigationAnchorRequestSchema,
+  } = await import("shared");
   const root = path.resolve(__dirname, "../unifacens-client/dist");
-  const output = path.resolve(__dirname, "../docs/evidencias/planejamento");
+  const bundleRoot = path.join(root, "_expo/static/js/web");
+  const bundles = await fs.readdir(bundleRoot);
+  const isolated = await Promise.all(
+    bundles
+      .filter((file) => file.endsWith(".js"))
+      .map(async (file) =>
+        (await fs.readFile(path.join(bundleRoot, file), "utf8")).includes(
+          "http://127.0.0.1:28000",
+        ),
+      ),
+  );
+  assert.ok(
+    isolated.some(Boolean),
+    "Exporte o web com EXPO_PUBLIC_API_URL=http://127.0.0.1:28000 e --clear antes de testar.",
+  );
+  const output = path.resolve(__dirname, "../docs/evidencias/planejamento-ar");
   await fs.mkdir(output, { recursive: true });
   const now = new Date().toISOString();
   const future = new Date(Date.now() + 86400000).toISOString();
+  const anchors = Array.from({ length: 20 }, (_, index) => ({
+    id: "10000000-0000-4000-8000-" + String(index + 1).padStart(12, "0"),
+    name:
+      ["Entrada fictícia", "Bifurcação fictícia", "Jardim fictício"][index] ??
+      "Outro local fictício " + (index + 1),
+    description:
+      index === 2
+        ? "Ao lado da biblioteca"
+        : "Referência sintética " + (index + 1),
+    cloudAnchorId: "synthetic-" + index,
+    createdAt: now,
+    category: null,
+    latitude: null,
+    longitude: null,
+  }));
   const baseEdge = {
     id: "stairs",
     fromNodeId: "origin",
@@ -44,12 +78,23 @@ async function main() {
     version: "v1",
     dataSource: "demo",
     nodes: [
-      { id: "origin", name: "Entrada fictícia", kind: "gate" },
-      { id: "junction", name: "Bifurcação fictícia", kind: "junction" },
+      {
+        id: "origin",
+        name: "Origem da rede",
+        kind: "gate",
+        anchorId: anchors[0].id,
+      },
+      {
+        id: "junction",
+        name: "Referência da rede",
+        kind: "junction",
+        anchorId: anchors[1].id,
+      },
       {
         id: "access",
-        name: "Prédio fictício · acesso",
-        kind: "building_access",
+        name: "Destino da rede",
+        kind: "reference",
+        anchorId: anchors[2].id,
       },
     ],
     edges: [
@@ -122,6 +167,7 @@ async function main() {
       viewport: { width: 390, height: 844 },
     });
     const page = await context.newPage();
+    page.setDefaultTimeout(20000);
     diagnosticPage = page;
     page.on("requestfailed", (request) =>
       console.log(
@@ -133,7 +179,8 @@ async function main() {
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     let scenario = "ok";
-    let listMode = "ok";
+    let listMode = "empty";
+    let anchorsMode = "ok";
     let delayRoute;
     let routeSeen;
     let requestCount = 0;
@@ -167,6 +214,11 @@ async function main() {
         });
       if (pathname === "/auth/token")
         return json({ token: "synthetic-visual-token" });
+      if (pathname === "/anchors") {
+        if (anchorsMode === "error")
+          return json({ message: "synthetic failure" }, 503);
+        return json(anchorsMode === "empty" ? [] : anchors);
+      }
       if (pathname === "/navigation/networks") {
         if (listMode === "error")
           return json({ message: "synthetic failure" }, 503);
@@ -175,9 +227,11 @@ async function main() {
           nextOffset: null,
         });
       }
-      if (pathname.endsWith("/route")) {
+      if (pathname.endsWith("/route-by-anchors")) {
         requestCount++;
-        const input = route.request().postDataJSON();
+        const input = navigationAnchorRequestSchema.parse(
+          route.request().postDataJSON(),
+        );
         assert.equal(input.mode, "demonstration");
         routeSeen?.();
         if (delayRoute) await delayRoute;
@@ -192,8 +246,33 @@ async function main() {
           evaluated.edges.forEach((edge) => {
             edge.availability = { status: "closed" };
           });
+        const ids = [
+          ...new Set([input.origin.anchorId, input.destination.anchorId]),
+        ];
+        const byAnchor = new Map(
+          evaluated.nodes.map((node) => [node.anchorId, node.id]),
+        );
+        const unmappedAnchorIds = ids.filter((id) => !byAnchor.has(id));
+        if (unmappedAnchorIds.length)
+          return json({
+            status: "anchor_not_in_network",
+            graphId: graph.id,
+            graphVersion: graph.version,
+            dataSource: graph.dataSource,
+            needs: input.needs,
+            unmappedAnchorIds,
+          });
         return json(
-          findNavigationRoute(evaluated, input, new Date().toISOString()),
+          findNavigationRoute(
+            evaluated,
+            {
+              originNodeId: byAnchor.get(input.origin.anchorId),
+              destinationNodeId: byAnchor.get(input.destination.anchorId),
+              mode: input.mode,
+              needs: input.needs,
+            },
+            new Date().toISOString(),
+          ),
         );
       }
       if (
@@ -207,18 +286,43 @@ async function main() {
     await page.goto(`${baseURL}/planejar`);
     await page.getByRole("heading", { name: "Planejar percurso" }).waitFor();
     const area = page.getByRole("radio", { name: /Demonstração/ });
-    await area.click();
+    await page
+      .getByText("Ainda não há percursos publicados", { exact: true })
+      .waitFor();
     await page
       .getByRole("button", { name: "Ponto de partida: Selecionar ponto" })
       .click();
     await page.getByRole("radio", { name: /Entrada fictícia/ }).click();
     await page
-      .getByRole("button", { name: "Acesso de chegada: Selecionar ponto" })
+      .getByRole("button", { name: "Ponto de chegada: Selecionar ponto" })
       .click();
-    await page.getByRole("radio", { name: /Prédio fictício/ }).click();
+    await page
+      .getByRole("textbox", { name: "Buscar em ponto de chegada" })
+      .fill("BIBLIOTECA");
+    await page
+      .getByRole("radio", { name: "Jardim fictício", exact: true })
+      .scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: path.join(output, "busca-por-referencia.png"),
+    });
+    await page.getByRole("radio", { name: /Jardim fictício/ }).click();
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Calcular percurso", exact: true })
+        .isDisabled(),
+      true,
+    );
+    await page.screenshot({ path: path.join(output, "pontos-sem-rede.png") });
+    results.push(
+      "Vinte pontos AR disponíveis sem rede publicada; destino encontrado pela descrição sem depender de categoria ou coordenadas.",
+    );
+    listMode = "ok";
+    await page.getByRole("button", { name: "Atualizar áreas" }).click();
+    await area.click();
     const calculate = page.getByRole("button", { name: "Simular percurso" });
     await calculate.click();
     await page.getByText("20 m", { exact: true }).waitFor();
+    await page.getByText("Chegada: Jardim fictício", { exact: true }).waitFor();
     results.push("Sem restrição: 20 m pela escada.");
     const stepFree = page.getByRole("checkbox", {
       name: "Evitar degraus e escadas",
@@ -292,7 +396,7 @@ async function main() {
     await stepFree.click();
     await stepFree.click();
     const oldResponse = page.waitForResponse((response) =>
-      response.url().endsWith("/route"),
+      response.url().endsWith("/route-by-anchors"),
     );
     release();
     await oldResponse;
@@ -314,6 +418,41 @@ async function main() {
     results.push(
       "Resposta atrasada descartada mesmo ao retornar às escolhas anteriores.",
     );
+
+    await page
+      .getByRole("button", { name: "Ponto de chegada: Jardim fictício" })
+      .click();
+    await page
+      .getByRole("textbox", { name: "Buscar em ponto de chegada" })
+      .fill("Outro local fictício 20");
+    await page
+      .getByRole("radio", { name: "Outro local fictício 20", exact: true })
+      .click();
+    await calculate.click();
+    await page
+      .getByRole("heading", {
+        name: "Ponto AR encontrado, percurso ainda indisponível",
+      })
+      .waitFor();
+    await page
+      .getByRole("heading", {
+        name: "Ponto AR encontrado, percurso ainda indisponível",
+      })
+      .evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await page.screenshot({ path: path.join(output, "ponto-sem-vinculo.png") });
+    results.push(
+      "Ponto AR sem vínculo continua selecionável; cálculo explica a ausência de percurso.",
+    );
+    await page
+      .getByRole("button", {
+        name: "Ponto de chegada: Outro local fictício 20",
+      })
+      .click();
+    await page
+      .getByRole("radio", { name: "Jardim fictício", exact: true })
+      .click();
+    await calculate.click();
+    await page.getByText("70 m", { exact: true }).waitFor();
 
     for (const viewport of [
       { width: 360, height: 800 },
@@ -415,6 +554,15 @@ async function main() {
     await page
       .getByText("Ainda não há percursos publicados", { exact: true })
       .waitFor();
+    await page
+      .getByRole("button", { name: "Ponto de chegada: Jardim fictício" })
+      .click();
+    await page
+      .getByRole("textbox", { name: "Buscar em ponto de chegada" })
+      .fill("biblioteca");
+    await page
+      .getByRole("radio", { name: "Jardim fictício", exact: true })
+      .waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({
       path: path.join(output, "sem-percursos.png"),
@@ -433,6 +581,25 @@ async function main() {
     await page.getByRole("button", { name: "Atualizar áreas" }).click();
     await area.waitFor();
     results.push("Falha ao listar áreas permite nova tentativa.");
+    anchorsMode = "error";
+    await page.getByRole("button", { name: "Atualizar pontos AR" }).click();
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Não foi possível carregar os pontos AR" })
+      .waitFor();
+    anchorsMode = "empty";
+    await page.getByRole("button", { name: "Atualizar pontos AR" }).click();
+    await page
+      .getByText("Nenhum ponto AR cadastrado", { exact: true })
+      .waitFor();
+    anchorsMode = "ok";
+    await page.getByRole("button", { name: "Atualizar pontos AR" }).click();
+    await page
+      .getByRole("button", { name: "Ponto de partida: Selecionar ponto" })
+      .waitFor();
+    results.push(
+      "Falha e lista vazia de âncoras permitem recuperação sem confundir com ausência de rede.",
+    );
     assert.deepEqual(errors, []);
     await fs.writeFile(
       path.join(output, "resultado.json"),

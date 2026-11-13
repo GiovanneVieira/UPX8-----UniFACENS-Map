@@ -18,6 +18,7 @@ export * from './utils/geodesy.js';
 export * from './utils/ar-points.js';
 export * from './utils/navigation-policy.js';
 export * from './utils/navigation-route.js';
+export * from './utils/navigation-search.js';
 
 // Constantes Geográficas do Campus (SSOT API + Client)
 export * from './constants/campus.js';

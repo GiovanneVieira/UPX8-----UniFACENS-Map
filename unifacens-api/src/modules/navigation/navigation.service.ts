@@ -13,6 +13,8 @@ import {
   type NavigationRequest,
   type PublishNavigationNetworkDto,
   type NavigationEdge,
+  type NavigationAnchorRequest,
+  type NavigationAnchorResult,
 } from 'shared';
 import { NavigationRepository } from './navigation.repository.js';
 
@@ -87,5 +89,56 @@ export class NavigationService {
         'Publique a versão antes de calcular percursos.',
       );
     return findNavigationRoute(version.graph, dto, new Date().toISOString());
+  }
+
+  async routeByAnchors(
+    params: NavigationNetworkParams,
+    dto: NavigationAnchorRequest,
+    isAdmin: boolean,
+  ): Promise<NavigationAnchorResult> {
+    const version = await this.getVersion(params, isAdmin);
+    if (version.status !== 'published')
+      throw new ConflictException(
+        'Publique a versão antes de calcular percursos.',
+      );
+    const ids = [
+      ...new Set([
+        ...('anchorId' in dto.origin ? [dto.origin.anchorId] : []),
+        dto.destination.anchorId,
+      ]),
+    ];
+    const existing = await this.repository.findExistingAnchors(ids);
+    if (ids.some((id) => !existing.has(id)))
+      throw new NotFoundException(
+        'Um dos pontos AR selecionados não existe mais. Atualize a lista de pontos.',
+      );
+    const nodes = new Map(
+      version.graph.nodes.flatMap((node) =>
+        node.anchorId ? [[node.anchorId, node.id] as const] : [],
+      ),
+    );
+    const unmappedAnchorIds = ids.filter((id) => !nodes.has(id));
+    if (unmappedAnchorIds.length)
+      return {
+        status: 'anchor_not_in_network',
+        graphId: version.graph.id,
+        graphVersion: version.graph.version,
+        dataSource: version.graph.dataSource,
+        needs: dto.needs,
+        unmappedAnchorIds,
+      };
+    return findNavigationRoute(
+      version.graph,
+      {
+        originNodeId:
+          'anchorId' in dto.origin
+            ? nodes.get(dto.origin.anchorId)!
+            : dto.origin.nodeId,
+        destinationNodeId: nodes.get(dto.destination.anchorId)!,
+        mode: dto.mode,
+        needs: dto.needs,
+      },
+      new Date().toISOString(),
+    );
   }
 }

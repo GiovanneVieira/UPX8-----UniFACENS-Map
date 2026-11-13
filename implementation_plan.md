@@ -2,11 +2,46 @@
 
 RequestFeedback: true
 
-- **Status:** contratos, elegibilidade, busca pura, persistência versionada e API de importação/publicação/cálculo implementados e testados; interface, extensões de dados e levantamento de campo pendentes.
+- **Status:** revisão de 13/11/2026 aprovada e implementada na branch `feat/planejamento-pontos-ar`: busca pelos locais AR, vínculo por `anchorId` e cálculo autenticado. Testes, tipos, lint, builds e validação visual web concluídos; publicação e conferência dos dados reais/aparelho pendentes. Dados de produção não alterados.
 - **Data:** 08/11/2026.
 - **Branch:** `feat/navegacao-acessivel`.
 - **Base analisada:** `1fd8c60` da `main`.
 - **Objetivo:** permitir que uma pessoa escolha origem e destino, informe suas necessidades de deslocamento, compare percursos compatíveis e chegue ao destino com orientação compreensível, distância do trajeto e informação sobre os facilitadores utilizados.
+
+## 0. Revisão de domínio — o ponto AR é o local (13/11/2026)
+
+RequestFeedback: true
+
+**Regra confirmada pelo usuário:** o ponto AR cadastrado já representa o local físico de interesse. O planejamento deve pesquisar esse ponto e utilizar seu `anchorId` como identidade de partida/destino. Não exigir um cadastro duplicado em `places` nem o preenchimento de `placeId` para reconhecer o ponto como local. Os cadastros existentes devem ser reaproveitados. Esta revisão prevalece sobre trechos históricos deste plano que tratam a associação a `placeId` ou a categoria `building_access` como condição para selecionar um destino AR.
+
+**Diagnóstico confirmado no código:**
+
+- O cadastro AR salva nome, descrição/referências, categoria, coordenadas e informações de ancoragem em `anchors`; `GET /anchors` e `useAnchorsQuery` já oferecem esses registros ao client.
+- A busca de `/planejar` recebe apenas `graph.nodes`, filtra somente por `node.name` e restringe chegada a `kind === 'building_access'`. Ela não consulta as âncoras para selecionar origem/destino.
+- O contrato novo de cálculo recebe `originNodeId`/`destinationNodeId`, e os nós da rede não possuem referência explícita à âncora.
+- O endpoint legado `/routing/route` já aceita `target.anchorId`, mas usa outro motor e não aplica as necessidades funcionais do planejamento. Ele não será usado como substituto silencioso do cálculo acessível.
+- Não foram consultados os registros autenticados do ambiente onde o usuário cadastrou os dois locais e aproximadamente vinte pontos AR. Antes de associar dados, conferir seus IDs e os vínculos de rede existentes, preservando o trabalho já realizado.
+
+### Entrega proposta
+
+1. **Buscar os pontos AR existentes.** Usar TanStack Query para carregar `GET /anchors` e permitir busca por nome e descrição/referências, tolerando diferenças de caixa e acentos. A busca fica disponível antes da seleção de uma rede e não depende de haver percursos publicados. Usar `anchor.id` como valor selecionado; não usar nome, categoria ou Cloud Anchor ID como identidade. Pontos sem percurso continuam visíveis com uma explicação dessa condição.
+2. **Relacionar a identidade AR à rede de caminhos.** Acrescentar `anchorId` opcional aos nós de navegação, com contrato compartilhado, persistência e migration aditiva/idempotente. Preservar redes anteriores sem esse campo e o cálculo por IDs de nó. Validar referências em lote e impedir associação ambígua de uma mesma âncora a mais de um nó na mesma versão. Aproveitar associações existentes que possam ser comprovadas por ID; a relação não será presumida por nome ou proximidade geográfica.
+3. **Calcular a partir da âncora selecionada.** Acrescentar uma operação autenticada de consulta `POST /navigation/networks/:networkId/versions/:version/route-by-anchors`, com origem por `anchorId` ou nó conhecido, destino por `anchorId`, modo e necessidades. O servidor resolve os IDs na versão publicada e chama o mesmo motor de elegibilidade/distância já testado. A operação deve permitir usuário comum via `@AuthenticatedRead()`. Manter o endpoint atual por nós para compatibilidade. Retornar respostas distinguíveis para âncora inexistente e âncora sem vínculo naquela rede; não apresentar a segunda situação como falha da busca do local.
+4. **Adaptar a tela.** Exibir os nomes e referências das âncoras escolhidas, remover a restrição de categoria para destinos AR e permitir escolher os pontos sem câmera ativa. Uma rede publicada compatível continua necessária para calcular o caminho. Preservar necessidades, indicação de demonstração, mensagens recuperáveis, distância e descarte de respostas antigas ao alterar ponto/rede. O vínculo técnico ao nó não exige novo cadastro do local pelo usuário.
+5. **Verificar e documentar.** Escrever primeiro os testes de contrato e integração com PostgreSQL real para a resolução dos IDs, permissões, rollback e integridade das associações. Validar a busca e o fluxo completo com âncoras já cadastradas; atualizar a documentação que ainda descreve a chegada exclusiva por `building_access` ou exige `placeId`.
+
+### Critérios de aceite
+
+- Uma pessoa autenticada encontra por nome ou referência os pontos AR disponíveis na API, inclusive sem rede publicada, sem novo cadastro em `places`.
+- Dois pontos AR ligados a uma rede publicada podem ser escolhidos como partida/chegada; a distância é a soma dos trechos elegíveis e as necessidades são respeitadas.
+- Uma âncora sem vínculo à rede aparece na busca e recebe a mensagem de percurso ainda indisponível ao solicitar cálculo. Não é criada uma linha reta ou ligação automática para simular um caminho.
+- Renomear uma âncora não perde seu vínculo por ID. Âncora inexistente/removida e vínculo inválido têm resposta consistente, preservando integridade e dados de versões anteriores.
+- Todos os destinos AR pesquisáveis podem ser selecionados independentemente da categoria; o cálculo depende dos trechos cadastrados, não de um selo genérico de acessibilidade.
+- Uma âncora com referencial apenas local continua pesquisável. Usar sua posição no cálculo/geolocalização exige uma referência compatível; offsets locais da sessão AR não se tornam coordenadas geográficas por suposição.
+- Os endpoints atuais por nós, redes de demonstração e testes de restrições continuam funcionando. Nenhum novo cálculo usa o perfil legado como garantia de acessibilidade.
+- Conferir UI web, teclado, leitor de tela e estados vazio/erro; conferir a tela nativa em aparelho conectado por ADB quando disponível. Registrar limitações caso não haja dispositivo.
+
+**Execução autorizada:** usuário respondeu "Pode sim" nesta conversa. Branch `feat/planejamento-pontos-ar`, criada a partir de `origin/main` em `70027c6`. Contratos e testes primeiro, persistência/resolução e tela em passos revisáveis. Sem recadastrar os pontos existentes, alterar dados de produção, publicar redes, gerar build EAS ou fazer push automaticamente nesta revisão.
 
 ## 1. Resultado esperado e limites da entrega
 

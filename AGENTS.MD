@@ -54,6 +54,12 @@ O **UniFACENS-Map** é uma plataforma que mapeia e fornece navegação interativ
 
 ---
 
+### 2.1 Identidade dos locais no planejamento
+
+- O ponto AR cadastrado representa o próprio local de interesse; sua identidade é `anchors.id` (`anchorId`). O planejamento pesquisa essas âncoras por nome e referências, sem exigir cadastro duplicado em `places` ou vínculo `placeId`.
+- A associação entre o ponto AR e a rede de caminhos usa `navigation_nodes.anchor_id`. Os trechos e suas condições continuam necessários para calcular um percurso compatível; a busca de locais funciona mesmo sem uma rede publicada.
+- A categoria visual da âncora não limita quais pontos podem ser selecionados como destino. Não deduzir conexões por nome/proximidade nem usar o cálculo legado como garantia de acessibilidade.
+
 ## 3. Estrutura do Monorepo & Montagem dos Packages
 
 O repositório adota **NPM Workspaces**:

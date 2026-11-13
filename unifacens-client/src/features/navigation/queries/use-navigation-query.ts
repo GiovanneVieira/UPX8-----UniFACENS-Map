@@ -1,9 +1,14 @@
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
-import type { NavigationNetworkParams, NavigationRequest } from "shared";
+import type {
+  NavigationNetworkParams,
+  NavigationRequest,
+  NavigationAnchorPlan,
+} from "shared";
 import {
   calculateNavigationRoute,
   fetchNavigationNetworks,
   fetchNavigationVersion,
+  calculateAnchorNavigationRoute,
 } from "../services/navigation-api";
 
 export const navigationKeys = {
@@ -21,17 +26,28 @@ export function useNavigationNetworksQuery() {
     getNextPageParam: (last) => last.nextOffset ?? undefined,
   });
 }
-export function useNavigationVersionQuery(network: NavigationNetworkParams) {
+export function useNavigationVersionQuery(
+  network: NavigationNetworkParams,
+  enabled = true,
+) {
   return useQuery({
     queryKey: navigationKeys.version(network),
     queryFn: ({ signal }) => fetchNavigationVersion(network, signal),
     staleTime: 0,
+    enabled,
   });
 }
 export function useNavigationRouteMutation(network: NavigationNetworkParams) {
   return useMutation({
     mutationFn: (input: NavigationRequest) =>
       calculateNavigationRoute(network, input),
+    retry: false,
+  });
+}
+export function useAnchorNavigationRouteMutation() {
+  return useMutation({
+    mutationFn: (input: NavigationAnchorPlan) =>
+      calculateAnchorNavigationRoute(input.network, input.request),
     retry: false,
   });
 }

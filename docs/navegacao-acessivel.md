@@ -28,7 +28,7 @@ Schemas e tipos inferidos estão em [`navigation.schema.ts`](../packages/shared/
 
 | Contrato | Conteúdo |
 | --- | --- |
-| `NavigationNode` | ID, nome, tipo e posição opcional; o nó do tipo `building_access` representa o acesso de chegada |
+| `NavigationNode` | ID, nome, tipo, posição opcional e `anchorId` opcional para identificar o local AR; `building_access` continua representando um acesso físico, sem restringir a seleção de destinos |
 | `NavigationEdge` | Direção, tipo, comprimento, medidas, condições do piso, apoios, verificação e disponibilidade |
 | `NavigationGraph` | Nós/trechos, versão e origem `demo` ou `field_survey`; valida IDs únicos e referências dos trechos |
 | `NavigationNeeds` | Critérios funcionais escolhidos para o cálculo; sem diagnóstico ou limiar normativo implícito |
@@ -116,6 +116,7 @@ Importar rede, versão, nós e trechos é uma única transação com inserções
 | Consultar versão | `GET /navigation/networks/:networkId/versions/:version` | Autenticado; rascunho/histórico retirado somente para admin |
 | Publicar revisão | `POST /navigation/networks/:networkId/versions/:version/publish` | Admin |
 | Calcular percurso | `POST /navigation/networks/:networkId/versions/:version/route` | Qualquer usuário autenticado |
+| Calcular por ponto AR | `POST /navigation/networks/:networkId/versions/:version/route-by-anchors` | Qualquer usuário autenticado |
 
 O cálculo tem uma exceção explícita de consulta autenticada no guard. Importação, publicação e as demais mutations continuam exigindo admin. `@AdminOnly()` prevalece se combinado com essa exceção; nenhum endpoint de cálculo é público.
 
@@ -154,13 +155,28 @@ Resultados de domínio como `no_route` e `insufficient_data` retornam HTTP 200 c
 
 ## 6. Tela de planejamento
 
-Na aba **Campus**, o botão **Planejar percurso** abre `/planejar`. A tela exige a sessão já utilizada no app e consulta somente versões publicadas. Também filtra rascunhos/histórico quando a pessoa autenticada é administradora. As áreas possuem paginação e atualização manual; selecionar outra área reinicia o formulário.
+Na aba **Campus**, o botão **Planejar percurso** abre `/planejar`. A tela exige a sessão já utilizada no app e carrega os locais de `GET /anchors`, a mesma fonte dos pontos AR. O ponto AR é o próprio local; não é necessário outro cadastro em `places` nem `placeId`. A busca por nome e descrição/referências ignora acentos e diferenças de maiúsculas/minúsculas, e permanece disponível sem rede publicada.
 
-O fluxo atual é: escolher uma área, selecionar um ponto de partida cadastrado e um destino do tipo `building_access`, ajustar as necessidades e calcular. Os seletores permitem busca textual. Todos os pontos do grafo podem ser partida; apenas acessos a prédios podem ser chegada nesta entrega. Ainda não há associação automática com os locais do catálogo.
+O fluxo atual é: selecionar os pontos AR de partida e chegada, escolher uma área de caminhos publicada, ajustar as necessidades e calcular. A categoria do ponto não restringe sua seleção. As áreas possuem paginação e atualização manual; rascunhos/histórico não são oferecidos mesmo para administradores. Selecionar outra área preserva os pontos e as necessidades e descarta a resposta anterior.
+
+Cada nó da rede pode informar `anchorId`, que aponta para o UUID da âncora existente. Uma âncora identifica no máximo um nó em cada versão; nós intermediários podem permanecer sem âncora. Importar a versão valida os IDs em lote na mesma transação. Redes anteriores sem esse campo continuam funcionando no cálculo por nós. Remover uma âncora limpa somente a associação (`ON DELETE SET NULL`), preservando os nós, a geometria cadastrada e os trechos; um novo cálculo pelo ID removido retorna 404. O nome exibido na prévia acompanha o cadastro atual da âncora, sem alterar a versão persistida.
+
+O endpoint novo recebe `origin: { anchorId }` (ou `{ nodeId }` para origem conhecida), `destination: { anchorId }`, `mode` e `needs`. O servidor resolve os IDs naquela rede publicada e utiliza o mesmo motor de restrições/distância. Uma âncora existente sem associação retorna HTTP 200 com `status: "anchor_not_in_network"` e `unmappedAnchorIds`; a tela explica que o ponto foi encontrado e o percurso ainda não está disponível naquela área. Âncora inexistente retorna 404. Não há associação automática por nome/coordenada nem fallback para `/routing/route`.
+
+Exemplo do corpo, substituindo os UUIDs pelos IDs reais retornados em `GET /anchors`:
+
+```json
+{
+  "origin": { "anchorId": "10000000-0000-4000-8000-000000000001" },
+  "destination": { "anchorId": "10000000-0000-4000-8000-000000000002" },
+  "mode": "navigation",
+  "needs": { "stepFree": true }
+}
+```
 
 Os critérios disponíveis são ausência de degraus, exclusão de elevadores/plataformas, exigência de piso firme/regular, corrimão ou piso tátil em todos os trechos, largura mínima e limites independentes de subida, descida e inclinação transversal. Os números aceitam ponto ou vírgula decimal; vazio significa que o limite não foi solicitado. Nenhum limite normativo nem diagnóstico é presumido. Sem restrições selecionadas, o resultado pode conter escadas.
 
-A consulta de versões pertence ao TanStack Query; o cálculo usa uma mutation e o formulário usa TanStack Form com schema central no `shared`. Mudanças nos campos desconectam a resposta anterior da mutation, inclusive se a pessoa voltar às escolhas anteriores durante uma consulta pendente. A resposta só aparece se corresponder aos valores atuais. Trocar a área desmonta o formulário anterior. As chamadas possuem timeout e mensagens recuperáveis; erros de autenticação retornam ao fluxo de login existente.
+A consulta de pontos/versões pertence ao TanStack Query; o cálculo usa uma mutation e o formulário usa TanStack Form com schema central no `shared`. Mudanças nos campos, inclusive a área, desconectam a resposta anterior da mutation, mesmo se a pessoa voltar às escolhas anteriores durante uma consulta pendente. A resposta só aparece se corresponder aos valores atuais e as seleções ainda existirem. As chamadas possuem timeout e mensagens recuperáveis; erros de autenticação retornam ao fluxo de login existente.
 
 A prévia mostra distância total, sequência ordenada de passagens e pontos de referência, recursos registrados, critérios aplicados e datas de revisão dos trechos. A distância vem da API; não é uma linha reta entre pontos. Não são inventadas instruções de virar à esquerda/direita, posição no mapa ou tempo estimado. `no_route`, `insufficient_data`, indisponibilidade de ponto e recusa de demonstração recebem mensagens específicas. Os motivos de exclusão podem incluir trechos de toda a área consultada, por isso não são apresentados como diagnóstico de um caminho específico.
 
@@ -168,12 +184,12 @@ Uma área `demo` informa **dados fictícios**, usa a ação **Simular percurso**
 
 ### Validação da interface
 
-O [roteiro reproduzível e as capturas](evidencias/planejamento/README.md) registram o teste em Chromium nas larguras 360, 768 e 1440 px, estados de resultado/erro/vazio, entrada decimal, descarte de resposta atrasada e uso por teclado. Os controles de seleção usam inputs HTML na web e Pressable com papel/estado de acessibilidade no aplicativo nativo. O layout 2D utiliza NativeWind, safe area e ajuste de teclado no iOS.
+O [roteiro e capturas da integração com pontos AR](evidencias/planejamento-ar/README.md) registram testes em Chromium nas larguras 360, 768 e 1440 px, busca entre vinte âncoras sintéticas, resultado/erro/vazio, ausência de vínculo, entrada decimal, descarte de resposta atrasada e teclado. As [capturas anteriores](evidencias/planejamento/README.md) preservam o estado histórico da interface por nós. Os controles de seleção usam inputs HTML na web e Pressable com papel/estado de acessibilidade no aplicativo nativo. O layout 2D utiliza NativeWind, safe area e ajuste de teclado no iOS.
 
 Os testes visuais usam respostas sintéticas; os testes de integração da API usam PostgreSQL real. A auditoria automática axe não substitui avaliação completa de acessibilidade. Ainda precisam ser conferidos em aparelho o teclado nativo, tamanho de texto, safe areas e TalkBack/VoiceOver; não havia aparelho conectado via ADB nesta execução.
 
 ## 7. Próximo incremento
 
-Permanecem pendentes o vínculo entre `placeId` e acessos, geometria detalhada do trajeto, gestão específica de arquivos de evidência/ocorrências e atualização de uma sessão em andamento. A navegação real dependerá dos dados conferidos, sem bloquear o desenvolvimento da demonstração. A tela atual oferece planejamento textual; ainda não apresenta linha do percurso no mapa nem inicia acompanhamento por GPS.
+Permanecem pendentes a conferência dos vínculos `anchorId` nos dados reais do usuário, a publicação dos caminhos correspondentes, geometria detalhada do trajeto, gestão específica de arquivos de evidência/ocorrências e atualização de uma sessão em andamento. A navegação real dependerá dos dados conferidos, sem bloquear o desenvolvimento da demonstração. A tela atual oferece planejamento textual; ainda não apresenta linha do percurso no mapa nem inicia acompanhamento por GPS. Nenhuma etapa exige duplicar o ponto AR em `places`.
 
 Preferência de menor esforço, comparação de alternativas, descanso acumulado, localização/progresso e integração AR seguem no [plano de ação](../implementation_plan.md). O [levantamento do campus](levantamento-campus/README.md) avança em paralelo, sem bloquear o desenvolvimento e os testes do software.

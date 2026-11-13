@@ -4,6 +4,9 @@ import {
   navigationNetworkVersionSchema,
   navigationRequestSchema,
   navigationResultSchema,
+  navigationAnchorRequestSchema,
+  navigationAnchorResultSchema,
+  type NavigationAnchorRequest,
   type NavigationNetworkParams,
   type NavigationRequest,
 } from "shared";
@@ -93,4 +96,19 @@ export function calculateNavigationRoute(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(navigationRequestSchema.parse(input)),
   });
+}
+
+export function calculateAnchorNavigationRoute(
+  network: NavigationNetworkParams,
+  input: NavigationAnchorRequest,
+) {
+  return request(
+    `${versionPath(network)}/route-by-anchors`,
+    navigationAnchorResultSchema,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(navigationAnchorRequestSchema.parse(input)),
+    },
+  );
 }

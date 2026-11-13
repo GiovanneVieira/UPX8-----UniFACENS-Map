@@ -1,38 +1,29 @@
+import type { ReactNode } from "react";
 import { Text, View } from "react-native";
-import { navigationPlanFormSchema, type NavigationGraph } from "shared";
+import {
+  navigationAnchorPlanFormSchema,
+  type Anchor,
+  type NavigationNetworkSummary,
+} from "shared";
 import { useNavigationPlan } from "../hooks/use-navigation-plan";
 import { MobilityFields } from "./mobility-fields";
 import { NodePicker } from "./node-picker";
 import { FieldErrors, PlanningButton, PlanningNotice } from "./planning-ui";
-import { RoutePreview } from "./route-preview";
+import { NetworkChoices } from "./network-choices";
+import { AnchorRouteResult } from "./anchor-route-result";
 
-export function NavigationPlanForm({ graph }: { graph: NavigationGraph }) {
-  const plan = useNavigationPlan(graph);
-  const destinations = graph.nodes.filter(
-    (node) => node.kind === "building_access",
-  );
-  if (!destinations.length)
-    return (
-      <PlanningNotice>
-        <Text className="text-slate-200">
-          Esta área ainda não tem acessos a prédios disponíveis. Escolha outra
-          área ou aguarde o cadastro dos acessos.
-        </Text>
-      </PlanningNotice>
-    );
+export function NavigationPlanForm({
+  anchors,
+  networks,
+  networkControls,
+}: {
+  anchors: Anchor[];
+  networks: NavigationNetworkSummary[];
+  networkControls: ReactNode;
+}) {
+  const plan = useNavigationPlan();
   return (
     <View className="gap-6">
-      {graph.dataSource === "demo" ? (
-        <PlanningNotice>
-          <Text className="font-semibold text-amber-200">
-            Área de demonstração · dados fictícios
-          </Text>
-          <Text className="text-slate-200">
-            Ao calcular, você fará uma simulação. Os pontos e as medidas não
-            representam os caminhos reais da faculdade.
-          </Text>
-        </PlanningNotice>
-      ) : null}
       <View className="gap-5 rounded-2xl border border-slate-700 bg-slate-900 p-5">
         <Text
           accessibilityRole="header"
@@ -41,78 +32,87 @@ export function NavigationPlanForm({ graph }: { graph: NavigationGraph }) {
           De onde para onde?
         </Text>
         <Text className="text-sm text-slate-300">
-          Selecione pontos cadastrados. A chegada é no acesso ao prédio.
+          Escolha os locais já cadastrados como pontos AR. Você pode buscar pelo
+          nome ou pelas referências preenchidas no cadastro.
         </Text>
-        <plan.form.Field name="originNodeId">
-          {(field) => (
-            <View className="gap-2">
-              <NodePicker
-                label="Ponto de partida"
-                nodes={graph.nodes}
-                value={field.state.value}
-                onChange={field.handleChange}
-              />
-              {field.state.meta.isTouched ? (
-                <FieldErrors errors={field.state.meta.errors} />
-              ) : null}
-            </View>
-          )}
-        </plan.form.Field>
-        <plan.form.Field name="destinationNodeId">
-          {(field) => (
-            <View className="gap-2">
-              <NodePicker
-                label="Acesso de chegada"
-                nodes={destinations}
-                value={field.state.value}
-                onChange={field.handleChange}
-              />
-              {field.state.meta.isTouched ? (
-                <FieldErrors errors={field.state.meta.errors} />
-              ) : null}
-            </View>
-          )}
-        </plan.form.Field>
+        {(
+          [
+            ["originAnchorId", "Ponto de partida"],
+            ["destinationAnchorId", "Ponto de chegada"],
+          ] as const
+        ).map(([name, label]) => (
+          <plan.form.Field key={name} name={name}>
+            {(field) => (
+              <View className="gap-2">
+                <NodePicker
+                  label={label}
+                  nodes={anchors}
+                  value={field.state.value}
+                  onChange={field.handleChange}
+                />
+                {field.state.meta.isTouched ? (
+                  <FieldErrors errors={field.state.meta.errors} />
+                ) : null}
+              </View>
+            )}
+          </plan.form.Field>
+        ))}
+        <Text className="text-sm text-slate-300">
+          O ponto AR representa o próprio local. Encontrá-lo na busca não exige
+          abrir a câmera.
+        </Text>
       </View>
+      <NetworkChoices plan={plan} networks={networks}>
+        {networkControls}
+      </NetworkChoices>
       <MobilityFields plan={plan} />
       <plan.form.Subscribe
         selector={(state) => [state.values, state.isSubmitting] as const}
       >
         {([values, isSubmitting]) => {
-          const parsed = navigationPlanFormSchema.safeParse(values);
-          const request = parsed.success
-            ? {
-                ...parsed.data,
-                mode:
-                  graph.dataSource === "demo" ? "demonstration" : "navigation",
-              }
-            : null;
-          // Só a resposta das escolhas atuais pode reaparecer, inclusive durante pedidos concorrentes.
+          const parsed = navigationAnchorPlanFormSchema.safeParse(values);
+          const networkExists = networks.some(
+            (network) =>
+              network.networkId + "/" + network.version === values.networkKey,
+          );
+          const selectionExists =
+            anchors.some((anchor) => anchor.id === values.originAnchorId) &&
+            anchors.some((anchor) => anchor.id === values.destinationAnchorId);
           const current =
-            request &&
-            JSON.stringify(request) === JSON.stringify(plan.mutation.variables);
+            selectionExists &&
+            networkExists &&
+            parsed.success &&
+            JSON.stringify(parsed.data) ===
+              JSON.stringify(plan.mutation.variables);
           return (
             <View className="gap-5">
-              {!parsed.success ? (
+              {!parsed.success || !selectionExists ? (
                 <Text
                   accessibilityLiveRegion="polite"
                   className="text-sm text-slate-300"
                 >
-                  Escolha partida e chegada e confira os valores opcionais para
-                  calcular.
+                  Escolha os pontos AR, uma área de percursos e confira os
+                  valores opcionais para calcular.
                 </Text>
               ) : null}
               <PlanningButton
                 onPress={() => void plan.form.handleSubmit()}
-                disabled={isSubmitting || plan.mutation.isPending}
+                disabled={
+                  isSubmitting ||
+                  plan.mutation.isPending ||
+                  !networkExists ||
+                  (!!values.originAnchorId &&
+                    !!values.destinationAnchorId &&
+                    !selectionExists)
+                }
               >
                 {isSubmitting
                   ? "Calculando percurso…"
-                  : graph.dataSource === "demo"
+                  : values.mode === "demonstration"
                     ? "Simular percurso"
                     : "Calcular percurso"}
               </PlanningButton>
-              {plan.mutation.isPending ? (
+              {isSubmitting ? (
                 <Text
                   accessibilityLiveRegion="polite"
                   className="text-slate-200"
@@ -126,22 +126,18 @@ export function NavigationPlanForm({ graph }: { graph: NavigationGraph }) {
                     {plan.mutation.error.message}
                   </Text>
                   <Text className="text-sm text-slate-300">
-                    Suas escolhas foram preservadas. Tente calcular novamente ou
-                    atualize as áreas.
+                    Suas escolhas foram preservadas. Tente novamente ou atualize
+                    os pontos e os caminhos.
                   </Text>
                 </PlanningNotice>
               ) : null}
-              {current && plan.mutation.data ? (
-                <RoutePreview result={plan.mutation.data} graph={graph} />
-              ) : null}
-              {!current && plan.mutation.data ? (
-                <Text
-                  accessibilityLiveRegion="polite"
-                  className="text-slate-200"
-                >
-                  Suas escolhas mudaram. Calcule novamente para obter uma prévia
-                  atualizada.
-                </Text>
+              {current && plan.mutation.data && parsed.success ? (
+                <AnchorRouteResult
+                  key={values.networkKey + "/" + plan.mutation.submittedAt}
+                  result={plan.mutation.data}
+                  network={parsed.data.network}
+                  anchors={anchors}
+                />
               ) : null}
             </View>
           );

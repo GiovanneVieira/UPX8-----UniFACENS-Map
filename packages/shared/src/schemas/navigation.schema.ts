@@ -25,6 +25,8 @@ export const navigationNodeSchema = z.strictObject({
   name: z.string().trim().min(1).max(255),
   kind: z.enum(["gate", "junction", "building_access", "reference"]),
   position: navigationPositionSchema.nullable().default(null),
+  /** Identidade do local AR; opcional para preservar redes anteriores. */
+  anchorId: z.string().uuid().nullable().optional(),
 });
 export type NavigationNode = z.infer<typeof navigationNodeSchema>;
 
@@ -115,7 +117,17 @@ export const navigationGraphSchema = z
   .superRefine((graph, context) => {
     const nodes = new Set<string>();
     const edges = new Set<string>();
+    const anchorIds = new Set<string>();
     graph.nodes.forEach((node, index) => {
+      if (node.anchorId) {
+        if (anchorIds.has(node.anchorId))
+          context.addIssue({
+            code: "custom",
+            path: ["nodes", index, "anchorId"],
+            message: "Um ponto AR só pode identificar um nó por versão.",
+          });
+        anchorIds.add(node.anchorId);
+      }
       if (nodes.has(node.id))
         context.addIssue({
           code: "custom",

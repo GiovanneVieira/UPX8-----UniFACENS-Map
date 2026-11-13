@@ -1,0 +1,21 @@
+{
+  "createdAt": "2026-11-13T17:52:40.038Z",
+  "environment": "Chromium headless; respostas sintéticas; sem GPS/AR/aparelho físico",
+  "results": [
+    "Vinte pontos AR disponíveis sem rede publicada; destino encontrado pela descrição sem depender de categoria ou coordenadas.",
+    "Sem restrição: 20 m pela escada.",
+    "Sem degraus: 70 m por calçada e rampa; prévia antiga retirada ao editar.",
+    "Vírgula decimal aceita; texto inválido bloqueado antes de chamar a API.",
+    "Dados insuficientes, sem rota e falha HTTP com recuperação e escolhas preservadas.",
+    "Resposta atrasada descartada mesmo ao retornar às escolhas anteriores.",
+    "Ponto AR sem vínculo continua selecionável; cálculo explica a ausência de percurso.",
+    "360px: sem overflow, botões >=44px, axe sem violações WCAG A/AA detectadas.",
+    "768px: sem overflow, botões >=44px, axe sem violações WCAG A/AA detectadas.",
+    "1440px: sem overflow, botões >=44px, axe sem violações WCAG A/AA detectadas.",
+    "Seletor operável por teclado (Enter, busca, foco e Espaço).",
+    "Critério alternado por Espaço com foco visível e rótulo clicável >=44px.",
+    "Lista vazia oferece mensagem de percursos ainda não publicados.",
+    "Falha ao listar áreas permite nova tentativa.",
+    "Falha e lista vazia de âncoras permitem recuperação sem confundir com ausência de rede."
+  ]
+}

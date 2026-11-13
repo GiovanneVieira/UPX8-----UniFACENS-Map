@@ -1,5 +1,10 @@
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq } from 'drizzle-orm';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+} from '@nestjs/common';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import {
   navigationNetworkVersionSchema,
   navigationNetworksPageSchema,
@@ -15,6 +20,7 @@ import {
   navigationVersions,
   navigationNodes,
   navigationEdges,
+  anchors,
 } from '../../db/schema.js';
 
 const summaryColumns = {
@@ -33,6 +39,7 @@ const nodeColumns = {
   name: navigationNodes.name,
   kind: navigationNodes.kind,
   position: navigationNodes.position,
+  anchorId: navigationNodes.anchorId,
 };
 const edgeColumns = {
   id: navigationEdges.id,
@@ -90,6 +97,20 @@ export class NavigationRepository {
   async importVersion(graph: NavigationGraph, actorId: string): Promise<void> {
     try {
       await this.db.transaction(async (tx) => {
+        const ids = graph.nodes.flatMap((node) =>
+          node.anchorId ? [node.anchorId] : [],
+        );
+        if (ids.length) {
+          const found = await tx
+            .select({ id: anchors.id })
+            .from(anchors)
+            .where(inArray(anchors.id, ids))
+            .for('key share');
+          if (found.length !== ids.length)
+            throw new BadRequestException(
+              'Um ou mais pontos AR associados não existem. Confira os IDs das âncoras.',
+            );
+        }
         await tx
           .insert(navigationNetworks)
           .values({ id: graph.id, dataSource: graph.dataSource })
@@ -110,15 +131,13 @@ export class NavigationRepository {
           edgeCount: graph.edges.length,
           createdByUserId: actorId,
         });
-        await tx
-          .insert(navigationNodes)
-          .values(
-            graph.nodes.map((node) => ({
-              ...node,
-              networkId: graph.id,
-              version: graph.version,
-            })),
-          );
+        await tx.insert(navigationNodes).values(
+          graph.nodes.map((node) => ({
+            ...node,
+            networkId: graph.id,
+            version: graph.version,
+          })),
+        );
         if (graph.edges.length > 0) {
           await tx.insert(navigationEdges).values(
             graph.edges.map((edge) => ({
@@ -217,13 +236,24 @@ export class NavigationRepository {
             id: params.networkId,
             version: params.version,
             dataSource: summary.dataSource,
-            nodes,
+            nodes: nodes.map(({ anchorId, ...node }) =>
+              anchorId ? { ...node, anchorId } : node,
+            ),
             edges,
           },
         });
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
+  }
+
+  async findExistingAnchors(ids: string[]): Promise<Set<string>> {
+    if (!ids.length) return new Set();
+    const rows = await this.db
+      .select({ id: anchors.id })
+      .from(anchors)
+      .where(inArray(anchors.id, ids));
+    return new Set(rows.map((row) => row.id));
   }
 
   async publish(

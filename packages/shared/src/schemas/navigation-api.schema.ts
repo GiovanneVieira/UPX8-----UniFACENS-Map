@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { navigationGraphSchema } from "./navigation.schema.js";
+import {
+  navigationGraphSchema,
+  navigationRequestSchema,
+  navigationResultSchema,
+  navigationNeedsSchema,
+} from "./navigation.schema.js";
 
 const networkKey = z
   .string()
@@ -93,4 +98,33 @@ export const navigationNetworksPageSchema = z.strictObject({
 });
 export type NavigationNetworksPage = z.infer<
   typeof navigationNetworksPageSchema
+>;
+
+const anchorReference = z.strictObject({ anchorId: z.string().uuid() });
+export const navigationAnchorRequestSchema = navigationRequestSchema
+  .pick({ mode: true, needs: true })
+  .extend({
+    origin: z.union([
+      anchorReference,
+      z.strictObject({ nodeId: z.string().trim().min(1).max(128) }),
+    ]),
+    destination: anchorReference,
+  });
+export type NavigationAnchorRequest = z.infer<
+  typeof navigationAnchorRequestSchema
+>;
+
+export const navigationAnchorResultSchema = z.union([
+  navigationResultSchema,
+  z.strictObject({
+    status: z.literal("anchor_not_in_network"),
+    graphId: networkKey,
+    graphVersion: networkKey,
+    dataSource: z.enum(["demo", "field_survey"]),
+    needs: navigationNeedsSchema,
+    unmappedAnchorIds: z.array(z.string().uuid()).min(1),
+  }),
+]);
+export type NavigationAnchorResult = z.infer<
+  typeof navigationAnchorResultSchema
 >;

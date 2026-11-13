@@ -341,9 +341,12 @@ export const navigationNodes = pgTable(
     name: text('name').notNull(),
     kind: text('kind').notNull(),
     position: jsonb('position').$type<NavigationNode['position']>(),
+    anchorId: uuid('anchor_id').references(() => anchors.id, { onDelete: 'set null' }),
   },
   (table) => [
     primaryKey({ columns: [table.networkId, table.version, table.id] }),
+    uniqueIndex('navigation_nodes_anchor_version_key').on(table.networkId, table.version, table.anchorId).where(sql`${table.anchorId} IS NOT NULL`),
+    index('navigation_nodes_anchor_idx').on(table.anchorId),
     foreignKey({
       columns: [table.networkId, table.version],
       foreignColumns: [
