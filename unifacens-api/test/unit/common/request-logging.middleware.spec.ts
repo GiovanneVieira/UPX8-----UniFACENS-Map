@@ -77,6 +77,20 @@ describe('requestLoggingMiddleware (access log global)', () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
+  it('não loga sondas OpenAI-compatible em /v1/* (ferramentas de dev no host, ex. vLLM do opencode)', () => {
+    run(makeReq({ path: '/v1/models', originalUrl: '/v1/models' }), 404);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+    // VERBOSE=true remove as exclusões — a sonda volta a ser logada.
+    vi.stubEnv('LOG_REQUESTS', 'verbose');
+    try {
+      run(makeReq({ path: '/v1/models', originalUrl: '/v1/models' }), 404);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(warnSpy).toHaveBeenCalledOnce();
+  });
+
   it('4xx loga como warn e 5xx como error', () => {
     run(makeReq({ path: '/x', originalUrl: '/x' }), 404);
     expect(warnSpy).toHaveBeenCalledOnce();

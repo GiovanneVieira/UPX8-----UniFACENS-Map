@@ -23,11 +23,23 @@ export interface LoggedRequest extends Request {
   requestId?: string;
 }
 
-const VERBOSE = process.env.LOG_REQUESTS === 'verbose';
+// Lido por chamada (não capturado no load do módulo) — testável com stubEnv
+// e alterna em runtime sem restart.
+function isVerbose(): boolean {
+  return process.env.LOG_REQUESTS === 'verbose';
+}
 
 function shouldSkip(path: string): boolean {
-  if (VERBOSE) return false;
-  return path === '/health' || path.startsWith('/uploads/');
+  if (isVerbose()) return false;
+  return (
+    path === '/health' ||
+    path.startsWith('/uploads/') ||
+    // Sondas OpenAI-compatible de ferramentas de dev no host (ex.: o opencode
+    // embute um provider vLLM com origin hardcoded 127.0.0.1:8000 — mesma
+    // porta desta API; o /health 200 o mantém "vivo" e o sonda /v1/models a
+    // cada 30s). Nenhum controller real da API vive em /v1.
+    path.startsWith('/v1/')
+  );
 }
 
 export function requestLoggingMiddleware() {
