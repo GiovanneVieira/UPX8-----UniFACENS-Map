@@ -20,20 +20,22 @@ import { isUsablePoint } from 'shared';
 
 /** TTL do hosting em dias (D4 ≥30). */
 const HOST_TTL_DAYS = 30;
+/** Padrões de erro transiente (rede/upload) — dignos de retry. */
+const TRANSIENT_HOST_ERROR = /timeout|upload|network|unavailable|connection|argument/i;
 /**
- * Guia "ande ao redor do ponto" antes de hospedar (best practice da doc:
- * "move the phone around the anchor a little before hosting" — dataset
- * fraco = ErrorHostingDatasetProcessingFailed, a falha dominante em
- * device).
+ * Guia "ande ao redor do ponto" antes de hospedar (best practice da doc).
  *
- * 20s desde 2026-11-11 (eram 10s): mais tempo ANDANDO ao redor do ponto
- * = mais viewpoints = mais keypoints triangulados = taxa de resolve maior
- * (evidência do próprio painel: 2847kp→64% de resolve vs 682kp→29%).
- * ⚠️ O que paga é a DIVERSIDADE DE ÂNGULOS (paralaxe), não o relógio —
- * girar no lugar não adiciona quase nada; e o Viro dropa features a >3m
- * do centróide da câmera (raio útil ~0,5–1,5m).
+ * 10s desde 2026-11-12 (20s→14s→10s no mesmo dia): em Wi-Fi fraco (RSSI
+ * -72 na casa do dev) o dataset de 20s (2.2-2.8k keypoints ≈ 1-2MB de
+ * descritores) não completa o upload no timeout INTERNO do SDK (~50s) —
+ * "Descriptor upload failed: timeout" e NADA chega à plataforma. Com 10s
+ * o upload era empiricamente confiável (evidência de device 2026-11-11:
+ * âncoras hospedadas com sucesso) e o dataset segue dentro/above da faixa
+ * recomendada (a doc pede ≥300 keypoints; 10s rende ~700+ em ambiente
+ * texturizado). ⚠️ O que paga é a DIVERSIDADE DE ÂNGULOS (paralaxe), não
+ * o relógio; o Viro dropa features a >3m do centróide (raio ~0,5–1,5m).
  */
-export const GUIDE_MS = 20_000;
+export const GUIDE_MS = 10_000;
 /** Timeout JS das chamadas nativas (hit-test/create/host). */
 const CALL_TIMEOUT_MS = 30_000;
 /** Janela do hit do tap expira ~30s — a âncora criada dele não. */
@@ -211,30 +213,72 @@ export function usePointHosting({
                 setState({ phase: 'failed', error: 'navigator não pronto — reabra a tela AR' });
                 return;
               }
-              const result = (await withTimeout(
-                nav.hostCloudAnchor(anchorId, HOST_TTL_DAYS) as Promise<{
-                  success?: boolean;
-                  cloudAnchorId?: string;
-                  error?: string;
-                  state?: string;
-                } | undefined | null>,
-                90_000,
-                'hostCloudAnchor',
-              )) as { success?: boolean; cloudAnchorId?: string; error?: string; state?: string } | undefined | null;
+              // Retry para erros transientes de rede (upload de
+              // descritores — "Descriptor upload failed: timeout" /
+              // "Software caused connection abort"): a âncora LOCAL segue
+              // válida na sessão, re-tentar é barato.
+              // ⚠️ try/catch POR TENTATIVA (lição de device 2026-11-12):
+              // após uma falha de upload, a RE-CHAMADA do hostCloudAnchor
+              // pode rejeitar com exceção do bridge ("Expected argument 0
+              // ... to be a number, but got null") — a exceção não pode
+              // abortar o loop inteiro; conta como tentativa falha.
+              let cloudAnchorId: string | null = null;
+              let lastError = 'hosting falhou (sem detalhe)';
+              const maxAttempts = 2;
+              for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                  const result = (await withTimeout(
+                    nav.hostCloudAnchor(anchorId, HOST_TTL_DAYS) as Promise<{
+                      success?: boolean;
+                      cloudAnchorId?: string;
+                      error?: string;
+                      state?: string;
+                    } | undefined | null>,
+                    90_000,
+                    'hostCloudAnchor',
+                  )) as { success?: boolean; cloudAnchorId?: string; error?: string; state?: string } | undefined | null;
+                  if (!aliveRef.current) return;
+                  if (result?.success && result.cloudAnchorId) {
+                    cloudAnchorId = result.cloudAnchorId;
+                    break;
+                  }
+                  lastError = String(result?.error ?? result?.state ?? lastError);
+                } catch (err) {
+                  if (!aliveRef.current) return;
+                  lastError = err instanceof Error ? err.message : String(err);
+                }
+                console.warn(`[ARHost] hostCloudAnchor FALHOU (${attempt}/${maxAttempts}): ${lastError}`);
+                if (attempt < maxAttempts && TRANSIENT_HOST_ERROR.test(lastError)) {
+                  // Drenar a op nativa anterior (one-op-por-vez, §12.12) e
+                  // respirar antes de re-tentar o upload.
+                  try {
+                    if (typeof nav.cancelCloudAnchorOperations === 'function') {
+                      await withTimeout(
+                        nav.cancelCloudAnchorOperations() as Promise<unknown>,
+                        5_000,
+                        'cancelCloudAnchorOperations',
+                      );
+                    }
+                  } catch {
+                    // best-effort: segue com o respiro mesmo sem cancel.
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, 8_000));
+                  if (!aliveRef.current) return;
+                }
+              }
               if (!aliveRef.current) return;
-              if (result?.success && result.cloudAnchorId) {
+              if (cloudAnchorId) {
                 console.log(
-                  `[ARHost] hospedada NO PONTO — ${result.cloudAnchorId.slice(0, 16)}… TTL ${HOST_TTL_DAYS}d`,
+                  `[ARHost] hospedada NO PONTO — ${cloudAnchorId.slice(0, 16)}… TTL ${HOST_TTL_DAYS}d`,
                 );
                 setState({
                   phase: 'hosted',
-                  cloudAnchorId: result.cloudAnchorId,
+                  cloudAnchorId,
                   position,
                 });
               } else {
-                const errMsg = String(result?.error ?? result?.state ?? 'hosting falhou (sem detalhe)');
-                console.warn(`[ARHost] hostCloudAnchor FALHOU: ${errMsg}`);
-                setState({ phase: 'failed', error: errMsg });
+                console.warn(`[ARHost] hostCloudAnchor esgotou tentativas: ${lastError}`);
+                setState({ phase: 'failed', error: lastError });
               }
             } catch (err) {
               if (!aliveRef.current) return;

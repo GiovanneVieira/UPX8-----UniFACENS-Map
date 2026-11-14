@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Gate de invariantes do manifesto Android (CNG) — 2026-11-12.
  *
@@ -18,10 +17,16 @@
  *   - eas-build.yml — ANTES do `eas build`: se falhar, a build nem é
  *     submetida à fila.
  *
- * ⚠️ Env: as EXPO_PUBLIC_* do ambiente alimentam o app.config.ts. No CI use
- * valores DUMMY — o gate valida o pipeline config→manifesto (estrutura), não
- * os segredos reais (que vivem nas EAS Environment Variables da nuvem).
- * ⚠️ `--clean` regenera `android/` (CNG não-versionado — nunca editar à mão).
+ * ⚠️ ENV: no CI use valores DUMMY (o gate valida o pipeline config→manifesto,
+ * não os segredos reais — que vivem nas EAS Environment Variables da nuvem).
+ *
+ * ⚠️⚠️ SELF-HEALING (lição de device 2026-11-12, "Invalid API key format" no
+ * hosting): o `prebuild --clean` REGENERA o `android/` local — com env dummy
+ * no processo, o android/ ficava com KEYS DUMMY e o próximo `expo
+ * run:android` compilava um APK imprestável (cloud anchors mortos, Maps
+ * crashando). Agora o script APAGA as env dummy do próprio processo após a
+ * validação e REGERA o prebuild com as env REAIS do `.env` do projeto — o
+ * android/ local termina sempre com as keys verdadeiras.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -46,16 +51,37 @@ const REQUIRED_META = [
   'com.reactvision.RVProjectId',
 ];
 
-console.log('[assert-manifest] expo prebuild --no-install --clean (gera android/ efêmero)…');
-const prebuild = spawnSync(
-  'npx expo prebuild --no-install --clean --platform android',
-  { cwd: ROOT, stdio: 'inherit', shell: true },
-);
-if (prebuild.status !== 0) {
+/**
+ * Env que alimenta as meta-data (app.config.ts). O gate injeta DUMMIES para
+ * validar estrutura sem segredos — e as REMOVE depois para o prebuild de
+ * restauração usar as env reais do .env.
+ */
+const GATE_ENV = {
+  EXPO_PUBLIC_GOOGLE_AR_API_KEY: 'dummy-ci-ar-key',
+  EXPO_PUBLIC_RV_API_KEY: 'dummy-ci-rv-key',
+  EXPO_PUBLIC_RV_PROJECT_ID: 'dummy-ci-project-id',
+  EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY: 'dummy-ci-maps-key',
+  EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY: 'dummy-ci-maps-web-key',
+  EXPO_PUBLIC_GOOGLE_MAPS_MAP_ID: 'dummy-ci-map-id',
+};
+
+function prebuild(extraEnv) {
+  const env = { ...process.env, ...extraEnv };
+  return spawnSync('npx expo prebuild --no-install --clean --platform android', {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: true,
+    env,
+  });
+}
+
+console.log('[assert-manifest] prebuild de VALIDAÇÃO (env dummy — estrutura, não segredos)…');
+const validate = prebuild(GATE_ENV);
+if (validate.status !== 0) {
   console.error(
     '[assert-manifest] FALHA no prebuild — erro de config/plugin acima (seria 1 build EAS queimada).',
   );
-  process.exit(prebuild.status ?? 1);
+  process.exit(validate.status ?? 1);
 }
 
 if (!existsSync(MANIFEST_PATH)) {
@@ -83,6 +109,23 @@ for (const key of REQUIRED_META) {
   } else {
     console.log(`[assert-manifest] ✓ ${key}`);
   }
+}
+
+// ── RESTAURAÇÃO: android/ de volta com as env REAIS do .env (self-healing).
+// No CI não há .env — a pasta efêmera morre com o runner; restaurar é inócuo.
+console.log('[assert-manifest] restaurando android/ com as env reais do .env…');
+const restoreEnv = { ...process.env };
+for (const key of Object.keys(GATE_ENV)) delete restoreEnv[key];
+const restore = spawnSync('npx expo prebuild --no-install --clean --platform android', {
+  cwd: ROOT,
+  stdio: 'inherit',
+  shell: true,
+  env: restoreEnv,
+});
+if (restore.status !== 0) {
+  console.warn(
+    '[assert-manifest] ⚠️ prebuild de restauração falhou (sem .env local? no CI é esperado) — o android/ atual contém as DUMMIES: NÃO compile um APK a partir dele.',
+  );
 }
 
 if (failures > 0) {

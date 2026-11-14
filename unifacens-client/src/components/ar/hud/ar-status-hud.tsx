@@ -72,9 +72,9 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           accessibilityRole="button"
           accessibilityLabel="Status do mapeamento — detalhes"
-          style={[styles.hudPill, styles.hudPillBlue, styles.hudPillShrink]}>
+          style={[styles.hudPill, styles.hudPillBlue, styles.hudPillGrow]}>
           <View style={[styles.statusDot, { backgroundColor: trackingDotColor }]} />
-          <ARTickerText text={cloudStatus} style={styles.hudPillTextWhite} />
+          <ARTickerText text={cloudStatus} style={styles.hudPillTextWhite} fill />
           {onOpenDiagnostics ? (
             <Ionicons name="information-circle-outline" size={13} color="#93C5FD" />
           ) : null}
@@ -86,27 +86,24 @@ export const ARStatusHud: React.FC<ARStatusHudProps> = ({
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           accessibilityRole="button"
           accessibilityLabel="Detalhes de precisão"
-          style={[styles.hudPill, calibratedLabel ? styles.hudPillEmerald : styles.hudPillCyan, styles.hudPillShrink]}>
+          style={[styles.hudPill, calibratedLabel ? styles.hudPillEmerald : styles.hudPillCyan, styles.hudPillShrink, styles.originPillMax]}>
           {calibratedLabel ? (
-            <Ionicons name="location" size={13} color="#34D399" />
+            <Ionicons name="location" size={13} color="#34D399" style={styles.originIconGap} />
           ) : vpsAccuracyMeters != null ? (
-            <Ionicons name="globe-outline" size={13} color="#67E8F9" />
+            <Ionicons name="globe-outline" size={13} color="#67E8F9" style={styles.originIconGap} />
           ) : (
-            <Ionicons name="navigate-outline" size={13} color="#67E8F9" />
+            <Ionicons name="navigate-outline" size={13} color="#67E8F9" style={styles.originIconGap} />
           )}
-          {/* Origem: badge SIMPLES truncada (decisão 2026-11-11 — sem
-              marquee aqui). Wrapper com piso no PRÓPRIO container (a lição
-              do spacer ladrão) + Text com ellipsis: sem overflow, sem
-              flicker (±3m→±4m não pulsa a largura). Clique = detalhes de
-              precisão (modal de diagnóstico: pose ±/stale, Δ, tracking). */}
-          <View style={styles.originTextWrap}>
-            <Text
-              style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}
-              numberOfLines={1}
-              ellipsizeMode="tail">
-              {originLabel}
-            </Text>
-          </View>
+          {/* Origem: MARQUEE (2026-11-12 — scroll nas DUAS badges) com piso
+              enxuto de 44dp — o TEXTO manda ("VPS ±1m" ~50dp já supera o
+              piso: sem sobra); o piso só sustenta labels curtíssimos. Marco
+              calibrado longo comprime no teto de 42% e o marquee assume.
+              Clique = detalhes (modal de diagnóstico). */}
+          <ARTickerText
+            text={originLabel}
+            style={calibratedLabel ? styles.hudPillTextEmerald : styles.hudPillTextCyan}
+            minWidth={44}
+          />
         </TouchableOpacity>
 
         <View style={styles.hudActionsRow}>
@@ -142,6 +139,29 @@ const styles = StyleSheet.create({
   hudPillShrink: {
     flexShrink: 1,
     minWidth: 0,
+  },
+  /**
+   * Pill de STATUS/log: flex 1 — ocupa TODO o espaço livre da row (largura
+   * total máxima p/ o log, pedido 2026-11-12) enquanto a badge de origem
+   * permanece compacta (shrink) e o refresh é fixo. O clip do ticker tem
+   * flexGrow: absorve a largura da pill (texto estica até o ícone ⓘ).
+   */
+  hudPillGrow: {
+    flex: 1,
+    minWidth: 0,
+  },
+  /**
+   * Teto da pill de ORIGEM (GPS/VPS): nunca domina a row — textos longos
+   * (marco calibrado) comprimem o clip e o marquee assume. Lição de device
+   * 2026-11-12 ("badges invertidas"): sem teto, o texto de largura generosa
+   * do ticker inflamava o intrínseco e a origem engolia a linha.
+   */
+  originPillMax: {
+    maxWidth: '42%',
+  },
+  /** Respiro estruturado entre o ícone e o texto (espelha o dot de status). */
+  originIconGap: {
+    marginRight: 5,
   },
   trackingBanner: {
     alignSelf: 'flex-start',
@@ -205,12 +225,6 @@ const styles = StyleSheet.create({
     color: '#34D399',
     fontSize: 12,
     fontWeight: '700',
-  },
-  /** Wrapper do texto de origem: piso no PRÓPRIO container (anti-flicker
-   *  ±3m→±4m) — nunca spacer irmão (ladrão de espaço do flex). */
-  originTextWrap: {
-    minWidth: 92,
-    flexShrink: 1,
   },
   hudIconBtn: {
     width: 40,
