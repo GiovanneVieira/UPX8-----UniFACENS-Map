@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import {
   anchorDetailSchema,
   adminUsersPageSchema,
@@ -30,6 +30,7 @@ export class AdminService {
       longitude: number | null;
       altitude: number | null;
       heading: number | null;
+      modelId: string | null;
       createdAt: Date;
     };
     categoryId: string | null;
@@ -39,6 +40,9 @@ export class AdminService {
     modelKey: string | null;
     modelDerivedKey: string | null;
     modelFormat: string | null;
+    anchorModelKey: string | null;
+    anchorModelDerivedKey: string | null;
+    anchorModelFormat: string | null;
   }) {
     return anchorDetailSchema.parse({
       ...row.anchor,
@@ -62,6 +66,15 @@ export class AdminService {
               : null,
           }
         : null,
+      // Modelo OVERRIDE do pin (F3) — precede o da categoria no render.
+      model: row.anchorModelKey
+        ? {
+            url: this.storage.url(row.anchorModelDerivedKey ?? row.anchorModelKey),
+            format: row.anchorModelDerivedKey
+              ? 'glb'
+              : (row.anchorModelFormat as 'glb' | 'gltf' | 'obj' | 'fbx' | 'vrx'),
+          }
+        : null,
     });
   }
   async listPoints(query: AdminListQuery) {
@@ -72,6 +85,10 @@ export class AdminService {
     };
   }
   async updatePoint(id: string, dto: UpdateAdminPoint) {
+    // Guard: modelo override inexistente → 409 amigável (FK garante o resto).
+    if (dto.modelId && !(await this.repository.modelExists(dto.modelId))) {
+      throw new ConflictException('Modelo 3D informado não existe.');
+    }
     const record = await this.repository.updatePoint(id, dto);
     if (!record)
       throw new NotFoundException('Este ponto não está mais disponível.');

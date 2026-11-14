@@ -97,6 +97,14 @@ export const anchors = pgTable('anchors', {
   categoryId: uuid('category_id').references(() => categories.id, {
     onDelete: 'restrict',
   }),
+  /**
+   * Modelo 3D OVERRIDE do pin (F3): quando setado, o AR renderiza este
+   * modelo em vez do modelo da categoria (carousel de escolha por ponto).
+   * Null = herda o da categoria (fallback ViroBox sem categoria/modelo).
+   */
+  modelId: uuid('model_id').references(() => models.id, {
+    onDelete: 'restrict',
+  }),
   positionX: doublePrecision('position_x'),
   positionY: doublePrecision('position_y'),
   positionZ: doublePrecision('position_z'),
@@ -104,6 +112,16 @@ export const anchors = pgTable('anchors', {
   longitude: doublePrecision('longitude'),
   altitude: doublePrecision('altitude'),
   heading: doublePrecision('heading'),
+  /**
+   * UUID da plataforma ReactVision da âncora geoespacial HOSPEDADA
+   * (hostGeospatialAnchor) — persistida no RV e resolvível entre sessões e
+   * por outros usuários (resolveGeospatialAnchor). Distinto do
+   * cloudAnchorId (âncora VISUAL): camadas de precisão no client =
+   * cloud (cm) > geospatial (m) > projeção client-side.
+   */
+  geospatialAnchorId: text('geospatial_anchor_id'),
+  /** Acurácia horizontal (m, 95%) da pose média no momento do hosting — selo honesto "±Xm". */
+  geospatialAccuracyM: doublePrecision('geospatial_accuracy_m'),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),

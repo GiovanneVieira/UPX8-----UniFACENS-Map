@@ -41,6 +41,9 @@ function friendlyFkMessage(constraint?: string): string {
   if (constraint.includes('categories_model_id')) {
     return 'Modelo vinculado a uma categoria. Desvincule antes de excluir.';
   }
+  if (constraint.includes('anchors_model_id')) {
+    return 'Modelo 3D informado não existe.';
+  }
   return 'Este registro está em uso por outro cadastro e não pode ser removido.';
 }
 

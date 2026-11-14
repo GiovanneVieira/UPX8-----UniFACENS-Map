@@ -1,5 +1,6 @@
-import { Injectable, Inject, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { ConflictException, Injectable, Inject, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 import type { Anchor, AnchorDetail, CreateAnchorDto, UpdateAnchorDto } from 'shared';
 import { DRIZZLE } from '../db/database.module.js';
@@ -13,6 +14,10 @@ import {
 } from '../modules/storage/storage.types.js';
 import { StorageFailureException } from '../common/exceptions/domain.exceptions.js';
 
+/** Alias do modelo OVERRIDE do pin (anchors.modelId) — o join principal de
+ *  models já é usado pelo modelo da CATEGORIA; um pin pode ter ambos. */
+const anchorModels = alias(models, 'anchor_models');
+
 /** Row de âncora com a categoria (e modelo) resolvidos em UM join. */
 type AnchorRow = {
   anchor: typeof anchors.$inferSelect;
@@ -24,6 +29,13 @@ type AnchorRow = {
   modelDerivedKey: string | null;
   modelFormat: string | null;
   modelBoundingBox: {
+    min: [number, number, number];
+    max: [number, number, number];
+  } | null;
+  anchorModelKey: string | null;
+  anchorModelDerivedKey: string | null;
+  anchorModelFormat: string | null;
+  anchorModelBoundingBox: {
     min: [number, number, number];
     max: [number, number, number];
   } | null;
@@ -71,6 +83,18 @@ export class AnchorsService implements OnModuleInit {
    * Registra uma nova âncora vinculada a um Cloud Anchor ID gerado pelo Google ARCore ou pose Geoespacial WGS84.
    */
   async create(dto: CreateAnchorDto): Promise<Anchor> {
+    // Guard (services checam, FK garante): modelo override inexistente → 409
+    // amigável já no service (a FK RESTRICT segura o que escapar).
+    if (dto.modelId) {
+      const [model] = await this.db
+        .select({ id: models.id })
+        .from(models)
+        .where(eq(models.id, dto.modelId))
+        .limit(1);
+      if (!model) {
+        throw new ConflictException('Modelo 3D informado não existe.');
+      }
+    }
     const [inserted] = await this.db
       .insert(anchors)
       .values({
@@ -78,26 +102,40 @@ export class AnchorsService implements OnModuleInit {
         cloudAnchorId: dto.cloudAnchorId,
         description: dto.description ?? null,
         categoryId: dto.categoryId ?? null,
+        modelId: dto.modelId ?? null,
         // positionX/Y/Z permanecem NULL: coordenadas AR de mundo local são
         // session-relative (removidas do contrato — SSOT é lat/lng/alt)
         latitude: dto.latitude ?? null,
         longitude: dto.longitude ?? null,
         altitude: dto.altitude ?? null,
         heading: dto.heading ?? null,
+        geospatialAnchorId: dto.geospatialAnchorId ?? null,
+        geospatialAccuracyM: dto.geospatialAccuracyM ?? null,
       })
       .returning();
 
-    return this.mapToAnchor({
-      anchor: inserted,
-      categoryId: null,
-      categorySlug: null,
-      categoryLabel: null,
-      modelId: null,
-      modelKey: null,
-      modelDerivedKey: null,
-      modelFormat: null,
-      modelBoundingBox: null,
-    });
+    // Releitura com o join (categoria + modelo override): o insert cru não
+    // traz as colunas resolvidas dos models (F3 — model embutido no POST).
+    const [withCategory] = await this.withCategory()
+      .where(eq(anchors.id, inserted.id))
+      .limit(1);
+    return this.mapToAnchor(
+      withCategory ?? {
+        anchor: inserted,
+        categoryId: null,
+        categorySlug: null,
+        categoryLabel: null,
+        modelId: null,
+        modelKey: null,
+        modelDerivedKey: null,
+        modelFormat: null,
+        modelBoundingBox: null,
+        anchorModelKey: null,
+        anchorModelDerivedKey: null,
+        anchorModelFormat: null,
+        anchorModelBoundingBox: null,
+      },
+    );
   }
 
   /**
@@ -111,6 +149,10 @@ export class AnchorsService implements OnModuleInit {
     const patch: Partial<typeof anchors.$inferInsert> = {};
     if (dto.cloudAnchorId !== undefined) patch.cloudAnchorId = dto.cloudAnchorId;
     if (dto.categoryId !== undefined) patch.categoryId = dto.categoryId ?? null;
+    if (dto.geospatialAnchorId !== undefined)
+      patch.geospatialAnchorId = dto.geospatialAnchorId;
+    if (dto.geospatialAccuracyM !== undefined)
+      patch.geospatialAccuracyM = dto.geospatialAccuracyM;
     if (dto.frameOffset !== undefined) {
       patch.positionX = dto.frameOffset?.[0] ?? null;
       patch.positionY = dto.frameOffset?.[1] ?? null;
@@ -141,6 +183,10 @@ export class AnchorsService implements OnModuleInit {
         modelDerivedKey: null,
         modelFormat: null,
         modelBoundingBox: null,
+        anchorModelKey: null,
+        anchorModelDerivedKey: null,
+        anchorModelFormat: null,
+        anchorModelBoundingBox: null,
       },
     );
   }
@@ -224,7 +270,7 @@ export class AnchorsService implements OnModuleInit {
     return { success: deleted.length > 0 };
   }
 
-  /** Select base com categoria+modelo em UM join (left — pin pode ser null). */
+  /** Select base com categoria+modelo (e override do pin) em UM join. */
   private withCategory() {
     return this.db
       .select({
@@ -237,10 +283,15 @@ export class AnchorsService implements OnModuleInit {
         modelDerivedKey: models.derivedKey,
         modelFormat: models.format,
         modelBoundingBox: models.boundingBox,
+        anchorModelKey: anchorModels.originalKey,
+        anchorModelDerivedKey: anchorModels.derivedKey,
+        anchorModelFormat: anchorModels.format,
+        anchorModelBoundingBox: anchorModels.boundingBox,
       })
       .from(anchors)
       .leftJoin(categories, eq(anchors.categoryId, categories.id))
-      .leftJoin(models, eq(categories.modelId, models.id));
+      .leftJoin(models, eq(categories.modelId, models.id))
+      .leftJoin(anchorModels, eq(anchors.modelId, anchorModels.id));
   }
 
   private mapToAnchor(row: AnchorRow): Anchor {
@@ -259,6 +310,15 @@ export class AnchorsService implements OnModuleInit {
       altitude: record.altitude ?? null,
       heading: record.heading ?? null,
       createdAt: record.createdAt.toISOString(),
+      // Âncora geoespacial hospedada (camada intermediária de precisão).
+      geospatialAnchorId: record.geospatialAnchorId ?? null,
+      geospatialAccuracyM: record.geospatialAccuracyM ?? null,
+      // Detalhe enriquecido na listagem também (fim do cast no client):
+      // imagens são URLs resolvidas, ordem = ordem de exibição.
+      longDescription: record.longDescription ?? null,
+      images: Array.isArray(record.images)
+        ? record.images.map((key) => this.storage.url(key))
+        : [],
       // Colunas positionX/Y/Z renascidas: offset no frame da cloud anchor
       // (estável entre sessões). Null quando o pin não tem âncora visual.
       frameOffset: hasFrameOffset
@@ -282,6 +342,18 @@ export class AnchorsService implements OnModuleInit {
                     boundingBox: row.modelBoundingBox ?? null,
                   }
                 : null,
+          }
+        : null,
+      // Modelo OVERRIDE do pin (F3): precede o da categoria no render
+      // (anchor.model ?? anchor.category?.model ?? ViroBox).
+      modelId: record.modelId ?? null,
+      model: row.anchorModelKey
+        ? {
+            url: this.storage.url(row.anchorModelDerivedKey ?? row.anchorModelKey),
+            format: row.anchorModelDerivedKey
+              ? 'glb'
+              : (row.anchorModelFormat as 'glb' | 'gltf' | 'obj' | 'fbx' | 'vrx'),
+            boundingBox: row.anchorModelBoundingBox ?? null,
           }
         : null,
     };
