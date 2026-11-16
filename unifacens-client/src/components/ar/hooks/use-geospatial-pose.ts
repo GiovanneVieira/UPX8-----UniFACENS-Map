@@ -85,6 +85,20 @@ export function useGeospatialPose() {
   }, []);
 
   const handlePose = useCallback((next: Omit<GeospatialPose, 'timestamp'>) => {
+    /**
+     * Guard Null-Island (lição de device 2026-11-16): o SDK RV devolve
+     * pose "válida" ZERADA (lat=0/lng=0) antes do primeiro fix GPS/VPS.
+     * Uma pose dessas envenena TUDO a jusante: estimativas nascem a
+     * ~5.850km (ENU (0,0)→Sorocaba — "distância bizarra de 5800km" nos
+     * detalhes) e congelam (convergência monótona), e a janela do Δ
+     * amostro heading-lixo. (0,0) fica no meio do oceano — impossível
+     * para os nossos usuários: descarta na INGESTÃO, ponto único para
+     * todos os consumers (projeção, Δ, hosting).
+     */
+    if (next.latitude === 0 && next.longitude === 0) {
+      console.warn('[ARGeo] pose zerada (0,0) descartada — RV sem fix GPS/VPS ainda');
+      return;
+    }
     const stamped: GeospatialPose = { ...next, timestamp: Date.now() };
     poseRef.current = stamped;
     setPose(stamped);

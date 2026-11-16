@@ -302,6 +302,27 @@ export function useARProjection({
           anchor.longitude,
           0,
         );
+        /**
+         * Sanity cap no NASCIMENTO da estimativa (par do guard P7 das
+         * âncoras nativas): |ENU| > 1000km = datum envenenado (ex.: pose
+         * zerada que escapou, ECEF vazando) — recusa e espera pose melhor,
+         * em vez de cravar o pin a milhares de km (subpixel invisível,
+         * "distância bizarra" nos detalhes). Pins LEGITIMAMENTE distantes
+         * (campus↔casa = 74km) projetam normal.
+         */
+        const enuRangeM = Math.hypot(east, north);
+        if (enuRangeM > MAX_SESSION_COORD_M) {
+          if (!datumWarnedRef.current.has(anchor.id)) {
+            datumWarnedRef.current.add(anchor.id);
+            console.warn(
+              `[ARProj] "${anchor.name}" estimativa recusada: |ENU| ${(enuRangeM / 1000).toFixed(0)}km > ${MAX_SESSION_COORD_M / 1000}km (datum/pose suspeitos) — aguardando pose melhor`,
+            );
+          }
+          waitingSinceRef.current.delete(anchor.id);
+          // `continue` (não return!): pula SÓ este pin — o recompute segue
+          // para os demais e a limpeza/setAnchors do final roda.
+          continue;
+        }
         const { x, z } = enuToArXZ(east, north, delta);
         let y = WORLD_FLOOR_Y;
         if (
