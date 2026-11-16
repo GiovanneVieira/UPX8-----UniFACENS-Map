@@ -104,6 +104,13 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
 
   // ── Motores de domínio (hooks dedicados) ─────────────────────────────────
   const cameraPosRef = useRef<[number, number, number]>([0, 0, 0]);
+  /**
+   * SALTO de GPS (refix indoor, lição 2026-11-16): invalida estimativas
+   * congeladas (a monotonicidade delas assume GPS sem saltos — a nativa
+   * resolve no frame pós-salto e o pin "desaparece" deslizando 76-125m).
+   * Ref de indireção: a projeção ainda não existe na criação do hook.
+   */
+  const handlePoseJumpRef = useRef<(jumpM: number) => void>(() => {});
   const cameraFwdRef = useRef<[number, number, number]>([0, 0, -1]);
   /** Yaw da câmera no mundo AR em GRAUS (rotation[1] do onCameraTransformUpdate). */
   const cameraYawRef = useRef<number>(0);
@@ -118,7 +125,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // Diálogos de câmera + deslocamento ao ENTRAR na tab AR (a localização o
   // geo hook pede acima; o Viro/ARCore não pede câmera por conta própria).
   useARPermissions();
-  const geospatial = useGeospatialPose();
+  const geospatial = useGeospatialPose({
+    onPoseJump: (jumpM) => handlePoseJumpRef.current(jumpM),
+  });
 
   // ── Motor de alinhamento mundial: Δ (azimute do mundo AR ↔ Norte) ────────
   // Estimado 1× por sessão a partir da pose geospatial + forward da câmera
@@ -176,6 +185,8 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     poseReady: earthState === 'Enabled',
     focused,
     trackingHealthy: trackingState >= 2,
+    // Pose atual (ref) — alimenta o gate de raio do resolve (≤5km).
+    geoPoseRef: geospatial.poseRef,
     // Fila nativa REATIVADA no reactvision (revertendo o gate do 43f71b3 —
     // diagnóstico ERRADO: as posições em dezenas de km eram o FRAME DA
     // SESSÃO correto, eixos rotacionados pelo yaw do launch; as magnitudes
@@ -270,6 +281,16 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     poseTick: geospatial.pose,
     reprojectNonce,
   });
+
+  // Salto de GPS → estimativas congeladas invalidadas + re-projeção do zero
+  // (a pose pós-salto é a nova verdade; alvos monótonos pré-salto são lixo).
+  handlePoseJumpRef.current = (jumpM: number) => {
+    console.log(
+      `[ARProj] salto de GPS ${jumpM.toFixed(0)}m — limpando estimativas congeladas e re-projetando`,
+    );
+    projection.clearFrozen();
+    setReprojectNonce((n) => n + 1);
+  };
 
   // ── Navegação ────────────────────────────────────────────────────────────
   const [detailSheetVisible, setDetailSheetVisible] = useState(false);

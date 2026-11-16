@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type Anchor } from 'shared';
+import { geodeticToENU, type Anchor } from 'shared';
+import type { GeospatialPose } from './use-geospatial-pose';
 
 /** Fonte da entrada nativa — determina honestidade visual do pin. */
 export type NativeAnchorSource = 'cloud' | 'geospatial' | 'slam';
@@ -65,6 +66,11 @@ interface UseNativeAnchorsParams {
    */
   trackingHealthy: boolean;
   /**
+   * Pose geospatial atual (ref, lida no tick) — alimenta o gate de raio:
+   * resolve hospedado só para pins dentro de RESOLVE_RADIUS_M.
+   */
+  geoPoseRef: React.MutableRefObject<GeospatialPose | null>;
+  /**
    * Fila de âncoras nativas geospatial (resolve hospedada por UUID +
    * criação local por lat/lng). Valores 1000m→1000km no guard de datum à
    * parte, as posições chegam no FRAME DA SESSÃO (eixos rotacionados pelo
@@ -79,6 +85,13 @@ interface UseNativeAnchorsParams {
 
 /** Máximo de âncoras nativas simultâneas. */
 const MAX_NATIVE_ANCHORS = 30;
+/**
+ * Gate de raio para resolve hospedado (lição 2026-11-16): pins além disto
+ * (ex.: campus a 74km vistos de casa) renderizam subpixel — o GET à
+ * plataforma + a op na fila one-op-por-vez são fúteis. 5km cobre qualquer
+ * POI navegável na sessão. Re-avaliado a cada tick (a pose muda).
+ */
+const RESOLVE_RADIUS_M = 5_000;
 /** Criações por tick (não estourar o ARCore). */
 const CREATIONS_PER_TICK = 3;
 /** Período do processador da fila. */
@@ -118,7 +131,7 @@ const FATAL_ERROR_PATTERNS = [
  * posição. Falhas/pendências têm retry + timeout; esgotadas as tentativas,
  * o pin permanece no fallback de projeção (estimativa visível).
  */
-export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHealthy, enabled }: UseNativeAnchorsParams) {
+export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHealthy, enabled, geoPoseRef }: UseNativeAnchorsParams) {
   /** Mapa pinId -> entrada nativa (estado — dispara re-render da projeção). */
   const [entries, setEntries] = useState<Map<string, NativeAnchorEntry>>(new Map());
   const entriesRef = useRef<Map<string, NativeAnchorEntry>>(new Map());
@@ -142,6 +155,8 @@ export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHe
   const retriesRef = useRef<Map<string, number>>(new Map());
   /** Pins que esgotaram retries (elegíveis ao retryFailed explícito). */
   const failedRef = useRef<Set<string>>(new Set());
+  /** Pins pulados pelo gate de raio (log 1×; re-avaliáveis via retryFailed). */
+  const radiusSkippedRef = useRef<Set<string>>(new Set());
   /** Último serverAnchors (para o retryFailed re-enfileirar). */
   const serverAnchorsRef = useRef<Anchor[] | undefined>(serverAnchors);
   /** Âncoras nativas criadas por nós (para cleanup). */
@@ -340,6 +355,36 @@ async function resolveHostedAnchor(
             console.warn('[ARNative] navigator morto — abortando lote');
             return;
           }
+          /**
+           * GATE DE RAIO (lição 2026-11-16): pin além de RESOLVE_RADIUS_M
+           * não vira op nativa — GET fútil à plataforma + fila one-op-por-vez
+           * ocupada (campus a 74km vistos de casa). Sem pose ainda: espera
+           * (a distância é re-avaliada no próximo tick).
+           */
+          const pose = geoPoseRef.current;
+          if (pose) {
+            const { east, north } = geodeticToENU(
+              pose.latitude,
+              pose.longitude,
+              0,
+              req.lat,
+              req.lng,
+              0,
+            );
+            const distM = Math.hypot(east, north);
+            if (distM > RESOLVE_RADIUS_M) {
+              if (!radiusSkippedRef.current.has(req.pinId)) {
+                radiusSkippedRef.current.add(req.pinId);
+                console.log(
+                  `[ARNative] ${req.pinId} fora do raio de resolve (${(distM / 1000).toFixed(1)}km > ${(RESOLVE_RADIUS_M / 1000).toFixed(0)}km) — sem op nativa (subpixel)`,
+                );
+              }
+              // Consome a requisição sem criar: o render fica com a projeção
+              // ENU (estimativa honesta ±Xm); re-enfileirado só via retryFailed.
+              createdRef.current.add(req.pinId);
+              continue;
+            }
+          }
           inFlightRef.current.add(req.pinId);
           try {
             /**
@@ -452,6 +497,7 @@ async function resolveHostedAnchor(
     inFlightRef.current.clear();
     retriesRef.current.clear();
     failedRef.current.clear();
+    radiusSkippedRef.current.clear();
     nativeIdsRef.current.clear();
     setEntries(new Map());
   }, []);
@@ -477,6 +523,7 @@ async function resolveHostedAnchor(
       createdRef.current.delete(id);
       failedRef.current.delete(id);
       retriesRef.current.delete(id);
+      radiusSkippedRef.current.delete(id);
       requeued++;
     }
     if (requeued > 0) {

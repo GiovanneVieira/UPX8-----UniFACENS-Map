@@ -249,8 +249,9 @@ export function useARProjection({
               // 2026-11-16: os warns de 26-59km eram ruído).
               const nativeRangeM = Math.hypot(native.position[0], native.position[2]);
               if (nativeRangeM <= 1000) {
+                const cam = cameraPosRef.current;
                 console.warn(
-                  `[ARProj] "${anchor.name}" gap SUSPEITO de ${gap.toFixed(0)}m (nativa↔estimativa) — conferir datum/Δ antes de confiar`,
+                  `[ARProj] "${anchor.name}" gap SUSPEITO de ${gap.toFixed(0)}m (nativa↔estimativa) — conferir datum/Δ antes de confiar · cam=[${cam.map((v) => v.toFixed(1)).join(', ')}] nativa=[${native.position.map((v) => v.toFixed(1)).join(', ')}] est.±${estimate.targetAccM.toFixed(0)}m`,
                 );
               }
             } else {
