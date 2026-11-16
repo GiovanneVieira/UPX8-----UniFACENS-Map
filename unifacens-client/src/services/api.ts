@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import { File } from 'expo-file-system';
 import { anchorSchema, z, type Anchor, type CreateAnchorDto, type UpdateAnchorDto } from 'shared';
 import { getTeamAuthorization } from './team-authorization';
 import { useAuthStore } from '@/stores/use-auth-store';
@@ -178,7 +179,15 @@ const imageResultSchema = z.object({ images: z.array(z.string()) });
 
 /**
  * Envia a fila de fotos do ponto NA ORDEM (multipart — o servidor grava a
- * sequência do FormData no JSONB). Partes no formato RN (uri/name/type).
+ * sequência do FormData no JSONB).
+ *
+ * ⚠️ Expo SDK 57 "winter" fetch (lição de device 2026-11-16): partes com
+ * `uri` NÃO são suportadas ("uri is not supported for React Native's
+ * FormData" — convertFormData.ts) — o conversor aceita apenas string |
+ * Blob | objeto com `bytes()`. O `File` do expo-file-system implementa a
+ * interface (`bytes(): Promise<Uint8Array>`); envolvemos num objeto com
+ * name/type EXPLÍCITOS porque o File não expõe `type` (sem content-type o
+ * multer leria application/octet-stream → 400 "Tipo não suportado").
  */
 export async function uploadAnchorImages(
   id: string,
@@ -186,10 +195,11 @@ export async function uploadAnchorImages(
 ): Promise<{ images: string[] }> {
   const body = new FormData();
   for (const photo of photos) {
+    const file = new File(photo.uri);
     body.append('files', {
-      uri: photo.uri,
       name: photo.fileName,
       type: photo.mime,
+      bytes: () => file.bytes(),
     } as unknown as Blob);
   }
   return request(`${getApiBaseUrl()}/anchors/${id}/images`, imageResultSchema, {

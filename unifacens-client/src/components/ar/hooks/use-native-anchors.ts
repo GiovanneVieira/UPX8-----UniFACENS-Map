@@ -43,9 +43,12 @@ interface UseNativeAnchorsParams {
   /** Pins vindos do server (com lat/lng válidos). */
   serverAnchors: Anchor[] | undefined;
   /**
-   * Pose fresca e com acurácia razoável — criar âncora nativa sem isso é
-   * request fútil à ARCore API (pendura até o timeout e falha). Economia de
-   * quota: cada criação/resolve conta como request no Cloud Console.
+   * Prontidão do EARTH tracking do SDK (Frente A, 2026-11-16): o container
+   * passa `getEarthTrackingState() === 'Enabled'` — a máquina de estados
+   * OFICIAL (VPS_LITE.md), com threshold interno de ~15m de acurácia.
+   * Substitui o gate caseiro ≤20m da era arcore, que congelava a fila
+   * sempre que o GPS ficava ruim (enquanto a cloud visual seguia rodando).
+   * `Localizing` = fila espera (normal, segundos a ~1min frio).
    */
   poseReady: boolean;
   /**

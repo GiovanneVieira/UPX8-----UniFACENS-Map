@@ -138,6 +138,21 @@ export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
   routeChevrons?: RouteChevron[];
   /** Status do modo Geospatial (suporte no device / erros de key). */
   onGeospatialStatus?: (supported: boolean, error?: string) => void;
+  /**
+   * Estado do EARTH tracking do SDK (VPS_LITE.md): "Stopped" | "Localizing"
+   * | "Enabled" | "Paused". `Localizing → Enabled` é travado internamente
+   * em ~15m de acurácia horizontal — é O gate de prontidão da fila
+   * geospatial no container (substitui o gate caseiro ≤20m da era arcore,
+   * que congelava os fetches com GPS ruim — lição de device 2026-11-16).
+   */
+  onEarthState?: (state: 'Stopped' | 'Localizing' | 'Enabled' | 'Paused') => void;
+  /**
+   * Localização APPROXIMADA concedida (iOS "Precise Location off" / Android
+   * coarse-only): acurácia fica em escala de km e o earth fica em Localizing
+   * PARA SEMPRE — a doc exige erro ACIONÁVEL ("ative Localização Precisa"),
+   * não um hang silencioso.
+   */
+  onLocationAccuracyReduced?: (reduced: boolean) => void;
   /** Pose geoespacial da câmera (poll 1Hz, ancorada na Terra via VPS). */
   onGeospatialPose?: (pose: Omit<GeospatialPose, 'timestamp'>) => void;
   /** Passa o arSceneNavigator para o container (criar âncoras nativas). */
@@ -284,6 +299,10 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const geoPoseRef = useRef(viroProps.onGeospatialPose);
   geoStatusRef.current = viroProps.onGeospatialStatus;
   geoPoseRef.current = viroProps.onGeospatialPose;
+  const onEarthStateRef = useRef(viroProps.onEarthState);
+  const onLocationAccuracyReducedRef = useRef(viroProps.onLocationAccuracyReduced);
+  onEarthStateRef.current = viroProps.onEarthState;
+  onLocationAccuracyReducedRef.current = viroProps.onLocationAccuracyReduced;
   /** Tab focada (false no blur imediato) — congela o poll/retry nativo. */
   const focusedRef = useRef(viroProps.focused !== false);
   focusedRef.current = viroProps.focused !== false;
@@ -426,12 +445,82 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
     const pollStartedAt = Date.now();
     let poseInFlight = false;
     let poseCallStartedAt = 0;
+    /**
+     * Poll do EARTH STATE (Frente A, 2026-11-16): getEarthTrackingState é a
+     * máquina de prontidão DO SDK (leitura local, sem quota) — transição
+     * Localizing→Enabled travada internamente em ~15m. Reporta mudanças ao
+     * container (gate da fila geospatial + HUD). Mesma disciplina do poll de
+     * pose: in-flight + watchdog 8s (one-op-por-vez, §12.12).
+     */
+    const EARTH_CALL_TIMEOUT_MS = 8000;
+    /** Localizing além disto = suspeita de localização aproximada (eterna). */
+    const LOCALIZING_ACTIONABLE_MS = 60_000;
+    let earthInFlight = false;
+    let earthCallStartedAt = 0;
+    let lastEarthState: string | null = null;
+    let localizingSince = 0;
+    let accuracyProbeAt = 0;
+
+    const pollEarthState = async (): Promise<void> => {
+      if (earthInFlight) {
+        if (Date.now() - earthCallStartedAt < EARTH_CALL_TIMEOUT_MS) return;
+        console.warn('[ARGeo] earth-state pendurada >8s — chamada perdida, renovando');
+        earthInFlight = false;
+      }
+      if (typeof nav?.getEarthTrackingState !== 'function') return;
+      earthInFlight = true;
+      earthCallStartedAt = Date.now();
+      try {
+        const result = (await nav.getEarthTrackingState()) as {
+          state?: 'Stopped' | 'Localizing' | 'Enabled' | 'Paused';
+          error?: string;
+        };
+        if (!sceneAliveRef.current) return;
+        const state = result?.state ?? 'Stopped';
+        if (state !== lastEarthState) {
+          console.log(`[ARGeo] earth: ${lastEarthState ?? '—'} → ${state}`);
+          lastEarthState = state;
+          onEarthStateRef.current?.(state);
+        }
+        if (state === 'Localizing') {
+          if (localizingSince === 0) localizingSince = Date.now();
+          // >60s em Localizing: a doc manda checar localização aproximada
+          // (fica em Localizing PARA SEMPRE, acurácia em km — VPS_LITE.md).
+          const dwelling = Date.now() - localizingSince;
+          if (dwelling > LOCALIZING_ACTIONABLE_MS && Date.now() - accuracyProbeAt > 30_000) {
+            accuracyProbeAt = Date.now();
+            if (typeof nav.isLocationAccuracyReduced === 'function') {
+              try {
+                const acc = (await nav.isLocationAccuracyReduced()) as { reduced?: boolean };
+                if (acc?.reduced) {
+                  console.warn('[ARGeo] Localizing eterno: localização APPROXIMADA concedida — usuário deve ativar Localização Precisa');
+                  onLocationAccuracyReducedRef.current?.(true);
+                } else {
+                  console.warn(`[ARGeo] Localizing há ${(dwelling / 1000).toFixed(0)}s (acurácia não cruzou o threshold) — aguardando`);
+                }
+              } catch {
+                // best-effort
+              }
+            }
+          }
+        } else {
+          localizingSince = 0;
+        }
+      } catch {
+        // silencioso: erros persistentes aparecem no onGeospatialStatus
+      } finally {
+        earthInFlight = false;
+      }
+    };
+
     const timer = setInterval(async () => {
       if (!sceneAliveRef.current || !geoEnabledRef.current) return;
       // Blur da tab OU tracking degradado (sinal do detach!): NÃO chamar o
       // nativo — cada chamada vira UIBlock interop que pode executar após o
       // destroy (SIGSEGV §12.12).
       if (!focusedRef.current || !trackingActiveRef.current) return;
+      // Earth-state primeiro (barato, local — alimenta o gate da fila).
+      void pollEarthState();
       // Fase lenta: pós-30s, só um tick a cada 2.5 janelas de 1s do interval.
       if (Date.now() - pollStartedAt > FAST_PHASE_MS && (slowTickRef.current = (slowTickRef.current + 1) % 3) !== 0) return;
       if (poseInFlight) {

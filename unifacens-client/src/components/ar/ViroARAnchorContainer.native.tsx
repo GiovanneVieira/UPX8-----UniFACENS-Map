@@ -60,9 +60,6 @@ const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
 const AR_PROVIDER =
   process.env.EXPO_PUBLIC_AR_PROVIDER === "reactvision" ? "reactvision" : "arcore";
 
-/** Acurácia máxima da pose para CRIAR âncoras nativas (economia de quota). */
-const NATIVE_ANCHOR_MAX_POSE_ACCURACY_M = 20;
-
 /**
  * Background ≥10s → RESET COMPLETO da sessão AR ao voltar (Frente B,
  * 2026-11-11). O ARCore pode RE-BASAR a origem do mundo no resume (§12.8):
@@ -129,23 +126,54 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // congelado em seguida. Jamais fusão contínua (lição §11.5 do AGENTS.MD).
   const alignment = useARWorldAlignment(geospatial.pose, cameraFwdRef);
 
-  // ── SISTEMA PRIMÁRIO: âncoras NATIVAS ARCore (Terra-ancoradas) ──────────
-  // Gate de pose: só criar âncoras nativas (requests à ARCore API) quando a
-  // pose está fresca e razoável — resolver âncora com GPS ruim é request fútil
-  // (pendura até o timeout e falha). Economiza o quota da ARCore API.
-  const nativeAnchorGateReady = useMemo(() => {
+  // ── Earth-state do SDK (Frente A, 2026-11-16): a máquina de prontidão
+  //    oficial (VPS_LITE.md) — transição Localizing→Enabled travada em ~15m
+  //    INTERNA. Substitui o gate caseiro ≤20m da era arcore, que congelava
+  //    a fila geospatial sempre que o GPS ficava ruim (enquanto a cloud,
+  //    visual, seguia rodando — o sintoma "fetch às vezes não acontece").
+  const [earthState, setEarthState] = useState<'Stopped' | 'Localizing' | 'Enabled' | 'Paused'>('Stopped');
+  /** Localização aproximada concedida → Localizing eterno (HUD acionável). */
+  const [locationReduced, setLocationReduced] = useState(false);
+  /** VPS disponível na área (checkVPSAvailability 1×/sessão; null = não consultado). */
+  const [vpsAvailable, setVpsAvailable] = useState<boolean | null>(null);
+  const vpsCheckedRef = useRef(false);
+
+  const handleEarthState = useCallback((state: 'Stopped' | 'Localizing' | 'Enabled' | 'Paused') => {
+    setEarthState(state);
+  }, []);
+  const handleLocationReduced = useCallback((reduced: boolean) => {
+    setLocationReduced(reduced);
+  }, []);
+
+  // checkVPSAvailability 1× após a primeira pose válida (badge de expectativa:
+  // VPS ~1–5m vs GPS-only ±10–30m — pesquisa de precisão 2026-11-16).
+  useEffect(() => {
     const pose = geospatial.pose;
-    return (
-      geospatial.isFresh &&
-      pose !== null &&
-      Number.isFinite(pose.horizontalAccuracy) &&
-      pose.horizontalAccuracy <= NATIVE_ANCHOR_MAX_POSE_ACCURACY_M
-    );
-  }, [geospatial.pose, geospatial.isFresh]);
+    if (vpsCheckedRef.current || !pose || !focused) return;
+    vpsCheckedRef.current = true;
+    const nav = navigatorRef.current;
+    if (typeof nav?.checkVPSAvailability !== 'function') return;
+    void (async () => {
+      try {
+        const result = (await nav.checkVPSAvailability(
+          pose.latitude,
+          pose.longitude,
+        )) as { availability?: string };
+        const available = result?.availability === 'Available';
+        console.log(`[ARGeo] VPS: ${result?.availability ?? 'Unknown'}`);
+        setVpsAvailable(available);
+      } catch {
+        // best-effort: badge fica null (neutro)
+      }
+    })();
+  }, [geospatial.pose, focused]);
 
   const nativeAnchors = useNativeAnchors({
     serverAnchors: anchorsQuery.data,
-    poseReady: nativeAnchorGateReady,
+    // GATE NOVO: earth Enabled = o SDK diz que âncoras geospatial são
+    // viáveis (threshold interno ~15m). Localizing = fila espera (normal,
+    // segundos a ~1min); o gate antigo ≤20m morreu com a era arcore.
+    poseReady: earthState === 'Enabled',
     focused,
     trackingHealthy: trackingState >= 2,
     // Fila nativa REATIVADA no reactvision (revertendo o gate do 43f71b3 —
@@ -346,6 +374,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   const cloudStatusDerived = useMemo(() => {
     if (anchorsQuery.isPending) return "Carregando pontos...";
     if (anchorsQuery.isError) return "Erro de conexão";
+    // Localização APPROXIMADA (Frente A): earth fica em Localizing PARA
+    // SEMPRE — a doc (VPS_LITE.md) exige erro ACIONÁVEL, não hang silencioso.
+    if (locationReduced) return "Ative Localização Precisa para este app";
     const total = anchorsQuery.data?.length ?? 0;
     if (total === 0) return "0 ponto(s)";
     // Hosting por ponto em curso: fases do fluxo (tap → guia → hosting).
@@ -384,16 +415,23 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     }
     // Mundo AR ainda não alinhado com o Norte → projeção aguardando Δ
     if (alignment.status === "aligning") return "Alinhando AR…";
-    // Pins do servidor existem mas nenhum projetado → calibrando
+    // Pins do servidor existem mas nenhum projetado → calibrando, com o
+    // estado do EARTH do SDK (Localizing é NORMAL: segundos a ~1min frio).
     if (projection.anchors.length === 0) {
       const pose = geospatial.pose;
       const acc = pose?.horizontalAccuracy;
+      if (earthState === 'Localizing') {
+        return acc !== undefined && acc !== null
+          ? `Localizando GPS ±${acc.toFixed(0)}m…`
+          : 'Localizando GPS…';
+      }
+      if (earthState === 'Paused') return 'GPS pausado';
       if (acc !== undefined && acc !== null) {
         return `Calibrando AR… ±${acc.toFixed(0)}m`;
       }
       return "Calibrando AR…";
     }
-    return `${projection.anchors.length} ponto(s)`;
+    return `${projection.anchors.length} ponto(s)${vpsAvailable === false ? ' · GPS only' : vpsAvailable === true ? ' · VPS ✓' : ''}`;
   }, [
     anchorsQuery.isPending,
     anchorsQuery.isError,
@@ -405,6 +443,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     cloudAnchors.resolveHud,
     cloudAnchors.ghostIds,
     pointHosting.state,
+    earthState,
+    locationReduced,
+    vpsAvailable,
   ]);
   const cloudStatus = mutationStatus ?? cloudStatusDerived;
 
@@ -688,6 +729,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       provider: AR_PROVIDER,
       poseAccM: pose?.horizontalAccuracy ?? null,
       poseFresh: geospatial.isFresh,
+      earthState,
+      locationReduced,
+      vpsAvailable,
       totalPins: anchorsQuery.data?.length ?? 0,
       geoHostedPins:
         anchorsQuery.data?.filter((a) => !!a.geospatialAnchorId).length ?? 0,
@@ -703,6 +747,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     projection.anchors,
     anchorsQuery.data,
     geoHosting.state.status,
+    earthState,
+    locationReduced,
+    vpsAvailable,
   ]);
 
   // ── AUTO-REFRESH LEVE (Frente B + quota v2, 2026-11-11): enquanto houver
@@ -897,6 +944,8 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       routeChevrons: arRoute.active && !arRoute.arrived ? arRoute.chevrons : [],
       onGeospatialStatus: nativeAnchors.handleGeospatialStatus,
       onGeospatialPose: geospatial.handlePose,
+      onEarthState: handleEarthState,
+      onLocationAccuracyReduced: handleLocationReduced,
       onNavigatorReady: handleNavigatorReady,
       onSelectAnchor: handleTapByReticle,
       onCameraUpdate: handleCameraUpdate,
@@ -915,6 +964,8 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       arRoute.arrived,
       arRoute.chevrons,
       nativeAnchors.handleGeospatialStatus,
+      handleEarthState,
+      handleLocationReduced,
       handleNavigatorReady,
       geospatial.handlePose,
       handleTapByReticle,

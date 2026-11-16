@@ -25,6 +25,12 @@ export interface ARDiagnosticsContext {
   poseAccM: number | null;
   /** Pose fresca (< 10s)? */
   poseFresh: boolean;
+  /** Estado do EARTH tracking do SDK (gate da fila geospatial). */
+  earthState: string;
+  /** Localização aproximada concedida (Localizing eterno). */
+  locationReduced: boolean;
+  /** VPS disponível na área (null = não consultado). */
+  vpsAvailable: boolean | null;
   /** Total de pins no servidor. */
   totalPins: number;
   /** Pins com âncora geoespacial hospedada (F2 — dupla ancoragem). */
@@ -208,6 +214,22 @@ export const ARDiagnosticsModal: React.FC<ARDiagnosticsModalProps> = ({
                       ctx.geoHostedPins > 0 ? { color: '#34D399' } : undefined,
                     ]}>
                     {`${ctx.geoHostedPins}/${ctx.totalPins} hospedada(s) · host: ${ctx.geoHostStatus}`}
+                  </Text>
+                </View>
+                <View style={styles.sessionRow}>
+                  <Text style={styles.sessionKey}>Earth</Text>
+                  <Text
+                    style={[
+                      styles.sessionValue,
+                      ctx.earthState === 'Enabled'
+                        ? { color: '#34D399' }
+                        : ctx.locationReduced
+                          ? { color: '#FCA5A5' }
+                          : { color: '#FCD34D' },
+                    ]}>
+                    {ctx.locationReduced
+                      ? 'Localizing eterno — localização APROXIMADA'
+                      : `${ctx.earthState}${ctx.vpsAvailable === null ? '' : ctx.vpsAvailable ? ' · VPS ✓' : ' · GPS only'}`}
                   </Text>
                 </View>
                 <View style={styles.sessionRow}>

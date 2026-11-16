@@ -243,9 +243,16 @@ export function useARProjection({
             if (gap > SUSPICIOUS_GAP_M) {
               // Gap de centenas de metros não é ruído de GPS: é datum ou Δ
               // incorreto em uma das fontes (lição P7 — 3.446 km era ECEF).
-              console.warn(
-                `[ARProj] "${anchor.name}" gap SUSPEITO de ${gap.toFixed(0)}m (nativa↔estimativa) — conferir datum/Δ antes de confiar`,
-              );
+              // Pins DISTANTES (>1km) são benignos por construção: nativa e
+              // estimativa posicionam o mesmo pin em FRAMES diferentes — o
+              // gap cross-frame é esperado e o render é subpixel (lição
+              // 2026-11-16: os warns de 26-59km eram ruído).
+              const nativeRangeM = Math.hypot(native.position[0], native.position[2]);
+              if (nativeRangeM <= 1000) {
+                console.warn(
+                  `[ARProj] "${anchor.name}" gap SUSPEITO de ${gap.toFixed(0)}m (nativa↔estimativa) — conferir datum/Δ antes de confiar`,
+                );
+              }
             } else {
               console.log(
                 `[ARProj] "${anchor.name}" âncora nativa resolveu a ${gap.toFixed(1)}m da estimativa (est. ±${estimate.targetAccM.toFixed(0)}m) — nativa vence`,
@@ -254,11 +261,18 @@ export function useARProjection({
           }
         }
         renderPos = native.position;
-        // Selo honesto p/ âncora geoespacial (m) quando a acurácia é
-        // conhecida — legados sem número seguem sólidos como antes.
+        // Selo honesto p/ âncora geoespacial (m) — COMPOSTO: o erro total é
+        // o viés do GPS na CRIAÇÃO (geospatialAccuracyM gravado no banco) ⊕
+        // o viés da pose da SESSÃO atual (pesquisa de precisão 2026-11-16:
+        // dois erros independentes empilhados — os 11.8-17.1m medidos em
+        // device). max() como aproximação honesta; legados sem número
+        // seguem sólidos como antes.
         if (native.source === 'geospatial' && typeof anchor.geospatialAccuracyM === 'number') {
           estimated = true;
-          estimateAccuracyM = anchor.geospatialAccuracyM;
+          estimateAccuracyM = Math.max(
+            anchor.geospatialAccuracyM,
+            Number.isFinite(pose?.horizontalAccuracy ?? NaN) ? (pose?.horizontalAccuracy as number) : 0,
+          );
         }
         const prev = renderedRef.current.get(anchor.id);
         if (
@@ -467,8 +481,16 @@ export function useARProjection({
       const now = Date.now();
       if (now - (emptyWorldWarnedAtRef.current ?? 0) > 30_000) {
         emptyWorldWarnedAtRef.current = now;
+        // Pose ausente ≠ STALE (lição de device 2026-11-16: o warn dizia
+        // "pose ok" quando o gate real exige FRESCA ≤5s — diagnostic cego).
+        const poseStaleS = pose ? Math.round((now - pose.timestamp) / 1000) : 0;
+        const poseDesc = !pose
+          ? 'SEM pose (RV sem fix GPS/VPS)'
+          : isPoseFresh(pose)
+            ? `pose fresca (±${pose.horizontalAccuracy.toFixed(0)}m)`
+            : `pose STALE há ${poseStaleS}s (poll pendurado?)`;
         console.warn(
-          `[ARProj] mundo vazio: ${serverAnchors.length} pin(s) no servidor, 0 projetados — ${pose ? `pose ok (±${pose.horizontalAccuracy.toFixed(0)}m)` : 'SEM pose (RV sem fix GPS/VPS)'}, Δ=${delta === null ? 'destravado' : 'ok'}${cameraPosRef.current ? '' : ', sem camPos'}`,
+          `[ARProj] mundo vazio: ${serverAnchors.length} pin(s) no servidor, 0 projetados — ${poseDesc}, Δ=${delta === null ? 'destravado' : 'ok'}${cameraPosRef.current ? '' : ', sem camPos'}`,
         );
       }
     }
