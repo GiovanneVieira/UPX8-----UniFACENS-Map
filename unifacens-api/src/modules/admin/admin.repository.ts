@@ -32,9 +32,11 @@ export class AdminRepository {
           modelKey: models.originalKey,
           modelDerivedKey: models.derivedKey,
           modelFormat: models.format,
+          modelBoundingBox: models.boundingBox,
           anchorModelKey: anchorModels.originalKey,
           anchorModelDerivedKey: anchorModels.derivedKey,
           anchorModelFormat: anchorModels.format,
+          anchorModelBoundingBox: anchorModels.boundingBox,
         })
         .from(anchors)
         .leftJoin(categories, eq(anchors.categoryId, categories.id))
@@ -61,9 +63,11 @@ export class AdminRepository {
         modelKey: models.originalKey,
         modelDerivedKey: models.derivedKey,
         modelFormat: models.format,
+        modelBoundingBox: models.boundingBox,
         anchorModelKey: anchorModels.originalKey,
         anchorModelDerivedKey: anchorModels.derivedKey,
         anchorModelFormat: anchorModels.format,
+        anchorModelBoundingBox: anchorModels.boundingBox,
       })
       .from(anchors)
       .leftJoin(categories, eq(anchors.categoryId, categories.id))

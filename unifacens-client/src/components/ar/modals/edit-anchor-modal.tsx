@@ -28,6 +28,13 @@ interface EditAnchorModalProps {
   anchor: Anchor | null;
   categories: Category[];
   models: AdminModelsPage['items'];
+  /**
+   * PREVIEW VIVO (lição de device 2026-11-16): dispara a cada troca de
+   * modelo no carousel — o container sobrepõe o modelo do PIN REAL na cena
+   * AR atrás do sheet (o preview mais honesto é o próprio modelo no lugar).
+   * null = "Padrão da categoria" (limpa o override do ponto).
+   */
+  onModelPreview?: (modelId: string | null) => void;
   onClose: () => void;
 }
 
@@ -42,6 +49,7 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
   anchor,
   categories,
   models,
+  onModelPreview,
   onClose,
 }) => {
   const insets = useSafeAreaInsets();
@@ -66,6 +74,12 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
   }, [visible, anchor]);
 
   if (!visible || !anchor) return null;
+
+  /** Troca de modelo: atualiza o form E o pin real na cena (preview vivo). */
+  const handleSelectModel = (id: string | null) => {
+    setModelId(id);
+    onModelPreview?.(id);
+  };
 
   const save = async () => {
     if (!name.trim()) {
@@ -223,7 +237,7 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
                   categoryModelId={
                     categories.find((c) => c.id === categoryId)?.modelId ?? null
                   }
-                  onSelect={setModelId}
+                  onSelect={handleSelectModel}
                 />
               </>
             ) : null}

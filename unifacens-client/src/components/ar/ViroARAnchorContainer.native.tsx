@@ -278,6 +278,12 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   /** Edição de ponto (F3, admin). */
   const [editVisible, setEditVisible] = useState(false);
   const [editAnchor, setEditAnchor] = useState<Anchor | null>(null);
+  /**
+   * PREVIEW VIVO da edição: modelo selecionado no carousel do EditAnchorModal
+   * sobrepõe o do pin REAL na cena atrás do sheet (undefined = sem override —
+   * modal fechado ou usuário não tocou; null = "Padrão da categoria").
+   */
+  const [editPreviewModelId, setEditPreviewModelId] = useState<string | null | undefined>(undefined);
   /** Toast de ponto encontrado (cloud resolve / primeiro projetado). */
   const [anchorToast, setAnchorToast] = useState<AnchorToastData | null>(null);
 
@@ -891,14 +897,32 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
 
   // ── Filtro de visibilidade ────────────────────────────────────────────────
   const visibleAnchors = useMemo(() => {
-    return projection.anchors.filter((a) => {
+    const base = projection.anchors.filter((a) => {
       if (!isUsablePoint(a.arPosition)) return false;
       if (radiusFilter > 0 && typeof a.distanceMeters === "number") {
         return a.distanceMeters <= radiusFilter;
       }
       return true;
     });
-  }, [projection.anchors, radiusFilter]);
+    // PREVIEW VIVO da edição (2026-11-16): o modelo escolhido no carousel
+    // substitui o do pin REAL na cena — o usuário vê o resultado no lugar
+    // antes de salvar. Cancelar/fechar reverte (override não persiste).
+    if (!editAnchor || editPreviewModelId === undefined) return base;
+    return base.map((a) => {
+      if (a.id !== editAnchor.id) return a;
+      if (editPreviewModelId === null) {
+        // "Padrão da categoria": limpa o override do ponto (herda categoria).
+        return { ...a, modelId: null, model: null };
+      }
+      const found = modelsQuery.data?.items.find((m) => m.id === editPreviewModelId);
+      if (!found) return a;
+      return {
+        ...a,
+        modelId: found.id,
+        model: { url: found.url, format: found.format, boundingBox: found.boundingBox },
+      };
+    });
+  }, [projection.anchors, radiusFilter, editAnchor, editPreviewModelId, modelsQuery.data]);
 
   // ── Preview vivo do ponto em criação (F3): modelo selecionado no carousel
   //    renderizado NO ponto tocado atrás do sheet (fallback = modelo da
@@ -1274,9 +1298,11 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         anchor={editAnchor}
         categories={categoriesQuery.data ?? []}
         models={modelsQuery.data?.items ?? []}
+        onModelPreview={setEditPreviewModelId}
         onClose={() => {
           setEditVisible(false);
           setEditAnchor(null);
+          setEditPreviewModelId(undefined);
         }}
       />
 

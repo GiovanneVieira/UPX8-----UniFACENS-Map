@@ -283,6 +283,65 @@ describe('Painel administrativo HTTP', () => {
       .send({ modelId: 'nao-e-uuid' })
       .expect(400);
   });
+
+  it('serializa category.model com boundingBox (regressão do 500 no parse — lição 2026-11-16)', async () => {
+    // O anchorDetailSchema exige boundingBox (nullable) em category.model —
+    // o AdminService.point() montava o literal SEM o campo e todo
+    // PATCH/GET /admin/points com modelo vinculado explodia com 500
+    // (ZodError path ["category","model","boundingBox"], log 23:01:37).
+    repository.listPoints.mockResolvedValueOnce({
+      items: [
+        {
+          anchor: baseRecord,
+          categoryId: '48814a61-9fb3-4404-b494-699209862cbf',
+          categorySlug: 'laboratory',
+          categoryLabel: 'Laboratório',
+          modelId: '3f6d0f0e-9f0f-4c0f-a3f0-1f2e3d4c5b6a',
+          modelKey: 'models/originals/m/geladeira.glb',
+          modelDerivedKey: null,
+          modelFormat: 'glb',
+          modelBoundingBox: { min: [0, 0, 0], max: [1, 1, 1] },
+          anchorModelKey: null,
+          anchorModelDerivedKey: null,
+          anchorModelFormat: null,
+          anchorModelBoundingBox: null,
+        },
+      ],
+      total: 1,
+    });
+    const res = await request(app.getHttpServer())
+      .get('/admin/points')
+      .set('Authorization', `Bearer ${admin}`)
+      .query({})
+      .expect(200);
+    expect(res.body.items[0].category.model.boundingBox).toEqual({
+      min: [0, 0, 0],
+      max: [1, 1, 1],
+    });
+
+    // E o override do nível âncora também carrega boundingBox quando setado.
+    repository.findPointById.mockResolvedValueOnce({
+      anchor: { ...baseRecord, modelId: '3f6d0f0e-9f0f-4c0f-a3f0-1f2e3d4c5b6a' },
+      categoryId: null,
+      categorySlug: null,
+      categoryLabel: null,
+      modelId: null,
+      modelKey: null,
+      modelDerivedKey: null,
+      modelFormat: null,
+      modelBoundingBox: null,
+      anchorModelKey: 'models/originals/m/geladeira.glb',
+      anchorModelDerivedKey: null,
+      anchorModelFormat: 'glb',
+      anchorModelBoundingBox: { min: [0, 0, 0], max: [2, 2, 2] },
+    });
+    const patch = await request(app.getHttpServer())
+      .patch(`/admin/points/${id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .send({ name: 'Com override' })
+      .expect(200);
+    expect(patch.body.model.boundingBox).toEqual({ min: [0, 0, 0], max: [2, 2, 2] });
+  });
 });
 
 describe('Contratos do painel', () => {

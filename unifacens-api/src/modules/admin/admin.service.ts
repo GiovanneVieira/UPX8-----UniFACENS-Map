@@ -40,9 +40,17 @@ export class AdminService {
     modelKey: string | null;
     modelDerivedKey: string | null;
     modelFormat: string | null;
+    modelBoundingBox: {
+      min: [number, number, number];
+      max: [number, number, number];
+    } | null;
     anchorModelKey: string | null;
     anchorModelDerivedKey: string | null;
     anchorModelFormat: string | null;
+    anchorModelBoundingBox: {
+      min: [number, number, number];
+      max: [number, number, number];
+    } | null;
   }) {
     return anchorDetailSchema.parse({
       ...row.anchor,
@@ -62,6 +70,11 @@ export class AdminService {
                   format: row.modelDerivedKey
                     ? 'glb'
                     : (row.modelFormat as 'glb' | 'gltf' | 'obj' | 'fbx' | 'vrx'),
+                  // boundingBox OBRIGATÓRIO no schema (nullable) — sem ele o
+                  // anchorDetailSchema.parse explode com 500 (lição de device
+                  // 2026-11-16: PATCH /admin/points quebrava ao salvar ponto
+                  // com categoria+modelo).
+                  boundingBox: row.modelBoundingBox ?? null,
                 }
               : null,
           }
@@ -73,6 +86,7 @@ export class AdminService {
             format: row.anchorModelDerivedKey
               ? 'glb'
               : (row.anchorModelFormat as 'glb' | 'gltf' | 'obj' | 'fbx' | 'vrx'),
+            boundingBox: row.anchorModelBoundingBox ?? null,
           }
         : null,
     });
