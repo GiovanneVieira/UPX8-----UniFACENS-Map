@@ -62,16 +62,14 @@ interface UseNativeAnchorsParams {
    */
   trackingHealthy: boolean;
   /**
-   * Âncoras geospatial nativas como FONTE DE POSIÇÃO só fazem sentido no
-   * provider ARCORE (frame de sessão validado em device, E1-E3 2026-11-06).
-   * No REACTVISION o retorno vem num frame de TERRA persistente do projeto
-   * (dezenas de km da origem da sessão — lição de device 2026-11-16: o
-   * guard P7 descartava TUDO, "[ARProj] posição fora do range", e a camada
-   * geospatial nunca renderizava). Desligado no RV: economia de quota
-   * ARCore + fim da contenção one-op-por-vez com o resolve cloud. O display
-   * no RV vem da projeção ENU+Δ (use-ar-projection) com as coords do banco
-   * (confirmadas pelo hosting); o upgrade de precisão continua sendo o
-   * resolve VISUAL cloud (frame de sessão, cm).
+   * Fila de âncoras nativas geospatial (resolve hospedada por UUID +
+   * criação local por lat/lng). Valores 1000m→1000km no guard de datum à
+   * parte, as posições chegam no FRAME DA SESSÃO (eixos rotacionados pelo
+   * yaw do launch — lição de device 2026-11-16 noite: um pin a 74km
+   * LEGITIMAMENTE resolve a dezenas de km). O SDK ancora na Terra
+   * (doc: "creates a local AR anchor at that location") — a posição não
+   * depende de onde o usuário está; é a fonte autoritativa de render,
+   * acima da estimativa ENU e abaixo da cloud visual (cm).
    */
   enabled: boolean;
 }

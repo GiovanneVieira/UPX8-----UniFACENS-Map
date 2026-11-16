@@ -148,10 +148,14 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     poseReady: nativeAnchorGateReady,
     focused,
     trackingHealthy: trackingState >= 2,
-    // Provider reactvision: posições geospatial nativas vêm num frame de
-    // TERRA do projeto (dezenas de km — P7 descartava tudo, lição de device
-    // 2026-11-16). Fila OFF no RV; display = projeção ENU+Δ + upgrade cloud.
-    enabled: AR_PROVIDER !== 'reactvision',
+    // Fila nativa REATIVADA no reactvision (revertendo o gate do 43f71b3 —
+    // diagnóstico ERRADO: as posições em dezenas de km eram o FRAME DA
+    // SESSÃO correto, eixos rotacionados pelo yaw do launch; as magnitudes
+    // batiam com as distâncias reais dos pins, lição de device 2026-11-16
+    // noite. O SDK ancora na TERRA (doc: "creates a local AR anchor at
+    // that location") — não depende de onde o usuário está. O guard de
+    // range agora é 1000km (anti-ECEF), não mais 1km.
+    enabled: true,
   });
 
   // ── Hosting por PONTO (guia oficial Cloud Anchors, lição definitiva

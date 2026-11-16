@@ -41,13 +41,19 @@ const WORLD_FLOOR_Y = -1.5;
 /** Mudança mínima de posição para iniciar transição suave (m). */
 const TRANSITION_MIN_JUMP_M = 0.05;
 /**
- * Coordenadas de SESSÃO AR vivem a poucas dezenas de metros da origem
- * (origem = pose do celular no launch). Valores em km indicam datum
- * errado vazando (ECEF do resolveCloudAnchor 3.0.3 ≈ 6,37 Mm, geodésica
- * parcial ≈ km) — lição de device 2026-11-10: telemetria [ARProj] reportou
- * gap de 3.446 km entre nativa e estimativa (P7).
+ * Guard de DATUM para posições de âncoras nativas: o que ele caça é ECEF
+ * vazando (resolveCloudAnchor 3.0.3 ≈ 6,37 Mm) e geodésica parcial (≈ Mm) —
+ * lição de device 2026-11-10: gap de 3.446 km reportado pela telemetria
+ * [ARProj] (P7).
+ *
+ * ⚠️ NÃO apertar (lição de device 2026-11-16 noite): âncoras geospatial do
+ * RV devolvem posição no FRAME DA SESSÃO com eixos rotacionados pelo yaw do
+ * launch — um pin a 74km (campus↔casa) LEGITIMAMENTE resolve a dezenas de
+ * km. O cap de 1km matava pins distantes e levou ao diagnóstico errado de
+ * "frame de terra do projeto" (que desligou a fila nativa no RV — revertido).
+ * 1000km: pega ECEF/Mm, libera qualquer pin terrestre real.
  */
-const MAX_SESSION_COORD_M = 1000;
+const MAX_SESSION_COORD_M = 1_000_000;
 /** Gap nativa↔estimativa acima disto = datum/Δ suspeito (não é ruído de GPS). */
 const SUSPICIOUS_GAP_M = 100;
 
