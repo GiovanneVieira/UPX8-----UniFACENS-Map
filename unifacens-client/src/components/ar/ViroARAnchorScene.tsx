@@ -247,9 +247,9 @@ const Viro3DObjectPin: FC<{
       type={typeByFormat[model.format] ?? 'GLB'}
       scale={scale}
       position={position}
-      onError={() => {
+      onError={(err) => {
         console.warn(
-          `[ARPin] Falha ao carregar modelo "${label ?? 'sem categoria'}" — fallback para o cubo.`,
+          `[ARPin] Falha ao carregar modelo "${label ?? 'sem categoria'}" (${resolveAssetUrl(model.url)}) — ${err instanceof Error ? err.message : String(err)} — fallback para o cubo.`,
         );
         setFailed(true);
       }}
