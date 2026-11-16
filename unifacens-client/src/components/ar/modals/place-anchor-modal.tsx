@@ -18,7 +18,7 @@ import { GUIDE_MS, type PointHostingPhase } from '../hooks/use-point-hosting';
 import type { GeospatialHostState } from '../hooks/use-geospatial-hosting';
 import { ModelCarousel } from './model-carousel';
 import { AnchorImageQueue, type PendingPhoto } from './anchor-image-queue';
-import type { AdminModelsPage, Category } from 'shared';
+import type { AdminModelsPage, Category, CategoryModel } from 'shared';
 
 interface PlaceAnchorModalProps {
   visible: boolean;
@@ -40,6 +40,8 @@ interface PlaceAnchorModalProps {
   /** Modelo override do ponto (null = padrão da categoria). */
   selectedModelId: string | null;
   onSelectModel: (id: string | null) => void;
+  /** Showcase: "ver na câmera" do carousel posiciona o modelo à frente. */
+  onModelShowcase?: (model: { url: string; format: string; boundingBox: CategoryModel['boundingBox'] }) => void;
   /** Fila de fotos pendentes (upload pós-salvar, na ordem). */
   photos: PendingPhoto[];
   onPhotosChange: (photos: PendingPhoto[]) => void;
@@ -136,6 +138,7 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   models,
   selectedModelId,
   onSelectModel,
+  onModelShowcase,
   photos,
   onPhotosChange,
   gpsAccuracyM,
@@ -402,6 +405,7 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                           categories.find((c) => c.id === selectedCategoryId)?.modelId ?? null
                         }
                         onSelect={onSelectModel}
+                        onPreview={onModelShowcase}
                       />
                     </>
                   ) : null}

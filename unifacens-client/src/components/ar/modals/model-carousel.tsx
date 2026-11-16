@@ -13,6 +13,12 @@ interface ModelCarouselProps {
   /** Modelo da categoria selecionada (pré-selecionado quando sem override). */
   categoryModelId?: string | null;
   onSelect: (modelId: string | null) => void;
+  /**
+   * PREVIEW SHOWCASE (2026-11-16): botão "olho" em cada card — o container
+   * posiciona o modelo 2m À FRENTE da câmera (renderizado pela cena atrás
+   * do sheet). Preview real, zero dependências nativas.
+   */
+  onPreview?: (model: CarouselModel) => void;
 }
 
 /** Dimensões legíveis a partir do bounding box (ex.: "0.6 × 0.4 × 0.3 m"). */
@@ -36,6 +42,7 @@ export const ModelCarousel: React.FC<ModelCarouselProps> = ({
   selectedModelId,
   categoryModelId,
   onSelect,
+  onPreview,
 }) => {
   if (models.length === 0) return null;
   const usingCategoryDefault = selectedModelId === null;
@@ -61,6 +68,16 @@ export const ModelCarousel: React.FC<ModelCarouselProps> = ({
         <Text style={styles.cardMeta}>
           {item.format.toUpperCase()} · {dims(item)}
         </Text>
+        {onPreview ? (
+          <TouchableOpacity
+            onPress={() => onPreview(item)}
+            style={styles.previewBtn}
+            accessibilityRole="button"
+            accessibilityLabel={`Pré-visualizar ${item.name} na câmera`}>
+            <Ionicons name="eye-outline" size={14} color="#67E8F9" />
+            <Text style={styles.previewBtnText}>ver na câmera</Text>
+          </TouchableOpacity>
+        ) : null}
         {isCategoryModel ? (
           <View style={styles.tagRow}>
             <View style={styles.tag}>
@@ -150,6 +167,23 @@ const styles = StyleSheet.create({
   cardMeta: {
     color: '#94A3B8',
     fontSize: 11,
+  },
+  previewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#155E75',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    minHeight: 28,
+    alignSelf: 'flex-start',
+  },
+  previewBtnText: {
+    color: '#67E8F9',
+    fontSize: 10.5,
+    fontWeight: '600',
   },
   tagRow: {
     flexDirection: 'row',

@@ -62,6 +62,12 @@ export function AnchorDetailSheet({
   const dims = modelDims(anchor);
   const createdAt = anchor.createdAt ? new Date(anchor.createdAt) : null;
   const screenW = Dimensions.get('window').width;
+  /**
+   * Largura EXPLÍCITA do item do carrossel (bug de device 2026-11-16:
+   * Image com '100%' dentro de Pressable auto-width colapsava — nada
+   * renderizava). Card = min(460, tela−48) − padding 36.
+   */
+  const carouselItemW = Math.min(460, screenW - 48) - 36;
 
   const goImage = (index: number) => {
     const clamped = Math.max(0, Math.min(images.length - 1, index));
@@ -124,21 +130,22 @@ export function AnchorDetailSheet({
                   pagingEnabled
                   showsHorizontalScrollIndicator={false}
                   getItemLayout={(_data, index) => ({
-                    length: screenW - 72,
-                    offset: (screenW - 72) * index,
+                    length: carouselItemW,
+                    offset: carouselItemW * index,
                     index,
                   })}
                   onMomentumScrollEnd={(e) => {
-                    const idx = Math.round(
-                      e.nativeEvent.contentOffset.x / (screenW - 72),
-                    );
+                    const idx = Math.round(e.nativeEvent.contentOffset.x / carouselItemW);
                     setImageIndex(idx);
                   }}
                   renderItem={({ item }) => (
                     <Pressable
                       accessibilityLabel={`Imagem ${images.indexOf(item) + 1} de ${images.length}`}
                       onPress={() => goImage(images.indexOf(item) + 1)}>
-                      <Image source={{ uri: item }} style={styles.carouselImage} />
+                      <Image
+                        source={{ uri: item }}
+                        style={[styles.carouselImage, { width: carouselItemW }]}
+                      />
                     </Pressable>
                   )}
                   style={styles.carousel}
@@ -335,7 +342,6 @@ const styles = StyleSheet.create({
     flexGrow: 0,
   },
   carouselImage: {
-    width: '100%',
     height: 170,
     borderRadius: 14,
     backgroundColor: '#1E293B',

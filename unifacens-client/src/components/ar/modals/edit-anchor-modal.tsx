@@ -35,6 +35,8 @@ interface EditAnchorModalProps {
    * null = "Padrão da categoria" (limpa o override do ponto).
    */
   onModelPreview?: (modelId: string | null) => void;
+  /** Showcase: "ver na câmera" posiciona o modelo à frente da câmera. */
+  onModelShowcase?: (model: { url: string; format: string; boundingBox: AdminModelsPage['items'][number]['boundingBox'] }) => void;
   onClose: () => void;
 }
 
@@ -50,6 +52,7 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
   categories,
   models,
   onModelPreview,
+  onModelShowcase,
   onClose,
 }) => {
   const insets = useSafeAreaInsets();
@@ -238,6 +241,7 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
                     categories.find((c) => c.id === categoryId)?.modelId ?? null
                   }
                   onSelect={handleSelectModel}
+                  onPreview={onModelShowcase}
                 />
               </>
             ) : null}

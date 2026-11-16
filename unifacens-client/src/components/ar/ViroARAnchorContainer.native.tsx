@@ -929,7 +929,55 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   //    categoria → diamante âmbar quando nada vinculado). ───────────────────
   const hostedPreview =
     pointHosting.state.phase === 'hosted' ? pointHosting.state.position : null;
+  /**
+   * SHOWCASE de modelo (2026-11-16): botão "ver na câmera" do carousel —
+   * posiciona o modelo 2.2m À FRENTE da câmera por 15s (precedência sobre
+   * o preview de criação). O preview real: o próprio Viro3DObjectPin.
+   */
+  const [showcasePreview, setShowcasePreview] = useState<{
+    position: [number, number, number];
+    model: CategoryModel;
+    until: number;
+  } | null>(null);
+  const handleModelShowcase = useCallback(
+    (model: { url: string; format: string; boundingBox: CategoryModel['boundingBox'] }) => {
+      const cam = cameraPosRef.current;
+      const fwd = cameraFwdRef.current;
+      const position: [number, number, number] = [
+        cam[0] + fwd[0] * 2.2,
+        cam[1] + fwd[1] * 2.2 - 0.35,
+        cam[2] + fwd[2] * 2.2,
+      ];
+      setShowcasePreview({
+        position,
+        model: {
+          url: model.url,
+          format: model.format as CategoryModel['format'],
+          boundingBox: model.boundingBox,
+        },
+        until: Date.now() + 15_000,
+      });
+      console.log('[ARHost] showcase de modelo à frente da câmera (15s)');
+    },
+    [],
+  );
+  const showcaseActive =
+    showcasePreview !== null && Date.now() < showcasePreview.until
+      ? showcasePreview
+      : null;
+  /** Expira o showcase no tempo certo (sem depender de re-render alheio). */
+  useEffect(() => {
+    if (!showcasePreview) return;
+    const remaining = showcasePreview.until - Date.now();
+    if (remaining <= 0) {
+      setShowcasePreview(null);
+      return;
+    }
+    const timer = setTimeout(() => setShowcasePreview(null), remaining);
+    return () => clearTimeout(timer);
+  }, [showcasePreview]);
   const selectedPreviewModel: CategoryModel | null = useMemo(() => {
+    if (showcaseActive) return showcaseActive.model;
     const models = modelsQuery.data?.items ?? [];
     if (anchorModelId) {
       const found = models.find((m) => m.id === anchorModelId);
@@ -939,7 +987,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     }
     const category = (categoriesQuery.data ?? []).find((c) => c.id === anchorCategoryId);
     return category?.model ?? null;
-  }, [modelsQuery.data, anchorModelId, categoriesQuery.data, anchorCategoryId]);
+  }, [showcaseActive, modelsQuery.data, anchorModelId, categoriesQuery.data, anchorCategoryId]);
 
   // ── viroAppProps ─────────────────────────────────────────────────────────
   const viroAppProps = useMemo(
@@ -961,10 +1009,14 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
        * pedagógico e some com o tap).
        */
       showPlanes: pointHosting.state.phase === 'placing',
-      // Preview do ponto em criação (F3): posição do PONTO tocado + modelo
-      // do carousel — o usuário vê o marcador final enquanto preenche.
-      previewPosition: hostedPreview,
-      previewModel: hostedPreview ? selectedPreviewModel : null,
+      // Preview do ponto em criação (F3) + SHOWCASE de modelo (2026-11-16,
+      // botão "ver na câmera" do carousel — precedência por 15s).
+      previewPosition: showcaseActive ? showcaseActive.position : hostedPreview,
+      previewModel: showcaseActive
+        ? showcaseActive.model
+        : hostedPreview
+          ? selectedPreviewModel
+          : null,
       routeChevrons: arRoute.active && !arRoute.arrived ? arRoute.chevrons : [],
       onGeospatialStatus: nativeAnchors.handleGeospatialStatus,
       onGeospatialPose: geospatial.handlePose,
@@ -983,6 +1035,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       focused,
       pointHosting.state.phase,
       hostedPreview,
+      showcaseActive,
       selectedPreviewModel,
       arRoute.active,
       arRoute.arrived,
@@ -1257,6 +1310,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         models={modelsQuery.data?.items ?? []}
         selectedModelId={anchorModelId}
         onSelectModel={setAnchorModelId}
+        onModelShowcase={handleModelShowcase}
         photos={pendingPhotos}
         onPhotosChange={setPendingPhotos}
         gpsAccuracyM={isPoseFresh(geospatial.pose) ? geospatial.pose.horizontalAccuracy : null}
@@ -1299,6 +1353,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         categories={categoriesQuery.data ?? []}
         models={modelsQuery.data?.items ?? []}
         onModelPreview={setEditPreviewModelId}
+        onModelShowcase={handleModelShowcase}
         onClose={() => {
           setEditVisible(false);
           setEditAnchor(null);
