@@ -6,6 +6,8 @@ import { useAuthStore } from '@/stores/use-auth-store';
 
 /** Timeout padrão das chamadas à API (ms) — evita fetch pendurado eternamente. */
 const API_TIMEOUT_MS = 8000;
+/** Janela maior para upload multipart de fotos (várias MB via adb/wifi). */
+const UPLOAD_TIMEOUT_MS = 45_000;
 
 export function getApiBaseUrl(): string {
   if (process.env.EXPO_PUBLIC_API_URL) {
@@ -58,10 +60,19 @@ function friendlyStatusError(status: number): string {
  * Fetch com timeout, Bearer JWT (todas as rotas exigem autenticação) e
  * validação Zod da resposta (Single Source of Truth em `shared`).
  * Erros são sempre amigáveis ao usuário; detalhes técnicos ficam no console.
+ *
+ * `timeoutMs`: uploads multipart de fotos precisam de janela maior que o
+ * default de 8s (lição de device 2026-11-16: AbortError aos 8s virava
+ * "Não foi possível falar com o servidor" enganosamente).
  */
-async function request<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+  url: string,
+  schema: z.ZodType<T>,
+  init: RequestInit = {},
+  timeoutMs: number = API_TIMEOUT_MS,
+): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let response: Response;
   try {
@@ -188,7 +199,7 @@ export async function uploadAnchorImages(
       Accept: 'application/json',
     },
     body,
-  });
+  }, UPLOAD_TIMEOUT_MS);
 }
 
 /**

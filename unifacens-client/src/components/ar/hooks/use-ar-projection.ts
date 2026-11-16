@@ -6,17 +6,14 @@ import { isPoseFresh, type GeospatialPose } from './use-geospatial-pose';
 /**
  * ── Projeção de âncoras pós-WorldAnchor — DUAS fontes ──────────────────────
  *
- * 1. Âncora NATIVA (ARCore mantém Terra-ancorada) — prioridade máxima.
- * 2. FALLBACK world-stable via pose geospatial + Δ do mundo (motor de
- *    alinhamento): pos = camPos + R(Δ)·ENU(pose→pin). Congelado uma vez
- *    com low-pass + convergência monótona — o pin nasce UMA vez, no lugar
- *    certo (padrão Live View), e desliza (jamais salta) para a âncora
- *    nativa quando ela resolve.
- *
- * Pins cloud PENDENTES de resolve: invisíveis durante a cortesia
- * (GHOST_GRACE_MS) e depois projetados como estimativa "ghost" (isGhost —
- * não selecionável). O resolve o substitui com transição suave — ONE-WAY
- * por construção (E5 preservada: sem oscilação cravado↔GPS).
+ * 1. Âncora NATIVA/cloud VISUAL resolvida (frame de SESSÃO — cm) — prioridade
+ *    máxima. (Geospatial nativo do provider reactvision NÃO entra aqui: suas
+ *    posições vêm num frame de terra do projeto, dezenas de km — P7 descarta.)
+ * 2. PROJEÇÃO ENU+Δ com as coords do banco (lat/lng confirmadas pelo hosting
+ *    geoespacial) — a camada DEFAULT (fluxo 2026-11-16): todo pin com lat/lng
+ *    projeta IMEDIATAMENTE, sólido, com selo honesto "±Xm". Nasce uma vez,
+ *    low-pass + convergência monótona; o resolve cloud visual (frame de
+ *    sessão, cm) o substitui com transição suave ONE-WAY quando fecha.
  */
 
 /** Acurácia máxima da pose para o fallback projetar pins (m). */
@@ -130,18 +127,6 @@ interface UseARProjectionParams {
   poseTick: GeospatialPose | null;
   /** Bump manual (botão de refresh) — limpa estimativas e re-projeta. */
   reprojectNonce: number;
-  /**
-   * Pins cloud aguardando resolve (useCloudAnchors): invisíveis durante a
-   * cortesia (agora < GHOST_GRACE_MS) — resolve rápido fecha antes do
-   * ghost nascer.
-   */
-  pendingIds: ReadonlySet<string>;
-  /**
-   * Pins cloud pendentes ELEGÍVEIS a ghost (≥ cortesia): projetam como
-   * estimativa com `isGhost` (não selecionável; o resolve o substitui com
-   * transição suave — one-way, jamais regressa a GPS).
-   */
-  ghostIds: ReadonlySet<string>;
 }
 
 export function useARProjection({
@@ -152,8 +137,6 @@ export function useARProjection({
   delta,
   poseTick,
   reprojectNonce,
-  pendingIds,
-  ghostIds,
 }: UseARProjectionParams) {
   const [anchors, setAnchors] = useState<Anchor[]>([]);
   /**
@@ -231,12 +214,11 @@ export function useARProjection({
       let estimated = false;
       let estimateAccuracyM: number | undefined;
       /**
-       * Ghost SÓ quando não há âncora nativa alguma (dupla ancoragem, F2):
-       * pin com geospatial resolvida é SÓLIDO e selecionável — posição
-       * server-backed com selo honesto "±Xm" (estimated + accuracy), não o
-       * cubo translúcido do ghost puramente client-side.
+       * isGhost morreu como ESTADO VISUAL (fluxo 2026-11-16): todo pin com
+       * coords renderiza sólido estimado ±Xm (camada geospatial default) e o
+       * resolve cloud faz o upgrade one-way. O HUD segue avisando os
+       * pendentes ("aproxime-se") via pendingIds do use-cloud-anchors.
        */
-      const isGhost = native ? false : ghostIds.has(anchor.id);
 
       if (native && isSessionPosition(native.position)) {
         // 1. Âncora nativa — ARCore mantém Terra-ancorada. Sempre vence.
@@ -304,8 +286,10 @@ export function useARProjection({
         delta !== null &&
         pose &&
         isPoseFresh(pose) &&
-        // Pendente de resolve cloud: invisível na cortesia, ghost depois.
-        (!pendingIds.has(anchor.id) || ghostIds.has(anchor.id)) &&
+        // Camada GEOSPATIAL DEFAULT (fluxo 2026-11-16): pins com lat/lng
+        // (todos) projetam IMEDIATAMENTE via ENU+Δ — sólidos, estimados
+        // ±Xm, SEM cortesia de ghost. O resolve cloud visual (frame de
+        // sessão, cm) continua como upgrade one-way por Prioridade 1.
         // Acurácia estrita OU best-effort per-pin após FALLBACK_TIMEOUT_MS.
         (strictAccuracyOk || pinBestEffort(anchor.id, now, strictAccuracyOk))
       ) {
@@ -418,7 +402,6 @@ export function useARProjection({
           distanceMeters: Number(dist.toFixed(2)),
           estimated,
           estimateAccuracyM,
-          isGhost,
         });
       }
     }
@@ -442,7 +425,7 @@ export function useARProjection({
 
     setAnchors(projected);
     setTransitionActive(transitionsRef.current.size > 0);
-  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef, pendingIds, ghostIds]);
+  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef]);
 
   recomputeRef.current = recompute;
 

@@ -148,6 +148,10 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     poseReady: nativeAnchorGateReady,
     focused,
     trackingHealthy: trackingState >= 2,
+    // Provider reactvision: posições geospatial nativas vêm num frame de
+    // TERRA do projeto (dezenas de km — P7 descartava tudo, lição de device
+    // 2026-11-16). Fila OFF no RV; display = projeção ENU+Δ + upgrade cloud.
+    enabled: AR_PROVIDER !== 'reactvision',
   });
 
   // ── Hosting por PONTO (guia oficial Cloud Anchors, lição definitiva
@@ -233,10 +237,6 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     delta: alignment.delta,
     poseTick: geospatial.pose,
     reprojectNonce,
-    // Pins cloud pendentes: invisíveis na cortesia, estimativa ghost depois
-    // (isGhost — não selecionável; resolve substitui com transição suave).
-    pendingIds: cloudAnchors.pendingIds,
-    ghostIds: cloudAnchors.ghostIds,
   });
 
   // ── Navegação ────────────────────────────────────────────────────────────

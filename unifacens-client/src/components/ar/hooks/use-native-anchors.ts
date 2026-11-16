@@ -61,6 +61,19 @@ interface UseNativeAnchorsParams {
    * 14:56-14:57, §12.12).
    */
   trackingHealthy: boolean;
+  /**
+   * Âncoras geospatial nativas como FONTE DE POSIÇÃO só fazem sentido no
+   * provider ARCORE (frame de sessão validado em device, E1-E3 2026-11-06).
+   * No REACTVISION o retorno vem num frame de TERRA persistente do projeto
+   * (dezenas de km da origem da sessão — lição de device 2026-11-16: o
+   * guard P7 descartava TUDO, "[ARProj] posição fora do range", e a camada
+   * geospatial nunca renderizava). Desligado no RV: economia de quota
+   * ARCore + fim da contenção one-op-por-vez com o resolve cloud. O display
+   * no RV vem da projeção ENU+Δ (use-ar-projection) com as coords do banco
+   * (confirmadas pelo hosting); o upgrade de precisão continua sendo o
+   * resolve VISUAL cloud (frame de sessão, cm).
+   */
+  enabled: boolean;
 }
 
 /** Máximo de âncoras nativas simultâneas. */
@@ -104,7 +117,7 @@ const FATAL_ERROR_PATTERNS = [
  * posição. Falhas/pendências têm retry + timeout; esgotadas as tentativas,
  * o pin permanece no fallback de projeção (estimativa visível).
  */
-export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHealthy }: UseNativeAnchorsParams) {
+export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHealthy, enabled }: UseNativeAnchorsParams) {
   /** Mapa pinId -> entrada nativa (estado — dispara re-render da projeção). */
   const [entries, setEntries] = useState<Map<string, NativeAnchorEntry>>(new Map());
   const entriesRef = useRef<Map<string, NativeAnchorEntry>>(new Map());
@@ -134,6 +147,9 @@ export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHe
   const nativeIdsRef = useRef<Set<string>>(new Set());
   /** Geospatial habilitado (só cria quando ativo). */
   const geoEnabledRef = useRef(false);
+  /** Fila habilitada (provider arcore — ver doc do param `enabled`). */
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   /** Guarda: hook vivo (SIGSEGV se chamarmos nativo após unmount). */
   const aliveRef = useRef(true);
   /** Guarda anti-sobreposição de lotes (awaits de até 60s no interval). */
@@ -169,7 +185,7 @@ export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHe
   /** Detecta pins novos → enfileira para criação de âncora nativa. */
   useEffect(() => {
     serverAnchorsRef.current = serverAnchors;
-    if (!serverAnchors) return;
+    if (!serverAnchors || !enabled) return;
 
     for (const anchor of serverAnchors) {
       if (createdRef.current.has(anchor.id) || inFlightRef.current.has(anchor.id)) continue;
@@ -300,6 +316,9 @@ async function resolveHostedAnchor(
   useEffect(() => {
     const timer = setInterval(async () => {
       if (!aliveRef.current || !geoEnabledRef.current) return;
+      // Fila desligada (provider reactvision — posições em frame de terra,
+      // lição 2026-11-16): nada a processar.
+      if (!enabledRef.current) return;
       // Blur da tab OU tracking degradado (sinal do detach): NÃO criar
       // âncoras nativas — createGeospatialAnchor/createTerrainAnchor são
       // UIBlocks interop e a view está a caminho da destruição (§12.12).
@@ -437,7 +456,7 @@ async function resolveHostedAnchor(
   }, []);
 
   /** Re-enfileira pins que esgotaram retries (refresh manual explícito). */
-  const retryFailed = useCallback(() => {    if (failedRef.current.size === 0) return;
+  const retryFailed = useCallback(() => {    if (failedRef.current.size === 0 || !enabledRef.current) return;
     const anchors = serverAnchorsRef.current;
     if (!anchors) return;
     const ids = [...failedRef.current];
