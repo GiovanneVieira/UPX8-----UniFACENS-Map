@@ -158,6 +158,8 @@ export function useARProjection({
   const [transitionActive, setTransitionActive] = useState(false);
   /** Pins já avisados por datum inválido (evita spam de log a 1Hz). */
   const datumWarnedRef = useRef<Set<string>>(new Set());
+  /** Último aviso de "mundo vazio" (telemetria 1×/30s). */
+  const emptyWorldWarnedAtRef = useRef<number | null>(null);
 
   const recompute = useCallback(() => {
     if (!serverAnchors) {
@@ -305,17 +307,19 @@ export function useARProjection({
         /**
          * Sanity cap no NASCIMENTO da estimativa (par do guard P7 das
          * âncoras nativas): |ENU| > 1000km = datum envenenado (ex.: pose
-         * zerada que escapou, ECEF vazando) — recusa e espera pose melhor,
-         * em vez de cravar o pin a milhares de km (subpixel invisível,
-         * "distância bizarra" nos detalhes). Pins LEGITIMAMENTE distantes
-         * (campus↔casa = 74km) projetam normal.
+         * zerada que escapou, ECEF vazando) — recusa e espera pose melhor.
+         * ⚠️ NÃO apertar: pins LEGITIMAMENTE distantes (campus↔casa = 74km)
+         * precisam projetar para aparecerem na listagem com a distância
+         * real (lição de device 2026-11-16: cap de 1km sumia com todos os
+         * pins longe da lista). Render a 74km é subpixel — inofensivo.
          */
+        const MAX_ESTIMATE_RANGE_M = 1_000_000; // 1000km — guard de datum
         const enuRangeM = Math.hypot(east, north);
-        if (enuRangeM > MAX_SESSION_COORD_M) {
+        if (enuRangeM > MAX_ESTIMATE_RANGE_M) {
           if (!datumWarnedRef.current.has(anchor.id)) {
             datumWarnedRef.current.add(anchor.id);
             console.warn(
-              `[ARProj] "${anchor.name}" estimativa recusada: |ENU| ${(enuRangeM / 1000).toFixed(0)}km > ${MAX_SESSION_COORD_M / 1000}km (datum/pose suspeitos) — aguardando pose melhor`,
+              `[ARProj] "${anchor.name}" estimativa recusada: |ENU| ${(enuRangeM / 1000).toFixed(0)}km > ${MAX_ESTIMATE_RANGE_M / 1000}km (datum/pose suspeitos) — aguardando pose melhor`,
             );
           }
           waitingSinceRef.current.delete(anchor.id);
@@ -446,6 +450,22 @@ export function useARProjection({
 
     setAnchors(projected);
     setTransitionActive(transitionsRef.current.size > 0);
+
+    /**
+     * Telemetria de vazio (lição do quarto, 2026-11-16): sessão com pins no
+     * servidor e NADA projetado era invisível nos logs — sem pose (RV sem
+     * fix GPS/VPS indoor) ou sem Δ, o mundo fica vazio e não há pista.
+     * Loga 1×/30s o motivo para diagnóstico de campo.
+     */
+    if (projected.length === 0 && serverAnchors.length > 0) {
+      const now = Date.now();
+      if (now - (emptyWorldWarnedAtRef.current ?? 0) > 30_000) {
+        emptyWorldWarnedAtRef.current = now;
+        console.warn(
+          `[ARProj] mundo vazio: ${serverAnchors.length} pin(s) no servidor, 0 projetados — ${pose ? `pose ok (±${pose.horizontalAccuracy.toFixed(0)}m)` : 'SEM pose (RV sem fix GPS/VPS)'}, Δ=${delta === null ? 'destravado' : 'ok'}${cameraPosRef.current ? '' : ', sem camPos'}`,
+        );
+      }
+    }
   }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef]);
 
   recomputeRef.current = recompute;
