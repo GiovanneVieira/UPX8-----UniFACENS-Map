@@ -41,8 +41,12 @@ export function AnchorDetailSheet({
 
   if (!visible || !anchor) return null;
 
-  const images = (anchor as Anchor & { images?: string[] }).images ?? [];
-  const longDescription = (anchor as Anchor & { longDescription?: string | null }).longDescription;
+  // F3: images/longDescription agora fazem parte do anchorSchema shared —
+  // os casts manuais morreram.
+  const images = anchor.images ?? [];
+  const longDescription = anchor.longDescription;
+  const createdAt = anchor.createdAt ? new Date(anchor.createdAt) : null;
+  const model = anchor.model ?? anchor.category?.model ?? null;
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
@@ -100,6 +104,43 @@ export function AnchorDetailSheet({
                 ) : null}
               </View>
             ) : null}
+
+            {/* Metadados do ponto (F3): categoria, modelo, criação, precisão */}
+            <View style={styles.metaWrap}>
+              {anchor.category ? (
+                <View style={styles.metaChip}>
+                  <Ionicons name="pricetag-outline" size={12} color="#7DD3FC" />
+                  <Text style={styles.metaChipText}>{anchor.category.label}</Text>
+                </View>
+              ) : null}
+              {model ? (
+                <View style={styles.metaChip}>
+                  <Ionicons name="cube-outline" size={12} color="#C4B5FD" />
+                  <Text style={styles.metaChipText}>Modelo 3D · {model.format.toUpperCase()}</Text>
+                </View>
+              ) : null}
+              {anchor.estimated && typeof anchor.estimateAccuracyM === 'number' ? (
+                <View style={[styles.metaChip, styles.metaChipWarn]}>
+                  <Ionicons name="warning-outline" size={12} color="#FCD34D" />
+                  <Text style={[styles.metaChipText, { color: '#FCD34D' }]}>
+                    posição estimada ±{Math.round(anchor.estimateAccuracyM)} m
+                  </Text>
+                </View>
+              ) : anchor.geospatialAnchorId ? (
+                <View style={styles.metaChip}>
+                  <Ionicons name="earth-outline" size={12} color="#6EE7B7" />
+                  <Text style={styles.metaChipText}>âncora geoespacial</Text>
+                </View>
+              ) : null}
+              {createdAt && !Number.isNaN(createdAt.getTime()) ? (
+                <View style={styles.metaChip}>
+                  <Ionicons name="calendar-outline" size={12} color="#94A3B8" />
+                  <Text style={styles.metaChipText}>
+                    {createdAt.toLocaleDateString('pt-BR')}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
 
             {/* Coordenadas */}
             {anchor.latitude != null && anchor.longitude != null ? (
@@ -216,6 +257,31 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#334155',
     gap: 8,
+  },
+  metaWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 12,
+  },
+  metaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(30, 41, 59, 0.85)',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  metaChipWarn: {
+    borderColor: '#B45309',
+  },
+  metaChipText: {
+    color: '#CBD5E1',
+    fontSize: 11,
+    fontWeight: '600',
   },
   descText: {
     fontSize: 14,

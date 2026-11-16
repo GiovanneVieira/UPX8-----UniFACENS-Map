@@ -161,3 +161,53 @@ export async function deleteAnchor(id: string): Promise<{ success: boolean }> {
     },
   });
 }
+
+/** Resposta dos endpoints de imagens do ponto. */
+const imageResultSchema = z.object({ images: z.array(z.string()) });
+
+/**
+ * Envia a fila de fotos do ponto NA ORDEM (multipart — o servidor grava a
+ * sequência do FormData no JSONB). Partes no formato RN (uri/name/type).
+ */
+export async function uploadAnchorImages(
+  id: string,
+  photos: Array<{ uri: string; fileName: string; mime: string }>,
+): Promise<{ images: string[] }> {
+  const body = new FormData();
+  for (const photo of photos) {
+    body.append('files', {
+      uri: photo.uri,
+      name: photo.fileName,
+      type: photo.mime,
+    } as unknown as Blob);
+  }
+  return request(`${getApiBaseUrl()}/anchors/${id}/images`, imageResultSchema, {
+    method: 'POST',
+    headers: {
+      ...getTeamAuthorization(),
+      Accept: 'application/json',
+    },
+    body,
+  });
+}
+
+/**
+ * Exclui uma imagem do ponto (aceita URL resolvida ou chave — o servidor
+ * normaliza via storage.keyFor).
+ */
+export async function deleteAnchorImage(
+  id: string,
+  keyOrUrl: string,
+): Promise<{ images: string[] }> {
+  return request(
+    `${getApiBaseUrl()}/anchors/${id}/images?key=${encodeURIComponent(keyOrUrl)}`,
+    imageResultSchema,
+    {
+      method: 'DELETE',
+      headers: {
+        ...getTeamAuthorization(),
+        Accept: 'application/json',
+      },
+    },
+  );
+}

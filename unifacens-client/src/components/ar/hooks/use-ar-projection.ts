@@ -230,8 +230,13 @@ export function useARProjection({
       let renderPos: [number, number, number] | null = null;
       let estimated = false;
       let estimateAccuracyM: number | undefined;
-      /** Pendente elegível: estimativa "ghost" (não selecionável). */
-      const isGhost = ghostIds.has(anchor.id);
+      /**
+       * Ghost SÓ quando não há âncora nativa alguma (dupla ancoragem, F2):
+       * pin com geospatial resolvida é SÓLIDO e selecionável — posição
+       * server-backed com selo honesto "±Xm" (estimated + accuracy), não o
+       * cubo translúcido do ghost puramente client-side.
+       */
+      const isGhost = native ? false : ghostIds.has(anchor.id);
 
       if (native && isSessionPosition(native.position)) {
         // 1. Âncora nativa — ARCore mantém Terra-ancorada. Sempre vence.
@@ -259,6 +264,12 @@ export function useARProjection({
           }
         }
         renderPos = native.position;
+        // Selo honesto p/ âncora geoespacial (m) quando a acurácia é
+        // conhecida — legados sem número seguem sólidos como antes.
+        if (native.source === 'geospatial' && typeof anchor.geospatialAccuracyM === 'number') {
+          estimated = true;
+          estimateAccuracyM = anchor.geospatialAccuracyM;
+        }
         const prev = renderedRef.current.get(anchor.id);
         if (
           prev &&

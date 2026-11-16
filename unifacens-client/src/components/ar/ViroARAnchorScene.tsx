@@ -11,7 +11,7 @@ import {
   ViroDirectionalLight,
   ViroMaterials,
 } from '@reactvision/react-viro';
-import type { Anchor } from 'shared';
+import type { Anchor, CategoryModel } from 'shared';
 import { isUsablePoint } from 'shared';
 import { resolveAssetUrl } from '@/services/api';
 import type { RouteChevron } from '@/features/ar/hooks/use-ar-navigation';
@@ -128,6 +128,12 @@ export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
    * ajusta a distância da mira.
    */
   previewPosition?: [number, number, number] | null;
+  /**
+   * Modelo 3D selecionado no carousel durante a criação (F3): o preview
+   * NOVO PONTO renderiza o MODELO REAL em vez do diamante âmbar — o usuário
+   * vê o marcador final girando/escala reais enquanto escolhe.
+   */
+  previewModel?: CategoryModel | null;
   /** Janela de chevrons da sessão de navegação (keys = arco em metros). */
   routeChevrons?: RouteChevron[];
   /** Status do modo Geospatial (suporte no device / erros de key). */
@@ -156,22 +162,31 @@ export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
   /** Tracking ≥ 2 (sessão viva) — gates de CHAMADA NATIVA (§12.12); não
    *  confundir com trackingHealthy (===3) que oculta CONTEÚDO. */
   trackingActive?: boolean;
+  /**
+   * Render dos planos detectados (feedback de superfície). Ligado pelo
+   * container APENAS no modo placing — o quad permanente era o artefato
+   * azul §12.9; na janela de posicionamento é pedagógico (o usuário vê
+   * onde o ARCore já enxerga antes de tocar).
+   */
+  showPlanes?: boolean;
   sceneNavigator?: any;
   arSceneNavigator?: any;
 }
 
 /**
- * Modelo 3D da categoria do pin (Viro3DObject com fallback honesto):
- * falha de load (URL inválida, formato, memória) degrada para o cubo
- * padrão — nunca tela vazia. Regra de Ouro §6: StyleSheet.create puro.
+ * Modelo 3D do pin (Viro3DObject com fallback honesto): falha de load (URL
+ * inválida, formato, memória) degrada para o cubo padrão — nunca tela vazia.
+ * F3: o modelo vem do OVERRIDE do pin (anchor.model) ou da categoria; o
+ * preview de criação reusa o mesmo componente com o modelo do carousel.
+ * Regra de Ouro §6: StyleSheet.create puro.
  */
 const Viro3DObjectPin: FC<{
-  anchor: Anchor;
+  model: CategoryModel | null;
   scaleFactor: number;
   materialName: string;
-}> = ({ anchor, scaleFactor, materialName }) => {
+  label?: string;
+}> = ({ model, scaleFactor, materialName, label }) => {
   const [failed, setFailed] = useState(false);
-  const model = anchor.category?.model ?? null;
   if (!model || failed) {
     // Fallback: cubo padrão (mesmo visual dos pins sem categoria).
     return (
@@ -217,7 +232,7 @@ const Viro3DObjectPin: FC<{
       position={position}
       onError={() => {
         console.warn(
-          `[ARPin] Falha ao carregar modelo da categoria "${anchor.category?.label}" — fallback para o cubo.`,
+          `[ARPin] Falha ao carregar modelo "${label ?? 'sem categoria'}" — fallback para o cubo.`,
         );
         setFailed(true);
       }}
@@ -234,7 +249,10 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
 
   const anchors = viroProps.anchors || [];
   const trackingHealthy = viroProps.trackingHealthy !== false;
+  // Planos visíveis: prop do container (placing) ou flag de debug local.
+  const showPlanes = viroProps.showPlanes ?? SHOW_DETECTED_PLANES;
   const previewPosition = viroProps.previewPosition ?? null;
+  const previewModel = viroProps.previewModel ?? null;
   const onCameraUpdate = viroProps.onCameraUpdate;
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
@@ -576,7 +594,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           SEM onClick — planos interceptam o raycast de taps nos pins (o chão
           está fisicamente entre a câmera e qualquer pin a nível do solo).
           O botão "Marcar Ponto" já abre o modal via hit test do retículo. */}
-      {SHOW_DETECTED_PLANES
+      {showPlanes
         ? visiblePlanes.map((plane) => {
             const extentWidth = plane.width || 0.5;
             const extentHeight = plane.height || 0.5;
@@ -665,9 +683,10 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
               />
             ) : (
               <Viro3DObjectPin
-                anchor={anchor}
+                model={anchor.model ?? anchor.category?.model ?? null}
                 scaleFactor={scaleFactor}
                 materialName={materialName}
+                label={anchor.category?.label}
               />
             )}
 
@@ -697,16 +716,20 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           ViroSharedFrame foram REMOVIDOS da cena. */}
       {/* ══ MODO PREVIEW: pin fantasma no ponto de criação ═════════════════
           Diamante âmbar + haste — visualmente DISTINTO dos pins regulares
-          (cubos coloridos). Atualiza em tempo real conforme o usuário
-          ajusta a distância da mira no modal minimizado. */}
+          (cubos coloridos). F3: com modelo selecionado no carousel, o preview
+          renderiza o MODELO REAL (preview ao vivo atrás do sheet). */}
       {previewPosition ? (
         <ViroNode position={previewPosition}>
-          {/* Diamante âmbar flutuante (rotaciona 45° nos 3 eixos) */}
-          <ViroBox
-            scale={[0.28, 0.28, 0.28]}
-            rotation={[45, 45, 0]}
-            materials={['previewPin']}
-          />
+          {previewModel ? (
+            <Viro3DObjectPin model={previewModel} scaleFactor={1} materialName="previewPin" label="preview" />
+          ) : (
+            /* Diamante âmbar flutuante (rotaciona 45° nos 3 eixos) */
+            <ViroBox
+              scale={[0.28, 0.28, 0.28]}
+              rotation={[45, 45, 0]}
+              materials={['previewPin']}
+            />
+          )}
           {/* Haste vertical fina até o "chão" */}
           <ViroBox
             position={[0, -0.35, 0]}

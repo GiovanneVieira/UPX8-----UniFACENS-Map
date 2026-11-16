@@ -27,6 +27,10 @@ export interface ARDiagnosticsContext {
   poseFresh: boolean;
   /** Total de pins no servidor. */
   totalPins: number;
+  /** Pins com âncora geoespacial hospedada (F2 — dupla ancoragem). */
+  geoHostedPins: number;
+  /** Estado do hosting geoespacial do run atual ('idle'|'pending'|...). */
+  geoHostStatus: string;
   /** Visual por pin: distância/estimativa (da projeção). */
   pinVisuals: Map<
     string,
@@ -195,6 +199,16 @@ export const ARDiagnosticsModal: React.FC<ARDiagnosticsModalProps> = ({
                 <View style={styles.sessionRow}>
                   <Text style={styles.sessionKey}>Provider</Text>
                   <Text style={styles.sessionValue}>{ctx.provider}</Text>
+                </View>
+                <View style={styles.sessionRow}>
+                  <Text style={styles.sessionKey}>Geoespacial</Text>
+                  <Text
+                    style={[
+                      styles.sessionValue,
+                      ctx.geoHostedPins > 0 ? { color: '#34D399' } : undefined,
+                    ]}>
+                    {`${ctx.geoHostedPins}/${ctx.totalPins} hospedada(s) · host: ${ctx.geoHostStatus}`}
+                  </Text>
                 </View>
                 <View style={styles.sessionRow}>
                   <Text style={styles.sessionKey}>Pose</Text>

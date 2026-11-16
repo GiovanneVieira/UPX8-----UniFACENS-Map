@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type Anchor } from 'shared';
 
+/** Fonte da entrada nativa — determina honestidade visual do pin. */
+export type NativeAnchorSource = 'cloud' | 'geospatial' | 'slam';
+
 /** Entrada de âncora nativa — posição AR mantida pelo ARCore (Terra). */
 export interface NativeAnchorEntry {
   /** ID do pin na nossa API. */
@@ -9,6 +12,14 @@ export interface NativeAnchorEntry {
   nativeAnchorId: string;
   /** Posição AR mundial — ARCore mantém cravada na Terra. */
   position: [number, number, number];
+  /**
+   * Origem da âncora: 'cloud' = visual (cm, resolve SIFT); 'geospatial' =
+   * hospedada/criada por coordenadas (m — selo honesto "±Xm"); 'slam' =
+   * provisória do tap na sessão.
+   */
+  source?: NativeAnchorSource;
+  /** Acurácia horizontal (m) quando conhecida (hosting geoespacial). */
+  accuracyM?: number;
 }
 
 /** Requisição de âncora nativa na fila. */
@@ -19,6 +30,13 @@ interface PendingRequest {
   mode: 'terrain' | 'geospatial';
   /** altAboveTerrain (terrain) ou altitude absoluta WGS84 (geospatial). */
   value: number;
+  /**
+   * UUID da âncora geoespacial HOSPEDADA na plataforma RV: quando presente,
+   * o processador resolve por UUID (resolveGeospatialAnchor — posição
+   * server-backed) em vez de criar por lat/lng local. Falha esgotada →
+   * re-enfileira SEM o UUID (caminho local clássico).
+   */
+  hostedGeospatialId?: string;
 }
 
 interface UseNativeAnchorsParams {
@@ -168,19 +186,28 @@ export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHe
       // Respeita o limite
       if (createdRef.current.size >= MAX_NATIVE_ANCHORS) break;
 
-      // Roteamento por dado: altitude registrada = altura absoluta de
-      // criação (createGeospatialAnchor); sem altitude = terreno + 1.5m.
-      const hasAltitude =
-        typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude);
-      pendingRef.current.push({
-        pinId: anchor.id,
-        lat: anchor.latitude,
-        lng: anchor.longitude,
-        mode: hasAltitude ? 'geospatial' : 'terrain',
-        value: hasAltitude ? (anchor.altitude as number) : PIN_HEIGHT_ABOVE_TERRAIN_M,
-      });
+      pendingRef.current.push(buildRequest(anchor));
     }
   }, [serverAnchors]);
+
+  /**
+   * Roteamento por dado: UUID geoespacial hospedado → resolve por UUID
+   * (posição server-backed); senão altitude registrada = altura absoluta
+   * (createGeospatialAnchor); sem altitude = terreno + 1.5m.
+   */
+  function buildRequest(anchor: Anchor, withHosted = true): PendingRequest {
+    const hasAltitude =
+      typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude);
+    return {
+      pinId: anchor.id,
+      lat: anchor.latitude as number,
+      lng: anchor.longitude as number,
+      mode: hasAltitude ? 'geospatial' : 'terrain',
+      value: hasAltitude ? (anchor.altitude as number) : PIN_HEIGHT_ABOVE_TERRAIN_M,
+      hostedGeospatialId:
+        withHosted && anchor.geospatialAnchorId ? anchor.geospatialAnchorId : undefined,
+    };
+  }
 
 /** Resultado das APIs createGeospatialAnchor/createTerrainAnchor do Viro. */
 interface GeospatialAnchorResult {
@@ -236,18 +263,30 @@ const withTimeout = async <T,>(
           }
           inFlightRef.current.add(req.pinId);
           try {
+            /**
+             * Dupla ancoragem (F2): UUID hospedado no RV → resolve por UUID
+             * (posição server-backed, entre sessões e usuários); senão o
+             * caminho local clássico por lat/lng.
+             */
+            const hostedId = req.hostedGeospatialId;
+            const useHostedResolve =
+              !!hostedId &&
+              typeof navigatorRef.current.resolveGeospatialAnchor === 'function';
             const result = (await withTimeout(
-              req.mode === 'geospatial'
-                ? navigatorRef.current.createGeospatialAnchor(req.lat, req.lng, req.value)
-                : navigatorRef.current.createTerrainAnchor(req.lat, req.lng, req.value),
+              useHostedResolve
+                ? navigatorRef.current.resolveGeospatialAnchor(hostedId)
+                : req.mode === 'geospatial'
+                  ? navigatorRef.current.createGeospatialAnchor(req.lat, req.lng, req.value)
+                  : navigatorRef.current.createTerrainAnchor(req.lat, req.lng, req.value),
               ANCHOR_TIMEOUT_MS,
-              `createAnchor(${req.pinId})`,
+              `${useHostedResolve ? 'resolveGeospatial' : 'createAnchor'}(${req.pinId})`,
             )) as GeospatialAnchorResult;
             if (result?.success && result.anchor?.position) {
               entriesRef.current.set(req.pinId, {
                 pinId: req.pinId,
                 nativeAnchorId: result.anchor.anchorId ?? '',
                 position: result.anchor.position as [number, number, number],
+                source: 'geospatial',
               });
               if (result.anchor.anchorId) {
                 nativeIdsRef.current.add(result.anchor.anchorId);
@@ -257,6 +296,11 @@ const withTimeout = async <T,>(
               failedRef.current.delete(req.pinId);
               retriesRef.current.delete(req.pinId);
               setEntries(new Map(entriesRef.current));
+              if (useHostedResolve) {
+                console.log(
+                  `[ARNative] ${req.pinId} âncora geoespacial HOSPEDADA resolvida — server-backed`,
+                );
+              }
             } else {
               throw new Error(result?.error ?? 'falha sem detalhe');
             }
@@ -265,11 +309,24 @@ const withTimeout = async <T,>(
             const isFatal = FATAL_ERROR_PATTERNS.some((p) => message.toUpperCase().includes(p));
             const retries = (retriesRef.current.get(req.pinId) ?? 0) + 1;
             retriesRef.current.set(req.pinId, retries);
+            /**
+             * UUID hospedado esgotado → UMA degradação para o caminho local
+             * (createGeospatial/createTerrain por lat/lng do banco): a âncora
+             * existe na plataforma mas este device não a resolveu agora.
+             */
+            const degradeToLocal =
+              req.hostedGeospatialId !== undefined && retries > MAX_RETRIES && !isFatal;
             if (!isFatal && retries <= MAX_RETRIES) {
               console.warn(
                 `[ARNative] ${req.pinId} falhou (tentativa ${retries}/${MAX_RETRIES + 1}): ${message} — re-enfileirando`,
               );
               pendingRef.current.push(req);
+            } else if (degradeToLocal) {
+              console.warn(
+                `[ARNative] ${req.pinId} resolve hospedado esgotado (${message}) — degradando p/ criação local por lat/lng`,
+              );
+              retriesRef.current.delete(req.pinId);
+              pendingRef.current.push({ ...req, hostedGeospatialId: undefined });
             } else {
               console.warn(
                 `[ARNative] ${req.pinId} ${isFatal ? 'erro fatal' : `esgotou ${MAX_RETRIES + 1} tentativas`} (${message}) — permanece no fallback de projeção`,
@@ -324,15 +381,7 @@ const withTimeout = async <T,>(
       ) {
         continue;
       }
-      const hasAltitude =
-        typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude);
-      pendingRef.current.push({
-        pinId: id,
-        lat: anchor.latitude,
-        lng: anchor.longitude,
-        mode: hasAltitude ? 'geospatial' : 'terrain',
-        value: hasAltitude ? (anchor.altitude as number) : PIN_HEIGHT_ABOVE_TERRAIN_M,
-      });
+      pendingRef.current.push(buildRequest(anchor));
       createdRef.current.delete(id);
       failedRef.current.delete(id);
       retriesRef.current.delete(id);
@@ -363,7 +412,12 @@ const withTimeout = async <T,>(
 
   /** Adiciona um pin recém-criado (exibição imediata + cria âncora nativa). */
   const addLocal = useCallback((pinId: string, position: [number, number, number]) => {
-    const entry: NativeAnchorEntry = { pinId, nativeAnchorId: '', position };
+    const entry: NativeAnchorEntry = {
+      pinId,
+      nativeAnchorId: '',
+      position,
+      source: 'slam',
+    };
     entriesRef.current.set(pinId, entry);
     setEntries(new Map(entriesRef.current));
     // A âncora nativa será criada no próximo tick quando o serverAnchor chegar

@@ -15,7 +15,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { GUIDE_MS, type PointHostingPhase } from '../hooks/use-point-hosting';
-import type { Category } from 'shared';
+import type { GeospatialHostState } from '../hooks/use-geospatial-hosting';
+import { ModelCarousel } from './model-carousel';
+import { AnchorImageQueue, type PendingPhoto } from './anchor-image-queue';
+import type { AdminModelsPage, Category } from 'shared';
 
 interface PlaceAnchorModalProps {
   visible: boolean;
@@ -32,6 +35,18 @@ interface PlaceAnchorModalProps {
   categories: Category[];
   selectedCategoryId: string | null;
   onSelectCategory: (id: string | null) => void;
+  /** Biblioteca de modelos 3D (GET /admin/models — seletor por ponto, F3). */
+  models: AdminModelsPage['items'];
+  /** Modelo override do ponto (null = padrão da categoria). */
+  selectedModelId: string | null;
+  onSelectModel: (id: string | null) => void;
+  /** Fila de fotos pendentes (upload pós-salvar, na ordem). */
+  photos: PendingPhoto[];
+  onPhotosChange: (photos: PendingPhoto[]) => void;
+  /** Acurácia horizontal da pose (m) — chip "Precisão do GPS: ±Xm". */
+  gpsAccuracyM: number | null;
+  /** Estado do hosting geoespacial em background (F2 — dupla ancoragem). */
+  geoHostStatus: GeospatialHostState;
   /** Salva o pin (só com phase 'hosted'). */
   onCreate: () => void;
   onClose: () => void;
@@ -118,6 +133,13 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
   categories,
   selectedCategoryId,
   onSelectCategory,
+  models,
+  selectedModelId,
+  onSelectModel,
+  photos,
+  onPhotosChange,
+  gpsAccuracyM,
+  geoHostStatus,
   onCreate,
   onClose,
 }) => {
@@ -214,7 +236,9 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                         ? 'O entorno do ponto ficou com poucas features visuais. Tente de novo: posicione, e durante a guia MOVA o celular ao redor do ponto (mude o ângulo da câmera).'
                         : hosting.error.includes('NotAuthorized')
                           ? 'Chave da API não autorizada — verifique as credenciais ReactVision.'
-                          : hosting.error}
+                          : /upload|timeout/i.test(hosting.error)
+                            ? 'Falha no envio do mapa visual para a nuvem (conexão lenta ou instável). Verifique o Wi-Fi e tente novamente — já tentamos 3× automaticamente.'
+                            : hosting.error}
                     </Text>
                   </View>
                   <TouchableOpacity
@@ -243,6 +267,63 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                       Âncora hospedada NO ponto (TTL 30 dias, GPS anexado) — precisão centimétrica
                     </Text>
                   </View>
+                  <View style={styles.accuracyRow}>
+                    <View
+                      style={[
+                        styles.accuracyChip,
+                        gpsAccuracyM !== null && gpsAccuracyM <= 5
+                          ? styles.accuracyGood
+                          : gpsAccuracyM !== null && gpsAccuracyM <= 10
+                            ? styles.accuracyWarn
+                            : styles.accuracyBad,
+                      ]}
+                      accessibilityLabel={
+                        gpsAccuracyM !== null
+                          ? `Precisão do GPS mais ou menos ${gpsAccuracyM.toFixed(0)} metros`
+                          : 'Aguardando GPS'
+                      }>
+                      <Ionicons name="locate" size={13} color="#FFFFFF" />
+                      <Text style={styles.accuracyText}>
+                        {gpsAccuracyM !== null
+                          ? `GPS ±${gpsAccuracyM.toFixed(0)}m`
+                          : 'Aguardando GPS…'}
+                      </Text>
+                    </View>
+                    {(() => {
+                      const geo = geoHostStatus;
+                      if (geo.status === 'hosted') {
+                        return (
+                          <View style={[styles.accuracyChip, styles.geoHosted]}>
+                            <Ionicons name="earth" size={13} color="#FFFFFF" />
+                            <Text style={styles.accuracyText}>
+                              Geoespacial ±{geo.accuracyM.toFixed(0)}m ✓
+                            </Text>
+                          </View>
+                        );
+                      }
+                      if (geo.status === 'pending') {
+                        return (
+                          <View style={[styles.accuracyChip, styles.accuracyWarn]}>
+                            <ActivityIndicator size="small" color="#FCD34D" />
+                            <Text style={styles.accuracyText}>Geoespacial…</Text>
+                          </View>
+                        );
+                      }
+                      if (geo.status === 'skipped') {
+                        return (
+                          <View style={[styles.accuracyChip, styles.accuracyBad]}>
+                            <Ionicons name="earth-outline" size={13} color="#FFFFFF" />
+                            <Text style={styles.accuracyText}>
+                              {geo.reason === 'gate'
+                                ? `Sem geoespacial (±${(geo.accuracyM ?? 0).toFixed(0)}m)`
+                                : 'Sem geoespacial'}
+                            </Text>
+                          </View>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </View>
                   <Text style={styles.inputLabel}>Nome do ponto *</Text>
                   <TextInput
                     style={styles.textInput}
@@ -266,7 +347,7 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                   />
                   <Text style={styles.inputLabel}>Categoria (opcional)</Text>
                   <Text style={styles.helperText}>
-                    A categoria define o modelo 3D que marca o ponto no AR.
+                    A categoria sugere o modelo 3D do ponto — você pode trocar abaixo.
                   </Text>
                   <View style={styles.categoryWrap}>
                     <TouchableOpacity
@@ -310,6 +391,23 @@ export const PlaceAnchorModal: React.FC<PlaceAnchorModalProps> = ({
                         </Text>
                       </TouchableOpacity>
                     ))}
+                  </View>
+                  {models.length > 0 ? (
+                    <>
+                      <Text style={styles.inputLabel}>Modelo 3D do ponto</Text>
+                      <ModelCarousel
+                        models={models}
+                        selectedModelId={selectedModelId}
+                        categoryModelId={
+                          categories.find((c) => c.id === selectedCategoryId)?.modelId ?? null
+                        }
+                        onSelect={onSelectModel}
+                      />
+                    </>
+                  ) : null}
+                  <Text style={styles.inputLabel}>Fotos do ponto (opcional)</Text>
+                  <View style={styles.photosWrap}>
+                    <AnchorImageQueue entries={photos} onChange={onPhotosChange} disabled={isSaving} />
                   </View>
                   <View style={styles.modalActionsRow}>
                     <TouchableOpacity onPress={requestClose} disabled={isSaving} style={styles.cancelButton}>
@@ -459,12 +557,46 @@ const styles = StyleSheet.create({
     borderColor: '#065F46',
     borderRadius: 12,
     padding: 12,
-    marginBottom: 14,
+    marginBottom: 10,
   },
   hostedText: {
     color: '#6EE7B7',
     fontSize: 12.5,
     flex: 1,
+  },
+  accuracyRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+  },
+  accuracyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minHeight: 32,
+  },
+  accuracyText: {
+    color: '#FFFFFF',
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+  accuracyGood: {
+    backgroundColor: '#047857',
+  },
+  accuracyWarn: {
+    backgroundColor: '#B45309',
+  },
+  accuracyBad: {
+    backgroundColor: 'rgba(30, 41, 59, 0.9)',
+    borderWidth: 1,
+    borderColor: '#475569',
+  },
+  geoHosted: {
+    backgroundColor: '#1D4ED8',
   },
   primaryBtn: {
     flexDirection: 'row',
@@ -523,6 +655,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginBottom: 12,
+  },
+  photosWrap: {
+    marginBottom: 8,
   },
   categoryChip: {
     borderWidth: 1,
