@@ -159,6 +159,8 @@ export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
    *  (poll geospatial/retries) enquanto o keep-alive do unmount drena os
    *  UIBlocks interop pendentes (anti-SIGSEGV, §12.12). */
   focused?: boolean;
+  /** Provider AR ativo ('reactvision' | 'arcore') — apenas diagnóstico/log. */
+  provider?: string;
   /** Tracking ≥ 2 (sessão viva) — gates de CHAMADA NATIVA (§12.12); não
    *  confundir com trackingHealthy (===3) que oculta CONTEÚDO. */
   trackingActive?: boolean;
@@ -359,7 +361,9 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         if (support?.supported) {
           await nav.setGeospatialModeEnabled(true);
           geoEnabledRef.current = true;
-          console.log('[ARGeo] modo Geospatial habilitado (provider arcore)');
+          // Provider REAL via viroAppProps (lição 2026-11-16: a string era
+          // hardcoded "arcore" e mascarou o diagnóstico do hosting geoespacial).
+          console.log(`[ARGeo] modo Geospatial habilitado (provider ${viroProps.provider ?? 'n/d'})`);
           geoStatusRef.current?.(true, undefined);
           return;
         }

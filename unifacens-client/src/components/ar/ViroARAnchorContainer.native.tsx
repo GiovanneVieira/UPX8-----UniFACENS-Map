@@ -175,6 +175,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     hosted: pointHosting.state.phase === 'hosted',
     provider: AR_PROVIDER,
     averagedPose: geospatial.averagedPose,
+    // Gates de op nativa (§12.12) — o wait-loop só promove a host com ambos.
+    focused,
+    trackingHealthy: trackingState >= 2,
     onHosted: (anchorId, accuracyM) => {
       const pinId = geoSavedPinIdRef.current;
       if (pinId) {
@@ -874,6 +877,8 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       focused,
       /** Tracking ≥ 2 (sessão viva) — gates de chamada nativa (§12.12). */
       trackingActive: trackingState >= 2,
+      /** Provider real (diagnóstico — lição 2026-11-16 do log hardcoded). */
+      provider: AR_PROVIDER,
       /**
        * Render dos planos detectados — APENAS no modo placing (feedback de
        * "onde o ARCore já enxerga superfície" antes do toque; o quad azul

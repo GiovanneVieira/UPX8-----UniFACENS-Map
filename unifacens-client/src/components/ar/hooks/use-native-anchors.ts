@@ -233,6 +233,65 @@ const withTimeout = async <T,>(
   ]);
 };
 
+/**
+ * Resolve a âncora geoespacial HOSPEDADA (UUID RV) — DEFENSIVO (lição de
+ * device 2026-11-16): a DOC promete `anchor.position` (coords de mundo), mas
+ * o docstring da impl 3.1.1 retorna `{anchorId, latitude, longitude,
+ * altitude}` SEM position. Shape A usa a position direta; shape B faz
+ * two-step com a coordenada AUTORITATIVA da plataforma + criação local
+ * (createGeospatial/createTerrain com o roteamento de altitude do banco).
+ */
+async function resolveHostedAnchor(
+  nav: any,
+  req: PendingRequest,
+): Promise<{ anchorId: string; position: [number, number, number]; shape: 'A' | 'B' }> {
+  const result = (await withTimeout(
+    nav.resolveGeospatialAnchor(req.hostedGeospatialId as string),
+    ANCHOR_TIMEOUT_MS,
+    `resolveGeospatial(${req.pinId})`,
+  )) as {
+    success?: boolean;
+    error?: string;
+    anchor?: {
+      anchorId?: string;
+      position?: [number, number, number];
+      latitude?: number;
+      longitude?: number;
+    };
+  };
+  if (!result?.success || !result.anchor) {
+    throw new Error(result?.error ?? 'resolve hospedado falhou (sem detalhe)');
+  }
+  // Shape A: position de mundo direto (contrato documentado).
+  if (result.anchor.position) {
+    return {
+      anchorId: result.anchor.anchorId ?? (req.hostedGeospatialId as string),
+      position: result.anchor.position,
+      shape: 'A',
+    };
+  }
+  // Shape B (docstring 3.1.1): só coordenadas — cria a âncora local com elas.
+  const { latitude, longitude } = result.anchor;
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    throw new Error('resolve hospedado sem position nem lat/lng (shape desconhecido)');
+  }
+  const local = (await withTimeout(
+    req.mode === 'geospatial'
+      ? nav.createGeospatialAnchor(latitude, longitude, req.value)
+      : nav.createTerrainAnchor(latitude, longitude, req.value),
+    ANCHOR_TIMEOUT_MS,
+    `createAnchorTwoStep(${req.pinId})`,
+  )) as GeospatialAnchorResult;
+  if (!local?.success || !local.anchor?.position) {
+    throw new Error(local?.error ?? 'two-step falhou (sem detalhe)');
+  }
+  return {
+    anchorId: local.anchor.anchorId ?? '',
+    position: local.anchor.position as [number, number, number],
+    shape: 'B',
+  };
+}
+
   /** Último valor de poseReady (lido pelo interval sem recriá-lo). */
   const poseReadyRef = useRef(poseReady);
   poseReadyRef.current = poseReady;
@@ -265,44 +324,57 @@ const withTimeout = async <T,>(
           try {
             /**
              * Dupla ancoragem (F2): UUID hospedado no RV → resolve por UUID
-             * (posição server-backed, entre sessões e usuários); senão o
-             * caminho local clássico por lat/lng.
+             * (posição server-backed, entre sessões e usuários; DEFENSIVO
+             * shape A/B — lição 2026-11-16); senão o caminho local clássico
+             * por lat/lng do banco.
              */
             const hostedId = req.hostedGeospatialId;
             const useHostedResolve =
               !!hostedId &&
               typeof navigatorRef.current.resolveGeospatialAnchor === 'function';
-            const result = (await withTimeout(
-              useHostedResolve
-                ? navigatorRef.current.resolveGeospatialAnchor(hostedId)
-                : req.mode === 'geospatial'
+            let nativeAnchorId = '';
+            let resolvedPosition: [number, number, number] | null = null;
+            let resolvedShape: 'A' | 'B' | null = null;
+
+            if (useHostedResolve) {
+              const resolved = await resolveHostedAnchor(navigatorRef.current, req);
+              nativeAnchorId = resolved.anchorId;
+              resolvedPosition = resolved.position;
+              resolvedShape = resolved.shape;
+            } else {
+              const result = (await withTimeout(
+                req.mode === 'geospatial'
                   ? navigatorRef.current.createGeospatialAnchor(req.lat, req.lng, req.value)
                   : navigatorRef.current.createTerrainAnchor(req.lat, req.lng, req.value),
-              ANCHOR_TIMEOUT_MS,
-              `${useHostedResolve ? 'resolveGeospatial' : 'createAnchor'}(${req.pinId})`,
-            )) as GeospatialAnchorResult;
-            if (result?.success && result.anchor?.position) {
-              entriesRef.current.set(req.pinId, {
-                pinId: req.pinId,
-                nativeAnchorId: result.anchor.anchorId ?? '',
-                position: result.anchor.position as [number, number, number],
-                source: 'geospatial',
-              });
-              if (result.anchor.anchorId) {
-                nativeIdsRef.current.add(result.anchor.anchorId);
+                ANCHOR_TIMEOUT_MS,
+                `createAnchor(${req.pinId})`,
+              )) as GeospatialAnchorResult;
+              if (result?.success && result.anchor?.position) {
+                nativeAnchorId = result.anchor.anchorId ?? '';
+                resolvedPosition = result.anchor.position as [number, number, number];
+              } else {
+                throw new Error(result?.error ?? 'falha sem detalhe');
               }
-              // Marca criado SÓ APÓS o sucesso (falha → retry).
-              createdRef.current.add(req.pinId);
-              failedRef.current.delete(req.pinId);
-              retriesRef.current.delete(req.pinId);
-              setEntries(new Map(entriesRef.current));
-              if (useHostedResolve) {
-                console.log(
-                  `[ARNative] ${req.pinId} âncora geoespacial HOSPEDADA resolvida — server-backed`,
-                );
-              }
-            } else {
-              throw new Error(result?.error ?? 'falha sem detalhe');
+            }
+
+            entriesRef.current.set(req.pinId, {
+              pinId: req.pinId,
+              nativeAnchorId,
+              position: resolvedPosition,
+              source: 'geospatial',
+            });
+            if (nativeAnchorId) {
+              nativeIdsRef.current.add(nativeAnchorId);
+            }
+            // Marca criado SÓ APÓS o sucesso (falha → retry).
+            createdRef.current.add(req.pinId);
+            failedRef.current.delete(req.pinId);
+            retriesRef.current.delete(req.pinId);
+            setEntries(new Map(entriesRef.current));
+            if (useHostedResolve) {
+              console.log(
+                `[ARNative] ${req.pinId} âncora geoespacial HOSPEDADA resolvida (shape ${resolvedShape}) — server-backed`,
+              );
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
