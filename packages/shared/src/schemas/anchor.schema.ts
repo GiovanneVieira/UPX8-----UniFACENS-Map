@@ -64,6 +64,13 @@ export const anchorSchema = z.object({
   geospatialAnchorId: z.string().optional().nullable(),
   /** Acurácia horizontal (m, 95%) da pose no momento do hosting geoespacial. */
   geospatialAccuracyM: z.number().optional().nullable(),
+  /**
+   * Ajuste fino de ALTITUDE por ponto (m, −50..+50): somado ao Y apenas
+   * nas camadas imprecisas (âncora geospatial nativa + estimativa ENU) —
+   * corrige o viés vertical do GPS no hosting (±5–15m fácil). O cloud
+   * anchor visual (cm, onde o usuário tocou) NÃO recebe offset.
+   */
+  altitudeOffsetM: z.number().min(-50).max(50).optional().nullable(),
   /** Imagens do ponto (URLs resolvidas pelo serializer — ordem = ordem de exibição). */
   images: z.array(z.string()).optional(),
   /** Informações detalhadas do ponto (texto longo, opcional). */
@@ -92,6 +99,8 @@ export const createAnchorSchema = z.object({
   /** UUID RV da âncora geoespacial, quando o host resolveu antes do save. */
   geospatialAnchorId: z.string().trim().min(1).optional(),
   geospatialAccuracyM: z.number().min(0).max(10000).optional(),
+  /** Ajuste fino de altitude (m) — corrigiu viés vertical do hosting. */
+  altitudeOffsetM: z.number().min(-50).max(50).optional().nullable(),
 });
 export type CreateAnchorDto = z.infer<typeof createAnchorSchema>;
 
@@ -108,6 +117,8 @@ export const updateAnchorSchema = z
     /** UUID RV da âncora geoespacial hospedada (grava quando o host resolve após o save). */
     geospatialAnchorId: z.string().trim().min(1).optional(),
     geospatialAccuracyM: z.number().min(0).max(10000).optional(),
+    /** Ajuste fino de altitude (m) — null zera. */
+    altitudeOffsetM: z.number().min(-50).max(50).nullable().optional(),
   })
   .refine(
     (dto) =>

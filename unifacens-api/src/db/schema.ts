@@ -122,6 +122,12 @@ export const anchors = pgTable('anchors', {
   geospatialAnchorId: text('geospatial_anchor_id'),
   /** Acurácia horizontal (m, 95%) da pose média no momento do hosting — selo honesto "±Xm". */
   geospatialAccuracyM: doublePrecision('geospatial_accuracy_m'),
+  /**
+   * Ajuste fino de ALTITUDE (m, −50..+50): somado ao Y apenas nas camadas
+   * imprecisas (geospatial nativa + ENU) — corrige o viés vertical do GPS
+   * no hosting. Cloud visual (cm) não recebe.
+   */
+  altitudeOffsetM: doublePrecision('altitude_offset_m'),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),

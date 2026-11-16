@@ -111,6 +111,7 @@ export class AnchorsService implements OnModuleInit {
         heading: dto.heading ?? null,
         geospatialAnchorId: dto.geospatialAnchorId ?? null,
         geospatialAccuracyM: dto.geospatialAccuracyM ?? null,
+        altitudeOffsetM: dto.altitudeOffsetM ?? null,
       })
       .returning();
 
@@ -153,6 +154,8 @@ export class AnchorsService implements OnModuleInit {
       patch.geospatialAnchorId = dto.geospatialAnchorId;
     if (dto.geospatialAccuracyM !== undefined)
       patch.geospatialAccuracyM = dto.geospatialAccuracyM;
+    if (dto.altitudeOffsetM !== undefined)
+      patch.altitudeOffsetM = dto.altitudeOffsetM;
     if (dto.frameOffset !== undefined) {
       patch.positionX = dto.frameOffset?.[0] ?? null;
       patch.positionY = dto.frameOffset?.[1] ?? null;
@@ -313,6 +316,7 @@ export class AnchorsService implements OnModuleInit {
       // Âncora geoespacial hospedada (camada intermediária de precisão).
       geospatialAnchorId: record.geospatialAnchorId ?? null,
       geospatialAccuracyM: record.geospatialAccuracyM ?? null,
+      altitudeOffsetM: record.altitudeOffsetM ?? null,
       // Detalhe enriquecido na listagem também (fim do cast no client):
       // imagens são URLs resolvidas, ordem = ordem de exibição.
       longDescription: record.longDescription ?? null,

@@ -434,6 +434,17 @@ export function useARProjection({
         }
       }
 
+      /**
+       * AJUSTE FINO DE ALTITUDE (2026-11-16): o offset do ponto corrige o
+       * viés vertical do GPS no hosting — aplicado ao Y SOMENTE nas camadas
+       * imprecisas (âncora geospatial nativa + estimativa ENU). O cloud
+       * visual (cm, onde o usuário tocou) é a verdade — nunca deslocado.
+       */
+      const altOffset = anchor.altitudeOffsetM ?? 0;
+      if (renderPos && altOffset !== 0 && native?.source !== 'cloud') {
+        renderPos = [renderPos[0], renderPos[1] + altOffset, renderPos[2]];
+      }
+
       if (renderPos && isValidPosition(renderPos)) {
         renderedRef.current.set(anchor.id, renderPos);
         // Distância VIVA: recalculada a cada tick conforme a câmera anda.

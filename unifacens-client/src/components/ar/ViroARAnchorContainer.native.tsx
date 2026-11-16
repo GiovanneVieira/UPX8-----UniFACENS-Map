@@ -305,6 +305,11 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
    * modal fechado ou usuário não tocou; null = "Padrão da categoria").
    */
   const [editPreviewModelId, setEditPreviewModelId] = useState<string | null | undefined>(undefined);
+  /**
+   * PREVIEW VIVO do AJUSTE DE ALTITUDE: stepper do EditAnchorModal aplica o
+   * offset ao pin REAL na hora (mesma mecânica do render — camadas imprecisas).
+   */
+  const [editPreviewAltOffset, setEditPreviewAltOffset] = useState<number | undefined>(undefined);
   /** Toast de ponto encontrado (cloud resolve / primeiro projetado). */
   const [anchorToast, setAnchorToast] = useState<AnchorToastData | null>(null);
 
@@ -931,19 +936,26 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     if (!editAnchor || editPreviewModelId === undefined) return base;
     return base.map((a) => {
       if (a.id !== editAnchor.id) return a;
+      // Ajuste de altitude em preview (stepper) — aplica na hora.
+      const altOffset =
+        editPreviewAltOffset !== undefined ? editPreviewAltOffset : a.altitudeOffsetM ?? 0;
+      const withAlt: Anchor =
+        altOffset !== (a.altitudeOffsetM ?? 0)
+          ? { ...a, altitudeOffsetM: altOffset }
+          : a;
       if (editPreviewModelId === null) {
         // "Padrão da categoria": limpa o override do ponto (herda categoria).
-        return { ...a, modelId: null, model: null };
+        return { ...withAlt, modelId: null, model: null };
       }
       const found = modelsQuery.data?.items.find((m) => m.id === editPreviewModelId);
-      if (!found) return a;
+      if (!found) return withAlt;
       return {
-        ...a,
+        ...withAlt,
         modelId: found.id,
         model: { url: found.url, format: found.format, boundingBox: found.boundingBox },
       };
     });
-  }, [projection.anchors, radiusFilter, editAnchor, editPreviewModelId, modelsQuery.data]);
+  }, [projection.anchors, radiusFilter, editAnchor, editPreviewModelId, editPreviewAltOffset, modelsQuery.data]);
 
   // ── Preview vivo do ponto em criação (F3): modelo selecionado no carousel
   //    renderizado NO ponto tocado atrás do sheet (fallback = modelo da
@@ -1374,11 +1386,13 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         categories={categoriesQuery.data ?? []}
         models={modelsQuery.data?.items ?? []}
         onModelPreview={setEditPreviewModelId}
+        onAltitudePreview={setEditPreviewAltOffset}
         onModelShowcase={handleModelShowcase}
         onClose={() => {
           setEditVisible(false);
           setEditAnchor(null);
           setEditPreviewModelId(undefined);
+          setEditPreviewAltOffset(undefined);
         }}
       />
 

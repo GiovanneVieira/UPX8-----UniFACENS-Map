@@ -41,9 +41,8 @@ const POSE_WAIT_INTERVAL_MS = 1_000;
  * Altura acima do terreno como fallback do altitude quando não confiamos na
  * vertical da pose (paridade com o caminho local createTerrainAnchor).
  */
+/** Altura acima do terreno como fallback EXTREMO (pose sem altitude finita). */
 const PIN_HEIGHT_ABOVE_TERRAIN_M = 1.5;
-/** Confia na altitude da pose só com acurácia vertical boa (§11.5). */
-const MAX_VERTICAL_TRUST_M = 20;
 /** Timeout JS — hostGeospatialAnchor é op de rede + pode esperar a fila
  *  nativa drenar (resolve cloud em voo até ~35s) — folga suficiente. */
 const HOST_TIMEOUT_MS = 60_000;
@@ -176,10 +175,16 @@ export function useGeospatialHosting({
       setState({ status: 'pending' });
       // altitudeMode REAL da impl 3.1.1: "street_level" | "rooftop_level"
       // (a doc "WGS84"/"Terrain" está desatualizada — lição 2026-11-16).
+      // ⚠️ A altitude do parâmetro é WGS84 ABSOLUTO (exemplo oficial:
+      // `pose.altitude + alturaAcimaDoChao`) — NUNCA passar 1.5 cruso como
+      // altitude (bug latente: pin nasceria ~690m subterrâneo). Sem
+      // confiança vertical (acc > 20m), pose.altitude segue sendo o melhor
+      // estimador — o ajuste fino por ponto (altitudeOffsetM) corrige o
+      // resíduo no editor.
       const altitudeMode = 'street_level';
-      const trustAltitude =
-        Number.isFinite(pose.altitude) && pose.verticalAccuracy <= MAX_VERTICAL_TRUST_M;
-      const altitude = trustAltitude ? pose.altitude : PIN_HEIGHT_ABOVE_TERRAIN_M;
+      const altitude = Number.isFinite(pose.altitude)
+        ? pose.altitude
+        : PIN_HEIGHT_ABOVE_TERRAIN_M;
       console.log(
         `[ARGeoHost] host em voo — lat=${pose.latitude.toFixed(6)} lng=${pose.longitude.toFixed(6)} alt=${altitude.toFixed(1)}m mode=${altitudeMode} ±${pose.horizontalAccuracy.toFixed(1)}m`,
       );

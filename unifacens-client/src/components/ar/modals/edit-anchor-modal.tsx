@@ -35,6 +35,8 @@ interface EditAnchorModalProps {
    * null = "Padrão da categoria" (limpa o override do ponto).
    */
   onModelPreview?: (modelId: string | null) => void;
+  /** Preview vivo do AJUSTE DE ALTITUDE (stepper) — pin sobe/desce na hora. */
+  onAltitudePreview?: (offsetM: number | undefined) => void;
   /** Showcase: "ver na câmera" posiciona o modelo à frente da câmera. */
   onModelShowcase?: (model: { url: string; format: string; boundingBox: AdminModelsPage['items'][number]['boundingBox'] }) => void;
   onClose: () => void;
@@ -52,6 +54,7 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
   categories,
   models,
   onModelPreview,
+  onAltitudePreview,
   onModelShowcase,
   onClose,
 }) => {
@@ -61,6 +64,7 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
   const [description, setDescription] = useState('');
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
+  const [altOffset, setAltOffset] = useState(0);
   const [images, setImages] = useState<string[]>([]);
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -72,6 +76,9 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
     setDescription(anchor.description ?? '');
     setCategoryId(anchor.category?.id ?? null);
     setModelId(anchor.modelId ?? null);
+    const initialOffset = anchor.altitudeOffsetM ?? 0;
+    setAltOffset(initialOffset);
+    onAltitudePreview?.(initialOffset);
     setImages(anchor.images ?? []);
     setPhotos([]);
   }, [visible, anchor]);
@@ -82,6 +89,15 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
   const handleSelectModel = (id: string | null) => {
     setModelId(id);
     onModelPreview?.(id);
+  };
+
+  /** Stepper de altitude: ±0.5m — pin sobe/desce atrás do sheet na hora. */
+  const bumpAltitude = (delta: number) => {
+    setAltOffset((prev) => {
+      const next = Math.max(-50, Math.min(50, Number((prev + delta).toFixed(1))));
+      onAltitudePreview?.(next);
+      return next;
+    });
   };
 
   const save = async () => {
@@ -97,6 +113,7 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
         description: description.trim() || null,
         categoryId,
         modelId,
+        altitudeOffsetM: altOffset === 0 ? null : altOffset,
       });
       // 2. Novas fotos (na ordem da fila) — falha não-bloqueante.
       if (photos.length > 0) {
@@ -246,6 +263,38 @@ export const EditAnchorModal: React.FC<EditAnchorModalProps> = ({
               </>
             ) : null}
 
+            <Text style={styles.inputLabel}>Ajuste de altura</Text>
+            <View style={styles.altRow}>
+              <TouchableOpacity
+                onPress={() => bumpAltitude(-0.5)}
+                style={styles.altBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Diminuir altura em meio metro">
+                <Ionicons name="remove" size={18} color="#FCA5A5" />
+              </TouchableOpacity>
+              <View style={styles.altValue}>
+                <Text style={styles.altValueText}>
+                  {altOffset > 0 ? '+' : ''}
+                  {altOffset.toFixed(1)} m
+                </Text>
+                <Text style={styles.altHint}>
+                  {altOffset === 0 ? 'neutro' : altOffset > 0 ? 'acima' : 'abaixo'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => bumpAltitude(0.5)}
+                style={styles.altBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Aumentar altura em meio metro">
+                <Ionicons name="add" size={18} color="#6EE7B7" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.helperText}>
+              Corrige o desvio vertical do GPS no mapeamento — o ponto sobe/desce
+              ao vivo atrás deste formulário. Não afeta a precisão centimétrica
+              quando o ponto é re-escaneado de perto.
+            </Text>
+
             <Text style={styles.inputLabel}>Fotos do ponto</Text>
             {images.length > 0 ? (
               <View style={styles.gallery}>
@@ -346,6 +395,43 @@ const styles = StyleSheet.create({
   textArea: {
     minHeight: 64,
     textAlignVertical: 'top',
+  },
+  altRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 4,
+  },
+  altBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  altValue: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  altValueText: {
+    color: '#E2E8F0',
+    fontSize: 16,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  altHint: {
+    color: '#94A3B8',
+    fontSize: 11,
+  },
+  helperText: {
+    color: '#64748B',
+    fontSize: 11,
+    marginBottom: 10,
+    lineHeight: 15,
   },
   categoryWrap: {
     flexDirection: 'row',
