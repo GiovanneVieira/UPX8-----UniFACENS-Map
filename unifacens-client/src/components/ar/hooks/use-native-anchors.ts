@@ -106,8 +106,16 @@ const ANCHOR_TIMEOUT_MS = 60_000;
 /** Retries por pin após a primeira falha (1ª + 2 retries = 3 tentativas). */
 const MAX_RETRIES = 2;
 /**
+ * Erros que indicam PROVIDER incompatível (a função existe no JS mas o
+ * nativo rejeita porque exige outro provider) — degrada IMEDIATAMENTE
+ * para o caminho local, sem retry (lição de device 2026-11-16: com
+ * provider=arcore, o resolveGeospatialAnchor erro "requires the
+ * ReactVision geospatial provider" e os retries eram puros churn).
+ */
+/**
  * Erros FATAIS: retry não vai mudar o resultado — pula direto ao esgotado
- * (cada retry seria mais um request fútil à ARCore API).
+ * (cada retry seria mais um request fútil à ARCore API). PROVIDER_MISMATCH
+ * degrada direto ao caminho local (createGeospatial do banco).
  */
 const FATAL_ERROR_PATTERNS = [
   'NOT_SUPPORTED',
@@ -117,6 +125,14 @@ const FATAL_ERROR_PATTERNS = [
   'UNAUTHORIZED',
   'ACCESS_DENIED',
 ];
+
+/**
+ * Provider incompatível: a função existe no JS mas o nativo rejeita porque
+ * exige outro provider (lição 2026-11-16: com provider=arcore, o
+ * resolveGeospatialAnchor erro "requires the ReactVision geospatial
+ * provider" e os retries eram puros churn). Degrada ao caminho local.
+ */
+const PROVIDER_MISMATCH_ERROR = /ReactVision geospatial provider/i;
 
 /**
  * SISTEMA PRIMÁRIO de posicionamento AR (pós-WorldAnchor):
@@ -443,6 +459,21 @@ async function resolveHostedAnchor(
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            /**
+             * PROVIDER MISMATCH (lição 2026-11-16): com provider=arcore, o
+             * resolveGeospatialAnchor erro "requires the ReactVision
+             * geospatial provider" — o método EXISTE no JS mas o nativo
+             * rejeita. Degrada IMEDIATAMENTE ao caminho local (coords do
+             * banco via createGeospatial/Terrain), sem desperdiçar retries.
+             */
+            if (PROVIDER_MISMATCH_ERROR.test(message)) {
+              console.warn(
+                `[ARNative] ${req.pinId} resolve hospedado incompatível com o provider — degradando p/ criação local por lat/lng`,
+              );
+              retriesRef.current.delete(req.pinId);
+              pendingRef.current.push({ ...req, hostedGeospatialId: undefined });
+              continue;
+            }
             const isFatal = FATAL_ERROR_PATTERNS.some((p) => message.toUpperCase().includes(p));
             const retries = (retriesRef.current.get(req.pinId) ?? 0) + 1;
             retriesRef.current.set(req.pinId, retries);
