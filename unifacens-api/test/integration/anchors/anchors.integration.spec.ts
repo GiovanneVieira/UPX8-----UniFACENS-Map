@@ -116,6 +116,89 @@ describe('Anchors Integration with Testcontainers (Google Cloud Anchors & Real P
     expect(getRes.body.cloudAnchorId).toBe('ua-google-ar-bloco-b-999');
   });
 
+  it('POST/PATCH /anchors devem persistir a âncora geoespacial hospedada (dupla ancoragem)', async () => {
+    // POST já levando o UUID RV (host resolveu antes do save)
+    const postRes = await request(app.getHttpServer())
+      .post('/anchors')
+      .send({
+        name: 'Ponto Geoespacial',
+        cloudAnchorId: 'ua-visual-geospatial-1',
+        geospatialAnchorId: '9f1c2d34-5a67-4b89-9cde-0f1a2b3c4d5e',
+        geospatialAccuracyM: 6.4,
+        latitude: -23.4699,
+        longitude: -47.4297,
+      })
+      .expect(201);
+
+    expect(postRes.body.geospatialAnchorId).toBe('9f1c2d34-5a67-4b89-9cde-0f1a2b3c4d5e');
+    expect(postRes.body.geospatialAccuracyM).toBe(6.4);
+
+    // PATCH grava o UUID quando o host resolve DEPOIS do save
+    const patchRes = await request(app.getHttpServer())
+      .patch(`/anchors/${postRes.body.id}`)
+      .send({
+        geospatialAnchorId: '8e0b1c23-4a56-4788-8bcd-9e0f1a2b3c4d',
+        geospatialAccuracyM: 8.1,
+      })
+      .expect(200);
+
+    expect(patchRes.body.geospatialAnchorId).toBe('8e0b1c23-4a56-4788-8bcd-9e0f1a2b3c4d');
+    expect(patchRes.body.geospatialAccuracyM).toBe(8.1);
+
+    // Listagem serializa a camada geoespacial (client faz merge por prioridade)
+    const listRes = await request(app.getHttpServer()).get('/anchors').expect(200);
+    const found = listRes.body.find((a: any) => a.id === postRes.body.id);
+    expect(found.geospatialAnchorId).toBe('8e0b1c23-4a56-4788-8bcd-9e0f1a2b3c4d');
+  });
+
+  it('GET /anchors deve serializar images e longDescription na listagem (fim do cast no client)', async () => {
+    const postRes = await request(app.getHttpServer())
+      .post('/anchors')
+      .send({ name: 'Ponto Com Detalhes', cloudAnchorId: 'ua-with-details-1' })
+      .expect(201);
+    expect(postRes.body.images).toEqual([]);
+    expect(postRes.body.longDescription).toBeNull();
+  });
+
+  it('POST /anchors com modelId deve embutir o modelo override na serialização (F3)', async () => {
+    // Modelo mínimo direto no banco (upload real coberto pelos specs de models)
+    const [model] = await pool
+      .query(
+        `INSERT INTO models (name, format, original_key, size_bytes, bounding_box)
+         VALUES ('Carrinho de Ferramentas', 'glb', 'dev/models/originals/x/carrinho.glb', 2048,
+                 '{"min":[0,0,0],"max":[0.6,0.4,0.3]}'::jsonb)
+         RETURNING id`,
+      )
+      .then((res) => res.rows);
+
+    const postRes = await request(app.getHttpServer())
+      .post('/anchors')
+      .send({
+        name: 'Ferramentas do Lab',
+        cloudAnchorId: 'ua-model-override-1',
+        modelId: model.id,
+      })
+      .expect(201);
+
+    // Sem categoria: o modelo do PONTO já resolve no POST (join pelo override)
+    expect(postRes.body.modelId).toBe(model.id);
+    expect(postRes.body.model).toMatchObject({
+      format: 'glb',
+      boundingBox: { min: [0, 0, 0], max: [0.6, 0.4, 0.3] },
+    });
+    expect(postRes.body.model.url).toContain('carrinho.glb');
+
+    // FK violada → 409 amigável (AllExceptionsFilter mapeia 23503)
+    await request(app.getHttpServer())
+      .post('/anchors')
+      .send({
+        name: 'Ponto Órfão',
+        cloudAnchorId: 'ua-model-override-2',
+        modelId: '00000000-0000-4000-8000-000000000000',
+      })
+      .expect(409);
+  });
+
   it('POST /anchors com payload inválido deve ser rejeitado pelo ZodValidationPipe com 400', async () => {
     const invalidPayload = {
       name: '', // Nome vazio inválido

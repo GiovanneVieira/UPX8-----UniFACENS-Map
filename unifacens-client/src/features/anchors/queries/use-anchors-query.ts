@@ -3,8 +3,9 @@ import {
   fetchAnchors,
   createAnchor,
   deleteAnchor,
+  patchAnchor,
 } from '@/services/api';
-import type { CreateAnchorDto } from 'shared';
+import type { CreateAnchorDto, UpdateAnchorDto } from 'shared';
 
 export const anchorKeys = {
   all: ['anchors'] as const,
@@ -44,6 +45,23 @@ export function useDeleteAnchorMutation() {
 
   return useMutation({
     mutationFn: (id: string) => deleteAnchor(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: anchorKeys.all });
+    },
+  });
+}
+
+/**
+ * Hook de mutação para atualizar o contrato de ancoragem de uma âncora
+ * (cloudAnchorId/frameOffset/geospatialAnchorId) — usado pelo hosting
+ * geoespacial em background (F2: PATCH quando o host resolve após o save).
+ */
+export function usePatchAnchorMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, dto }: { id: string; dto: UpdateAnchorDto }) =>
+      patchAnchor(id, dto),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: anchorKeys.all });
     },

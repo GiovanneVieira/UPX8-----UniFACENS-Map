@@ -2,6 +2,7 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { admin } from 'better-auth/plugins';
 import { jwt } from 'better-auth/plugins/jwt';
+import { expo } from '@better-auth/expo';
 import type { ApiEnvironment } from 'shared';
 import type { DrizzleDB } from '../../db/database.module.js';
 import {
@@ -67,6 +68,14 @@ export function createBetterAuth(
         }
       : {}),
     plugins: [
+      // Plugin expo (SERVER) — ensina o better-auth a ler o header
+      // `expo-origin` que o expoClient do app nativo envia no lugar do
+      // `Origin` (nativos não mandam Origin). SEM ele: qualquer request COM
+      // cookie de sessão válido (assinatura HMAC ok, mesmo sessão revogada/
+      // expirada) ativa o CSRF-check → 403 MISSING_OR_NULL_ORIGIN → o
+      // re-login fica impossível (lição de device 2026-11-12: sessões
+      // revogadas pelo seed do boot dispararam a primeira ocorrência).
+      expo(),
       admin({
         defaultRole: 'user',
         adminRoles: ['admin'],

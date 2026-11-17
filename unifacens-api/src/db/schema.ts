@@ -33,6 +33,16 @@ export const models = pgTable(
     /** Chave do GLB derivado (apenas quando format = 'fbx'). */
     derivedKey: text('derived_key'),
     sizeBytes: integer('size_bytes').notNull(),
+    /**
+     * Bounding box canônico do modelo {min,max} em coordenadas do arquivo —
+     * computado 1× no upload (parser puro GLB/GLTF/OBJ, sem three.js; VRX
+     * fica null). Preview web e Viro3DObjectPin (AR) derivam scale/offset
+     * daqui: modelo recentralizado e normalizado em TODOS os consumers.
+     */
+    boundingBox: jsonb('bounding_box').$type<{
+      min: [number, number, number];
+      max: [number, number, number];
+    } | null>(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -87,6 +97,14 @@ export const anchors = pgTable('anchors', {
   categoryId: uuid('category_id').references(() => categories.id, {
     onDelete: 'restrict',
   }),
+  /**
+   * Modelo 3D OVERRIDE do pin (F3): quando setado, o AR renderiza este
+   * modelo em vez do modelo da categoria (carousel de escolha por ponto).
+   * Null = herda o da categoria (fallback ViroBox sem categoria/modelo).
+   */
+  modelId: uuid('model_id').references(() => models.id, {
+    onDelete: 'restrict',
+  }),
   positionX: doublePrecision('position_x'),
   positionY: doublePrecision('position_y'),
   positionZ: doublePrecision('position_z'),
@@ -94,6 +112,22 @@ export const anchors = pgTable('anchors', {
   longitude: doublePrecision('longitude'),
   altitude: doublePrecision('altitude'),
   heading: doublePrecision('heading'),
+  /**
+   * UUID da plataforma ReactVision da âncora geoespacial HOSPEDADA
+   * (hostGeospatialAnchor) — persistida no RV e resolvível entre sessões e
+   * por outros usuários (resolveGeospatialAnchor). Distinto do
+   * cloudAnchorId (âncora VISUAL): camadas de precisão no client =
+   * cloud (cm) > geospatial (m) > projeção client-side.
+   */
+  geospatialAnchorId: text('geospatial_anchor_id'),
+  /** Acurácia horizontal (m, 95%) da pose média no momento do hosting — selo honesto "±Xm". */
+  geospatialAccuracyM: doublePrecision('geospatial_accuracy_m'),
+  /**
+   * Ajuste fino de ALTITUDE (m, −50..+50): somado ao Y apenas nas camadas
+   * imprecisas (geospatial nativa + ENU) — corrige o viés vertical do GPS
+   * no hosting. Cloud visual (cm) não recebe.
+   */
+  altitudeOffsetM: doublePrecision('altitude_offset_m'),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),

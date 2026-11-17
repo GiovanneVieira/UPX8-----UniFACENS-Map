@@ -152,6 +152,7 @@ export function useCloudAnchors({
   trackingState,
   focused = true,
   geoPoseRef,
+  hostingActive = false,
 }: {
   serverAnchors: Anchor[] | undefined;
   trackingState: number;
@@ -159,6 +160,16 @@ export function useCloudAnchors({
   focused?: boolean;
   /** Pose geospatial atual (ref) — ordena candidatos por proximidade. */
   geoPoseRef?: React.MutableRefObject<GeospatialPose | null>;
+  /**
+   * Fluxo de hosting por PONTO em curso (placing/guiding/hosting)?
+   * ⚠️ O módulo nativo do Viro é one-op-por-vez (§12.12): um resolve em voo
+   * pendura o hostCloudAnchor até o timeout JS (lição de device 2026-11-12:
+   * "hostCloudAnchor: sem resposta em 90s" com o resolve concorrente). Com
+   * a criação ativa o loop NÃO agenda novas tentativas — a fila nativa fica
+   * reservada para hit-test/createAnchoredNode/hostCloudAnchor. O resolve
+   * em andamento termina (≤35s) e o loop retoma no próximo tick.
+   */
+  hostingActive?: boolean;
 }) {
   /** Mapa pinId -> entrada resolvida (posição de sessão — prioridade máx). */
   const [entries, setEntries] = useState<Map<string, NativeAnchorEntry>>(new Map());
@@ -167,6 +178,9 @@ export function useCloudAnchors({
   const aliveRef = useRef(true);
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
+  /** Criação de ponto em curso — reserva a fila nativa (ver prop). */
+  const hostingRef = useRef(hostingActive);
+  hostingRef.current = hostingActive;
   /** HUD: progresso do resolve em curso. */
   const [resolveHud, setResolveHud] = useState<ResolveHudStatus | null>(null);
   /** Pins cloud ainda não localizados (aguardando resolve). */
@@ -208,7 +222,9 @@ export function useCloudAnchors({
   const provisionalRef = useRef<Set<string>>(new Set());
 
   const setEntry = useCallback((entry: NativeAnchorEntry) => {
-    entriesRef.current.set(entry.pinId, entry);
+    // Entradas do loop cloud são SEMPRE 'cloud' (visual, cm) — o merge do
+    // container as põe acima das geospatial na prioridade de render.
+    entriesRef.current.set(entry.pinId, { ...entry, source: 'cloud' });
     setEntries(new Map(entriesRef.current));
   }, []);
 
@@ -216,7 +232,7 @@ export function useCloudAnchors({
   const setProvisionalEntry = useCallback(
     (entry: NativeAnchorEntry) => {
       provisionalRef.current.add(entry.pinId);
-      entriesRef.current.set(entry.pinId, entry);
+      entriesRef.current.set(entry.pinId, { ...entry, source: 'cloud' });
       setEntries(new Map(entriesRef.current));
     },
     [],
@@ -441,6 +457,9 @@ export function useCloudAnchors({
 
   useEffect(() => {
     if (!serverAnchors || trackingState < 2 || !focusedRef.current) return;
+    // Reserva da fila nativa durante a criação de ponto (one-op-por-vez,
+    // §12.12): resolve concorrente pendurava o hostCloudAnchor (90s).
+    if (hostingRef.current) return;
 
     // Candidatos: cloud real SEM entry definitiva OU com entry PROVISÓRIA
     // (posição do locationTransform — o resolve a confirma). Ordenados por

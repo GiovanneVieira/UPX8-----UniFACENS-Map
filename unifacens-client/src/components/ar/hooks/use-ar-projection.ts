@@ -6,17 +6,14 @@ import { isPoseFresh, type GeospatialPose } from './use-geospatial-pose';
 /**
  * ── Projeção de âncoras pós-WorldAnchor — DUAS fontes ──────────────────────
  *
- * 1. Âncora NATIVA (ARCore mantém Terra-ancorada) — prioridade máxima.
- * 2. FALLBACK world-stable via pose geospatial + Δ do mundo (motor de
- *    alinhamento): pos = camPos + R(Δ)·ENU(pose→pin). Congelado uma vez
- *    com low-pass + convergência monótona — o pin nasce UMA vez, no lugar
- *    certo (padrão Live View), e desliza (jamais salta) para a âncora
- *    nativa quando ela resolve.
- *
- * Pins cloud PENDENTES de resolve: invisíveis durante a cortesia
- * (GHOST_GRACE_MS) e depois projetados como estimativa "ghost" (isGhost —
- * não selecionável). O resolve o substitui com transição suave — ONE-WAY
- * por construção (E5 preservada: sem oscilação cravado↔GPS).
+ * 1. Âncora NATIVA/cloud VISUAL resolvida (frame de SESSÃO — cm) — prioridade
+ *    máxima. (Geospatial nativo do provider reactvision NÃO entra aqui: suas
+ *    posições vêm num frame de terra do projeto, dezenas de km — P7 descarta.)
+ * 2. PROJEÇÃO ENU+Δ com as coords do banco (lat/lng confirmadas pelo hosting
+ *    geoespacial) — a camada DEFAULT (fluxo 2026-11-16): todo pin com lat/lng
+ *    projeta IMEDIATAMENTE, sólido, com selo honesto "±Xm". Nasce uma vez,
+ *    low-pass + convergência monótona; o resolve cloud visual (frame de
+ *    sessão, cm) o substitui com transição suave ONE-WAY quando fecha.
  */
 
 /** Acurácia máxima da pose para o fallback projetar pins (m). */
@@ -44,13 +41,19 @@ const WORLD_FLOOR_Y = -1.5;
 /** Mudança mínima de posição para iniciar transição suave (m). */
 const TRANSITION_MIN_JUMP_M = 0.05;
 /**
- * Coordenadas de SESSÃO AR vivem a poucas dezenas de metros da origem
- * (origem = pose do celular no launch). Valores em km indicam datum
- * errado vazando (ECEF do resolveCloudAnchor 3.0.3 ≈ 6,37 Mm, geodésica
- * parcial ≈ km) — lição de device 2026-11-10: telemetria [ARProj] reportou
- * gap de 3.446 km entre nativa e estimativa (P7).
+ * Guard de DATUM para posições de âncoras nativas: o que ele caça é ECEF
+ * vazando (resolveCloudAnchor 3.0.3 ≈ 6,37 Mm) e geodésica parcial (≈ Mm) —
+ * lição de device 2026-11-10: gap de 3.446 km reportado pela telemetria
+ * [ARProj] (P7).
+ *
+ * ⚠️ NÃO apertar (lição de device 2026-11-16 noite): âncoras geospatial do
+ * RV devolvem posição no FRAME DA SESSÃO com eixos rotacionados pelo yaw do
+ * launch — um pin a 74km (campus↔casa) LEGITIMAMENTE resolve a dezenas de
+ * km. O cap de 1km matava pins distantes e levou ao diagnóstico errado de
+ * "frame de terra do projeto" (que desligou a fila nativa no RV — revertido).
+ * 1000km: pega ECEF/Mm, libera qualquer pin terrestre real.
  */
-const MAX_SESSION_COORD_M = 1000;
+const MAX_SESSION_COORD_M = 1_000_000;
 /** Gap nativa↔estimativa acima disto = datum/Δ suspeito (não é ruído de GPS). */
 const SUSPICIOUS_GAP_M = 100;
 
@@ -130,18 +133,6 @@ interface UseARProjectionParams {
   poseTick: GeospatialPose | null;
   /** Bump manual (botão de refresh) — limpa estimativas e re-projeta. */
   reprojectNonce: number;
-  /**
-   * Pins cloud aguardando resolve (useCloudAnchors): invisíveis durante a
-   * cortesia (agora < GHOST_GRACE_MS) — resolve rápido fecha antes do
-   * ghost nascer.
-   */
-  pendingIds: ReadonlySet<string>;
-  /**
-   * Pins cloud pendentes ELEGÍVEIS a ghost (≥ cortesia): projetam como
-   * estimativa com `isGhost` (não selecionável; o resolve o substitui com
-   * transição suave — one-way, jamais regressa a GPS).
-   */
-  ghostIds: ReadonlySet<string>;
 }
 
 export function useARProjection({
@@ -152,8 +143,6 @@ export function useARProjection({
   delta,
   poseTick,
   reprojectNonce,
-  pendingIds,
-  ghostIds,
 }: UseARProjectionParams) {
   const [anchors, setAnchors] = useState<Anchor[]>([]);
   /**
@@ -175,6 +164,8 @@ export function useARProjection({
   const [transitionActive, setTransitionActive] = useState(false);
   /** Pins já avisados por datum inválido (evita spam de log a 1Hz). */
   const datumWarnedRef = useRef<Set<string>>(new Set());
+  /** Último aviso de "mundo vazio" (telemetria 1×/30s). */
+  const emptyWorldWarnedAtRef = useRef<number | null>(null);
 
   const recompute = useCallback(() => {
     if (!serverAnchors) {
@@ -230,8 +221,12 @@ export function useARProjection({
       let renderPos: [number, number, number] | null = null;
       let estimated = false;
       let estimateAccuracyM: number | undefined;
-      /** Pendente elegível: estimativa "ghost" (não selecionável). */
-      const isGhost = ghostIds.has(anchor.id);
+      /**
+       * isGhost morreu como ESTADO VISUAL (fluxo 2026-11-16): todo pin com
+       * coords renderiza sólido estimado ±Xm (camada geospatial default) e o
+       * resolve cloud faz o upgrade one-way. O HUD segue avisando os
+       * pendentes ("aproxime-se") via pendingIds do use-cloud-anchors.
+       */
 
       if (native && isSessionPosition(native.position)) {
         // 1. Âncora nativa — ARCore mantém Terra-ancorada. Sempre vence.
@@ -248,9 +243,17 @@ export function useARProjection({
             if (gap > SUSPICIOUS_GAP_M) {
               // Gap de centenas de metros não é ruído de GPS: é datum ou Δ
               // incorreto em uma das fontes (lição P7 — 3.446 km era ECEF).
-              console.warn(
-                `[ARProj] "${anchor.name}" gap SUSPEITO de ${gap.toFixed(0)}m (nativa↔estimativa) — conferir datum/Δ antes de confiar`,
-              );
+              // Pins DISTANTES (>1km) são benignos por construção: nativa e
+              // estimativa posicionam o mesmo pin em FRAMES diferentes — o
+              // gap cross-frame é esperado e o render é subpixel (lição
+              // 2026-11-16: os warns de 26-59km eram ruído).
+              const nativeRangeM = Math.hypot(native.position[0], native.position[2]);
+              if (nativeRangeM <= 1000) {
+                const cam = cameraPosRef.current;
+                console.warn(
+                  `[ARProj] "${anchor.name}" gap SUSPEITO de ${gap.toFixed(0)}m (nativa↔estimativa) — conferir datum/Δ antes de confiar · cam=[${cam.map((v) => v.toFixed(1)).join(', ')}] nativa=[${native.position.map((v) => v.toFixed(1)).join(', ')}] est.±${estimate.targetAccM.toFixed(0)}m`,
+                );
+              }
             } else {
               console.log(
                 `[ARProj] "${anchor.name}" âncora nativa resolveu a ${gap.toFixed(1)}m da estimativa (est. ±${estimate.targetAccM.toFixed(0)}m) — nativa vence`,
@@ -259,6 +262,19 @@ export function useARProjection({
           }
         }
         renderPos = native.position;
+        // Selo honesto p/ âncora geoespacial (m) — COMPOSTO: o erro total é
+        // o viés do GPS na CRIAÇÃO (geospatialAccuracyM gravado no banco) ⊕
+        // o viés da pose da SESSÃO atual (pesquisa de precisão 2026-11-16:
+        // dois erros independentes empilhados — os 11.8-17.1m medidos em
+        // device). max() como aproximação honesta; legados sem número
+        // seguem sólidos como antes.
+        if (native.source === 'geospatial' && typeof anchor.geospatialAccuracyM === 'number') {
+          estimated = true;
+          estimateAccuracyM = Math.max(
+            anchor.geospatialAccuracyM,
+            Number.isFinite(pose?.horizontalAccuracy ?? NaN) ? (pose?.horizontalAccuracy as number) : 0,
+          );
+        }
         const prev = renderedRef.current.get(anchor.id);
         if (
           prev &&
@@ -293,8 +309,10 @@ export function useARProjection({
         delta !== null &&
         pose &&
         isPoseFresh(pose) &&
-        // Pendente de resolve cloud: invisível na cortesia, ghost depois.
-        (!pendingIds.has(anchor.id) || ghostIds.has(anchor.id)) &&
+        // Camada GEOSPATIAL DEFAULT (fluxo 2026-11-16): pins com lat/lng
+        // (todos) projetam IMEDIATAMENTE via ENU+Δ — sólidos, estimados
+        // ±Xm, SEM cortesia de ghost. O resolve cloud visual (frame de
+        // sessão, cm) continua como upgrade one-way por Prioridade 1.
         // Acurácia estrita OU best-effort per-pin após FALLBACK_TIMEOUT_MS.
         (strictAccuracyOk || pinBestEffort(anchor.id, now, strictAccuracyOk))
       ) {
@@ -307,6 +325,29 @@ export function useARProjection({
           anchor.longitude,
           0,
         );
+        /**
+         * Sanity cap no NASCIMENTO da estimativa (par do guard P7 das
+         * âncoras nativas): |ENU| > 1000km = datum envenenado (ex.: pose
+         * zerada que escapou, ECEF vazando) — recusa e espera pose melhor.
+         * ⚠️ NÃO apertar: pins LEGITIMAMENTE distantes (campus↔casa = 74km)
+         * precisam projetar para aparecerem na listagem com a distância
+         * real (lição de device 2026-11-16: cap de 1km sumia com todos os
+         * pins longe da lista). Render a 74km é subpixel — inofensivo.
+         */
+        const MAX_ESTIMATE_RANGE_M = 1_000_000; // 1000km — guard de datum
+        const enuRangeM = Math.hypot(east, north);
+        if (enuRangeM > MAX_ESTIMATE_RANGE_M) {
+          if (!datumWarnedRef.current.has(anchor.id)) {
+            datumWarnedRef.current.add(anchor.id);
+            console.warn(
+              `[ARProj] "${anchor.name}" estimativa recusada: |ENU| ${(enuRangeM / 1000).toFixed(0)}km > ${MAX_ESTIMATE_RANGE_M / 1000}km (datum/pose suspeitos) — aguardando pose melhor`,
+            );
+          }
+          waitingSinceRef.current.delete(anchor.id);
+          // `continue` (não return!): pula SÓ este pin — o recompute segue
+          // para os demais e a limpeza/setAnchors do final roda.
+          continue;
+        }
         const { x, z } = enuToArXZ(east, north, delta);
         let y = WORLD_FLOOR_Y;
         if (
@@ -393,6 +434,17 @@ export function useARProjection({
         }
       }
 
+      /**
+       * AJUSTE FINO DE ALTITUDE (2026-11-16): o offset do ponto corrige o
+       * viés vertical do GPS no hosting — aplicado ao Y SOMENTE nas camadas
+       * imprecisas (âncora geospatial nativa + estimativa ENU). O cloud
+       * visual (cm, onde o usuário tocou) é a verdade — nunca deslocado.
+       */
+      const altOffset = anchor.altitudeOffsetM ?? 0;
+      if (renderPos && altOffset !== 0 && native?.source !== 'cloud') {
+        renderPos = [renderPos[0], renderPos[1] + altOffset, renderPos[2]];
+      }
+
       if (renderPos && isValidPosition(renderPos)) {
         renderedRef.current.set(anchor.id, renderPos);
         // Distância VIVA: recalculada a cada tick conforme a câmera anda.
@@ -407,7 +459,6 @@ export function useARProjection({
           distanceMeters: Number(dist.toFixed(2)),
           estimated,
           estimateAccuracyM,
-          isGhost,
         });
       }
     }
@@ -431,7 +482,31 @@ export function useARProjection({
 
     setAnchors(projected);
     setTransitionActive(transitionsRef.current.size > 0);
-  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef, pendingIds, ghostIds]);
+
+    /**
+     * Telemetria de vazio (lição do quarto, 2026-11-16): sessão com pins no
+     * servidor e NADA projetado era invisível nos logs — sem pose (RV sem
+     * fix GPS/VPS indoor) ou sem Δ, o mundo fica vazio e não há pista.
+     * Loga 1×/30s o motivo para diagnóstico de campo.
+     */
+    if (projected.length === 0 && serverAnchors.length > 0) {
+      const now = Date.now();
+      if (now - (emptyWorldWarnedAtRef.current ?? 0) > 30_000) {
+        emptyWorldWarnedAtRef.current = now;
+        // Pose ausente ≠ STALE (lição de device 2026-11-16: o warn dizia
+        // "pose ok" quando o gate real exige FRESCA ≤5s — diagnostic cego).
+        const poseStaleS = pose ? Math.round((now - pose.timestamp) / 1000) : 0;
+        const poseDesc = !pose
+          ? 'SEM pose (RV sem fix GPS/VPS)'
+          : isPoseFresh(pose)
+            ? `pose fresca (±${pose.horizontalAccuracy.toFixed(0)}m)`
+            : `pose STALE há ${poseStaleS}s (poll pendurado?)`;
+        console.warn(
+          `[ARProj] mundo vazio: ${serverAnchors.length} pin(s) no servidor, 0 projetados — ${poseDesc}, Δ=${delta === null ? 'destravado' : 'ok'}${cameraPosRef.current ? '' : ', sem camPos'}`,
+        );
+      }
+    }
+  }, [serverAnchors, nativeEntries, delta, geoPoseRef, cameraPosRef]);
 
   recomputeRef.current = recompute;
 

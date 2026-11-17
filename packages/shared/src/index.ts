@@ -24,3 +24,4 @@ export * from './utils/navigation-search.js';
 export * from './constants/campus.js';
 
 export * from './schemas/admin.schema.js';
+export * from './schemas/orphan-anchor.schema.js';

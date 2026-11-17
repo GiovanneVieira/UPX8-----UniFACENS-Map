@@ -41,7 +41,13 @@ describe('AnchorsService (Unit)', () => {
       leftJoin: vi.fn().mockReturnThis(),
       orderBy: vi.fn().mockResolvedValue([joinedRow()]),
       where: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockImplementation(() => Promise.resolve([joinedRow()])),
+      // Re-read pós-insert/update (join com categoria/modelo): devolve a row
+      // INSERIDA embrulhada no shape do join quando houve insert no teste.
+      limit: vi.fn().mockImplementation(() =>
+        Promise.resolve([
+          lastInserted ? { ...joinedRow(), anchor: lastInserted } : joinedRow(),
+        ]),
+      ),
       insert: vi.fn().mockReturnThis(),
       values: vi.fn().mockImplementation((val) => {
         lastInserted = { id: 'new-id', createdAt: new Date('2026-01-01T00:00:00.000Z'), ...val };

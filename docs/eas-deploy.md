@@ -15,6 +15,43 @@ Actions → *EAS Build (Android)* → Run workflow (escolhe `preview`/`productio
   oficiais); o Node 24 do dev/verify.yml fica no runner próprio, não precisa
   casar com a nuvem.
 
+## Gate de manifesto (antes da fila EAS)
+
+O passo **"Gate — invariantes do manifesto Android"** roda no
+`eas-build.yml` ANTES do `eas build` (e no `verify.yml` em todo push/PR):
+`npm run manifest:check --workspace=unifacens-client` executa o
+`scripts/assert-manifest.mjs`, que roda `expo prebuild --no-install --clean`,
+lê o `AndroidManifest.xml` gerado e EXIGE as meta-data críticas
+(`com.google.android.geo.API_KEY`, `com.google.android.ar.API_KEY`,
+`com.reactvision.RVApiKey`, `com.reactvision.RVProjectId`) presentes e
+não-vazias.
+
+Motivo: um prebuild pode ter SUCESSO gerando um manifesto INCOMPLETO — o APK
+compila, instala e só CRASHA em runtime (`IllegalStateException: API key not
+found` ao montar o primeiro MapView — lição 2026-11-11). Com o gate, essa
+classe de erro vira vermelho de ~2min no Actions SEM queimar quota/fila do
+EAS. No CI as env são DUMMY (o gate valida o pipeline config→manifesto; os
+segredos reais vivem nas EAS Environment Variables da nuvem).
+
+⚠️ O script usa `--clean` e REGENERA o `android/` local (CNG
+não-versionado — nunca editar à mão esperando que o EAS herde).
+
+## Build local (sem fila, sem quota)
+
+```bash
+cd unifacens-client
+eas build --local --profile preview --platform android
+```
+
+Compila na SUA máquina (requer Android SDK/Java — os mesmos do
+`npx expo run:android`), **não entra na fila** do plano free e **não consome
+a cota mensal**. Mesmo resultado do preview em nuvem — ideal para o loop
+"fix → validar APK". O APK sai em `unifacens-client/build/`.
+
+Dev diário continua sendo `npm --workspace=unifacens-client run android`
+(dev build + Metro); o perfil `development` NÃO existe no `eas.json` de
+propósito (criar só se precisar distribuir um APK debug para outro device).
+
 ## Setup único (uma vez por conta/repo)
 
 ### 1. Conta Expo + projeto

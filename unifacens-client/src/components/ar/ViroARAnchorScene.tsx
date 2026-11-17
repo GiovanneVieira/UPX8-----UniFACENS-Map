@@ -11,7 +11,7 @@ import {
   ViroDirectionalLight,
   ViroMaterials,
 } from '@reactvision/react-viro';
-import type { Anchor } from 'shared';
+import type { Anchor, CategoryModel } from 'shared';
 import { isUsablePoint } from 'shared';
 import { resolveAssetUrl } from '@/services/api';
 import type { RouteChevron } from '@/features/ar/hooks/use-ar-navigation';
@@ -128,10 +128,31 @@ export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
    * ajusta a distância da mira.
    */
   previewPosition?: [number, number, number] | null;
+  /**
+   * Modelo 3D selecionado no carousel durante a criação (F3): o preview
+   * NOVO PONTO renderiza o MODELO REAL em vez do diamante âmbar — o usuário
+   * vê o marcador final girando/escala reais enquanto escolhe.
+   */
+  previewModel?: CategoryModel | null;
   /** Janela de chevrons da sessão de navegação (keys = arco em metros). */
   routeChevrons?: RouteChevron[];
   /** Status do modo Geospatial (suporte no device / erros de key). */
   onGeospatialStatus?: (supported: boolean, error?: string) => void;
+  /**
+   * Estado do EARTH tracking do SDK (VPS_LITE.md): "Stopped" | "Localizing"
+   * | "Enabled" | "Paused". `Localizing → Enabled` é travado internamente
+   * em ~15m de acurácia horizontal — é O gate de prontidão da fila
+   * geospatial no container (substitui o gate caseiro ≤20m da era arcore,
+   * que congelava os fetches com GPS ruim — lição de device 2026-11-16).
+   */
+  onEarthState?: (state: 'Stopped' | 'Localizing' | 'Enabled' | 'Paused') => void;
+  /**
+   * Localização APPROXIMADA concedida (iOS "Precise Location off" / Android
+   * coarse-only): acurácia fica em escala de km e o earth fica em Localizing
+   * PARA SEMPRE — a doc exige erro ACIONÁVEL ("ative Localização Precisa"),
+   * não um hang silencioso.
+   */
+  onLocationAccuracyReduced?: (reduced: boolean) => void;
   /** Pose geoespacial da câmera (poll 1Hz, ancorada na Terra via VPS). */
   onGeospatialPose?: (pose: Omit<GeospatialPose, 'timestamp'>) => void;
   /** Passa o arSceneNavigator para o container (criar âncoras nativas). */
@@ -153,25 +174,36 @@ export interface ViroARAnchorSceneProps {  anchors?: Anchor[];
    *  (poll geospatial/retries) enquanto o keep-alive do unmount drena os
    *  UIBlocks interop pendentes (anti-SIGSEGV, §12.12). */
   focused?: boolean;
+  /** Provider AR ativo ('reactvision' | 'arcore') — apenas diagnóstico/log. */
+  provider?: string;
   /** Tracking ≥ 2 (sessão viva) — gates de CHAMADA NATIVA (§12.12); não
    *  confundir com trackingHealthy (===3) que oculta CONTEÚDO. */
   trackingActive?: boolean;
+  /**
+   * Render dos planos detectados (feedback de superfície). Ligado pelo
+   * container APENAS no modo placing — o quad permanente era o artefato
+   * azul §12.9; na janela de posicionamento é pedagógico (o usuário vê
+   * onde o ARCore já enxerga antes de tocar).
+   */
+  showPlanes?: boolean;
   sceneNavigator?: any;
   arSceneNavigator?: any;
 }
 
 /**
- * Modelo 3D da categoria do pin (Viro3DObject com fallback honesto):
- * falha de load (URL inválida, formato, memória) degrada para o cubo
- * padrão — nunca tela vazia. Regra de Ouro §6: StyleSheet.create puro.
+ * Modelo 3D do pin (Viro3DObject com fallback honesto): falha de load (URL
+ * inválida, formato, memória) degrada para o cubo padrão — nunca tela vazia.
+ * F3: o modelo vem do OVERRIDE do pin (anchor.model) ou da categoria; o
+ * preview de criação reusa o mesmo componente com o modelo do carousel.
+ * Regra de Ouro §6: StyleSheet.create puro.
  */
 const Viro3DObjectPin: FC<{
-  anchor: Anchor;
+  model: CategoryModel | null;
   scaleFactor: number;
   materialName: string;
-}> = ({ anchor, scaleFactor, materialName }) => {
+  label?: string;
+}> = ({ model, scaleFactor, materialName, label }) => {
   const [failed, setFailed] = useState(false);
-  const model = anchor.category?.model ?? null;
   if (!model || failed) {
     // Fallback: cubo padrão (mesmo visual dos pins sem categoria).
     return (
@@ -189,15 +221,35 @@ const Viro3DObjectPin: FC<{
     // FBX sempre chega aqui como GLB derivado (url aponta pro derived/).
     fbx: 'GLB',
   };
+  // Bbox canônico (computado no upload): normaliza a maior dimensão para
+  // 0.35m×scaleFactor e centraliza o modelo no eixo do pin com a BASE
+  // assentada ~5cm acima do chão — mesmo arquivo com pivô deslocado nasce
+  // NO ponto (bug "modelo longe da âncora", 2026-11-12). Sem bbox
+  // (legado/VRX) mantém a escala fixa histórica.
+  const baseScale = 0.35 * scaleFactor;
+  let scale: [number, number, number] = [baseScale, baseScale, baseScale];
+  let position: [number, number, number] = [0, 0.05 * scaleFactor, 0];
+  if (model.boundingBox) {
+    const { min, max } = model.boundingBox;
+    const sizeX = max[0] - min[0];
+    const sizeY = max[1] - min[1];
+    const sizeZ = max[2] - min[2];
+    const maxDim = Math.max(sizeX, sizeY, sizeZ) || 1;
+    const k = baseScale / maxDim;
+    const centerX = (min[0] + max[0]) / 2;
+    const centerZ = (min[2] + max[2]) / 2;
+    scale = [k, k, k];
+    position = [-centerX * k, -min[1] * k + 0.05 * scaleFactor, -centerZ * k];
+  }
   return (
     <Viro3DObject
       source={{ uri: resolveAssetUrl(model.url) }}
       type={typeByFormat[model.format] ?? 'GLB'}
-      scale={[0.35 * scaleFactor, 0.35 * scaleFactor, 0.35 * scaleFactor]}
-      position={[0, 0.05 * scaleFactor, 0]}
-      onError={() => {
+      scale={scale}
+      position={position}
+      onError={(err) => {
         console.warn(
-          `[ARPin] Falha ao carregar modelo da categoria "${anchor.category?.label}" — fallback para o cubo.`,
+          `[ARPin] Falha ao carregar modelo "${label ?? 'sem categoria'}" (${resolveAssetUrl(model.url)}) — ${err instanceof Error ? err.message : String(err)} — fallback para o cubo.`,
         );
         setFailed(true);
       }}
@@ -214,7 +266,10 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
 
   const anchors = viroProps.anchors || [];
   const trackingHealthy = viroProps.trackingHealthy !== false;
+  // Planos visíveis: prop do container (placing) ou flag de debug local.
+  const showPlanes = viroProps.showPlanes ?? SHOW_DETECTED_PLANES;
   const previewPosition = viroProps.previewPosition ?? null;
+  const previewModel = viroProps.previewModel ?? null;
   const onCameraUpdate = viroProps.onCameraUpdate;
   const onTrackingUpdate = viroProps.onTrackingUpdate;
   const onRegisterSceneRef = viroProps.onRegisterSceneRef;
@@ -244,6 +299,10 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
   const geoPoseRef = useRef(viroProps.onGeospatialPose);
   geoStatusRef.current = viroProps.onGeospatialStatus;
   geoPoseRef.current = viroProps.onGeospatialPose;
+  const onEarthStateRef = useRef(viroProps.onEarthState);
+  const onLocationAccuracyReducedRef = useRef(viroProps.onLocationAccuracyReduced);
+  onEarthStateRef.current = viroProps.onEarthState;
+  onLocationAccuracyReducedRef.current = viroProps.onLocationAccuracyReduced;
   /** Tab focada (false no blur imediato) — congela o poll/retry nativo. */
   const focusedRef = useRef(viroProps.focused !== false);
   focusedRef.current = viroProps.focused !== false;
@@ -321,7 +380,9 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
         if (support?.supported) {
           await nav.setGeospatialModeEnabled(true);
           geoEnabledRef.current = true;
-          console.log('[ARGeo] modo Geospatial habilitado (provider arcore)');
+          // Provider REAL via viroAppProps (lição 2026-11-16: a string era
+          // hardcoded "arcore" e mascarou o diagnóstico do hosting geoespacial).
+          console.log(`[ARGeo] modo Geospatial habilitado (provider ${viroProps.provider ?? 'n/d'})`);
           geoStatusRef.current?.(true, undefined);
           return;
         }
@@ -384,12 +445,82 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
     const pollStartedAt = Date.now();
     let poseInFlight = false;
     let poseCallStartedAt = 0;
+    /**
+     * Poll do EARTH STATE (Frente A, 2026-11-16): getEarthTrackingState é a
+     * máquina de prontidão DO SDK (leitura local, sem quota) — transição
+     * Localizing→Enabled travada internamente em ~15m. Reporta mudanças ao
+     * container (gate da fila geospatial + HUD). Mesma disciplina do poll de
+     * pose: in-flight + watchdog 8s (one-op-por-vez, §12.12).
+     */
+    const EARTH_CALL_TIMEOUT_MS = 8000;
+    /** Localizing além disto = suspeita de localização aproximada (eterna). */
+    const LOCALIZING_ACTIONABLE_MS = 60_000;
+    let earthInFlight = false;
+    let earthCallStartedAt = 0;
+    let lastEarthState: string | null = null;
+    let localizingSince = 0;
+    let accuracyProbeAt = 0;
+
+    const pollEarthState = async (): Promise<void> => {
+      if (earthInFlight) {
+        if (Date.now() - earthCallStartedAt < EARTH_CALL_TIMEOUT_MS) return;
+        console.warn('[ARGeo] earth-state pendurada >8s — chamada perdida, renovando');
+        earthInFlight = false;
+      }
+      if (typeof nav?.getEarthTrackingState !== 'function') return;
+      earthInFlight = true;
+      earthCallStartedAt = Date.now();
+      try {
+        const result = (await nav.getEarthTrackingState()) as {
+          state?: 'Stopped' | 'Localizing' | 'Enabled' | 'Paused';
+          error?: string;
+        };
+        if (!sceneAliveRef.current) return;
+        const state = result?.state ?? 'Stopped';
+        if (state !== lastEarthState) {
+          console.log(`[ARGeo] earth: ${lastEarthState ?? '—'} → ${state}`);
+          lastEarthState = state;
+          onEarthStateRef.current?.(state);
+        }
+        if (state === 'Localizing') {
+          if (localizingSince === 0) localizingSince = Date.now();
+          // >60s em Localizing: a doc manda checar localização aproximada
+          // (fica em Localizing PARA SEMPRE, acurácia em km — VPS_LITE.md).
+          const dwelling = Date.now() - localizingSince;
+          if (dwelling > LOCALIZING_ACTIONABLE_MS && Date.now() - accuracyProbeAt > 30_000) {
+            accuracyProbeAt = Date.now();
+            if (typeof nav.isLocationAccuracyReduced === 'function') {
+              try {
+                const acc = (await nav.isLocationAccuracyReduced()) as { reduced?: boolean };
+                if (acc?.reduced) {
+                  console.warn('[ARGeo] Localizing eterno: localização APPROXIMADA concedida — usuário deve ativar Localização Precisa');
+                  onLocationAccuracyReducedRef.current?.(true);
+                } else {
+                  console.warn(`[ARGeo] Localizing há ${(dwelling / 1000).toFixed(0)}s (acurácia não cruzou o threshold) — aguardando`);
+                }
+              } catch {
+                // best-effort
+              }
+            }
+          }
+        } else {
+          localizingSince = 0;
+        }
+      } catch {
+        // silencioso: erros persistentes aparecem no onGeospatialStatus
+      } finally {
+        earthInFlight = false;
+      }
+    };
+
     const timer = setInterval(async () => {
       if (!sceneAliveRef.current || !geoEnabledRef.current) return;
       // Blur da tab OU tracking degradado (sinal do detach!): NÃO chamar o
       // nativo — cada chamada vira UIBlock interop que pode executar após o
       // destroy (SIGSEGV §12.12).
       if (!focusedRef.current || !trackingActiveRef.current) return;
+      // Earth-state primeiro (barato, local — alimenta o gate da fila).
+      void pollEarthState();
       // Fase lenta: pós-30s, só um tick a cada 2.5 janelas de 1s do interval.
       if (Date.now() - pollStartedAt > FAST_PHASE_MS && (slowTickRef.current = (slowTickRef.current + 1) % 3) !== 0) return;
       if (poseInFlight) {
@@ -556,7 +687,7 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           SEM onClick — planos interceptam o raycast de taps nos pins (o chão
           está fisicamente entre a câmera e qualquer pin a nível do solo).
           O botão "Marcar Ponto" já abre o modal via hit test do retículo. */}
-      {SHOW_DETECTED_PLANES
+      {showPlanes
         ? visiblePlanes.map((plane) => {
             const extentWidth = plane.width || 0.5;
             const extentHeight = plane.height || 0.5;
@@ -645,9 +776,10 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
               />
             ) : (
               <Viro3DObjectPin
-                anchor={anchor}
+                model={anchor.model ?? anchor.category?.model ?? null}
                 scaleFactor={scaleFactor}
                 materialName={materialName}
+                label={anchor.category?.label}
               />
             )}
 
@@ -677,16 +809,20 @@ export const ViroARAnchorScene: FC<ViroARAnchorSceneProps> = (props) => {
           ViroSharedFrame foram REMOVIDOS da cena. */}
       {/* ══ MODO PREVIEW: pin fantasma no ponto de criação ═════════════════
           Diamante âmbar + haste — visualmente DISTINTO dos pins regulares
-          (cubos coloridos). Atualiza em tempo real conforme o usuário
-          ajusta a distância da mira no modal minimizado. */}
+          (cubos coloridos). F3: com modelo selecionado no carousel, o preview
+          renderiza o MODELO REAL (preview ao vivo atrás do sheet). */}
       {previewPosition ? (
         <ViroNode position={previewPosition}>
-          {/* Diamante âmbar flutuante (rotaciona 45° nos 3 eixos) */}
-          <ViroBox
-            scale={[0.28, 0.28, 0.28]}
-            rotation={[45, 45, 0]}
-            materials={['previewPin']}
-          />
+          {previewModel ? (
+            <Viro3DObjectPin model={previewModel} scaleFactor={1} materialName="previewPin" label="preview" />
+          ) : (
+            /* Diamante âmbar flutuante (rotaciona 45° nos 3 eixos) */
+            <ViroBox
+              scale={[0.28, 0.28, 0.28]}
+              rotation={[45, 45, 0]}
+              materials={['previewPin']}
+            />
+          )}
           {/* Haste vertical fina até o "chão" */}
           <ViroBox
             position={[0, -0.35, 0]}

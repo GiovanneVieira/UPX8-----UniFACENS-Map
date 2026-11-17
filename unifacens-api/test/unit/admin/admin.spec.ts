@@ -29,6 +29,7 @@ const baseRecord = {
   altitude: 605,
   heading: 0,
   cloudAnchorId: 'test',
+  modelId: null as string | null,
   createdAt: new Date('2026-11-01T12:00:00Z'),
 };
 /** Shape do join com categoria devolvido pelo repository. */
@@ -41,6 +42,9 @@ const joinedRecord = {
   modelKey: null,
   modelDerivedKey: null,
   modelFormat: null,
+  anchorModelKey: null,
+  anchorModelDerivedKey: null,
+  anchorModelFormat: null,
 };
 /** Shape serializado esperado pelo mock do AnchorsService. */
 const detailRecord = {
@@ -70,6 +74,8 @@ const repository = {
     // a releitura do findPointById reflete a edição (como o service faz).
     key === id ? Object.assign(baseRecord, dto) : undefined,
   ),
+  // Guard do modelId (services checam, FK garante) — aceita qualquer UUID.
+  modelExists: vi.fn(async () => true),
 };
 
 describe('Painel administrativo HTTP', () => {
@@ -253,6 +259,88 @@ describe('Painel administrativo HTTP', () => {
       .set('Authorization', `Bearer ${admin}`)
       .send({ name: 'Outro' })
       .expect(404);
+  });
+
+  it('edita o modelo 3D override do ponto (modelId) e limpa com null (F3)', async () => {
+    const modelId = '3f6d0f0e-9f0f-4c0f-a3f0-1f2e3d4c5b6a';
+    const response = await request(app.getHttpServer())
+      .patch(`/admin/points/${id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .send({ modelId })
+      .expect(200);
+    expect(response.body.modelId).toBe(modelId);
+    // null limpa o override (pin volta a herdar o modelo da categoria)
+    const cleared = await request(app.getHttpServer())
+      .patch(`/admin/points/${id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .send({ modelId: null })
+      .expect(200);
+    expect(cleared.body.modelId).toBeNull();
+    // UUID malformado é rejeitado pelo schema
+    await request(app.getHttpServer())
+      .patch(`/admin/points/${id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .send({ modelId: 'nao-e-uuid' })
+      .expect(400);
+  });
+
+  it('serializa category.model com boundingBox (regressão do 500 no parse — lição 2026-11-16)', async () => {
+    // O anchorDetailSchema exige boundingBox (nullable) em category.model —
+    // o AdminService.point() montava o literal SEM o campo e todo
+    // PATCH/GET /admin/points com modelo vinculado explodia com 500
+    // (ZodError path ["category","model","boundingBox"], log 23:01:37).
+    repository.listPoints.mockResolvedValueOnce({
+      items: [
+        {
+          anchor: baseRecord,
+          categoryId: '48814a61-9fb3-4404-b494-699209862cbf',
+          categorySlug: 'laboratory',
+          categoryLabel: 'Laboratório',
+          modelId: '3f6d0f0e-9f0f-4c0f-a3f0-1f2e3d4c5b6a',
+          modelKey: 'models/originals/m/geladeira.glb',
+          modelDerivedKey: null,
+          modelFormat: 'glb',
+          modelBoundingBox: { min: [0, 0, 0], max: [1, 1, 1] },
+          anchorModelKey: null,
+          anchorModelDerivedKey: null,
+          anchorModelFormat: null,
+          anchorModelBoundingBox: null,
+        },
+      ],
+      total: 1,
+    });
+    const res = await request(app.getHttpServer())
+      .get('/admin/points')
+      .set('Authorization', `Bearer ${admin}`)
+      .query({})
+      .expect(200);
+    expect(res.body.items[0].category.model.boundingBox).toEqual({
+      min: [0, 0, 0],
+      max: [1, 1, 1],
+    });
+
+    // E o override do nível âncora também carrega boundingBox quando setado.
+    repository.findPointById.mockResolvedValueOnce({
+      anchor: { ...baseRecord, modelId: '3f6d0f0e-9f0f-4c0f-a3f0-1f2e3d4c5b6a' },
+      categoryId: null,
+      categorySlug: null,
+      categoryLabel: null,
+      modelId: null,
+      modelKey: null,
+      modelDerivedKey: null,
+      modelFormat: null,
+      modelBoundingBox: null,
+      anchorModelKey: 'models/originals/m/geladeira.glb',
+      anchorModelDerivedKey: null,
+      anchorModelFormat: 'glb',
+      anchorModelBoundingBox: { min: [0, 0, 0], max: [2, 2, 2] },
+    });
+    const patch = await request(app.getHttpServer())
+      .patch(`/admin/points/${id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .send({ name: 'Com override' })
+      .expect(200);
+    expect(patch.body.model.boundingBox).toEqual({ min: [0, 0, 0], max: [2, 2, 2] });
   });
 });
 

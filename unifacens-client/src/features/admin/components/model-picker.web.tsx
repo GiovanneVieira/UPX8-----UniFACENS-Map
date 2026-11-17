@@ -93,7 +93,7 @@ export function ModelPicker({
               accessibilityLabel="Padrão, sem modelo 3D"
               accessibilityState={{ selected: selectedId === '' }}
               onPress={() => onSelect('')}
-              className={`w-[31%] min-w-[150px] flex-1 gap-2 rounded-2xl border-2 p-2 ${
+              className={`w-[47%] min-w-0 flex-1 gap-2 rounded-2xl border-2 p-2 md:w-[31%] ${
                 selectedId === ''
                   ? 'border-blue-600 bg-blue-50'
                   : 'border-slate-200 bg-white'
@@ -121,7 +121,7 @@ export function ModelPicker({
               accessibilityLabel={`Vincular modelo ${entry.model.name}. Duplo clique para render completo`}
               accessibilityState={{ selected: selectedId === entry.model.id }}
               onPress={() => onSelect(entry.model.id)}
-              className={`relative w-[31%] min-w-[150px] flex-1 gap-2 rounded-2xl border-2 p-2 ${
+              className={`relative w-[47%] min-w-0 flex-1 gap-2 rounded-2xl border-2 p-2 md:w-[31%] ${
                 selectedId === entry.model.id
                   ? 'border-blue-600 bg-blue-50'
                   : 'border-slate-200 bg-white'

@@ -461,6 +461,41 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: 'ok' });
   });
+
+  it('re-login do app nativo (cookie de sessão + expo-origin, sem Origin) não cai no CSRF-check', async () => {
+    // Regressão 2026-11-12: o expoClient do app nativo envia `expo-origin`
+    // (nativos não mandam Origin) + cookie persistido. Sem o plugin `expo`
+    // no servidor, cookie com assinatura válida (mesmo sessão revogada pelo
+    // seed/expirada) ativava o CSRF-check → 403 MISSING_OR_NULL_ORIGIN →
+    // re-login impossível no device.
+    const firstSignIn = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify(commonFixture),
+    });
+    expect(firstSignIn.ok).toBeTruthy();
+    const sessionCookie = firstSignIn.headers
+      .getSetCookie()
+      .map((cookie) => cookie.split(';')[0])
+      .join('; ');
+    expect(sessionCookie).toContain('session_token');
+
+    // Re-login fiel ao device: cookie na mão, UA okhttp, expo-origin, SEM Origin.
+    const retry = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: sessionCookie,
+        'expo-origin': 'unifacensclient://',
+        'user-agent': 'okhttp/4.9.2',
+      },
+      body: JSON.stringify(adminFixture),
+    });
+    expect(retry.status).not.toBe(403);
+    expect(retry.ok).toBeTruthy();
+    const body = (await retry.json()) as { user: { email: string } };
+    expect(body.user.email).toBe(adminFixture.email);
+  });
   it('restringe listagem de usuários e edição dos pontos aos administradores', async () => {
     await request(app.getHttpServer()).get('/admin/users').expect(401);
     await request(app.getHttpServer()).get('/admin/users').set(bearer(commonJwt)).expect(403);

@@ -32,6 +32,12 @@ services:
       target: development
     restart: unless-stopped
     init: true
+    # ⚠️ Hot reload por ARQUITETURA (lição 2026-11-13): bind mounts de
+    # código no Docker Desktop/Windows são CEGOS a inotify — nem escritas
+    # internas ao container disparam fs.watch (a escrita atravessa a ponte
+    # para o host). Solução canônica: código entregue pelo develop.watch
+    # SYNC (escreve no overlay NATIVO do container → inotify dispara →
+    # nest --watch recompila). Os volumes abaixo só isolam node_modules.
     develop:
       watch:
         - action: sync
@@ -40,8 +46,20 @@ services:
         - action: sync
           path: ./unifacens-api/src
           target: /app/unifacens-api/src
+        - action: sync
+          path: ./unifacens-api/drizzle
+          target: /app/unifacens-api/drizzle
+        - action: sync
+          path: ./unifacens-api/drizzle.config.ts
+          target: /app/unifacens-api/drizzle.config.ts
+        # Dep nova = rebuild (paths EXPLÍCITOS: globs crasheiam o Compose
+        # no Windows — os.Stat("...package*.json") inválido).
         - action: rebuild
-          path: ./unifacens-api/package*.json
+          path: ./unifacens-api/package.json
+        - action: rebuild
+          path: ./package-lock.json
+        - action: rebuild
+          path: ./packages/shared/package.json
     ports:
       - "8000:8000"
     env_file:
@@ -50,10 +68,6 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./packages/shared:/app/packages/shared
-      - ./unifacens-api/src:/app/unifacens-api/src
-      - ./unifacens-api/drizzle:/app/unifacens-api/drizzle
-      - ./unifacens-api/drizzle.config.ts:/app/unifacens-api/drizzle.config.ts
       - /app/node_modules
       - /app/unifacens-api/node_modules
     networks:
@@ -74,19 +88,23 @@ services:
     tty: true
     develop:
       watch:
-      - action: sync
-        path: ./packages/shared
-        target: /app/packages/shared
-      - action: sync
-        path: ./unifacens-client/src
-        target: /app/unifacens-client/src
-      - action: rebuild
-        path: ./unifacens-client/package*.json
+        # Paths EXPLÍCITOS — globs crasheiam o Compose no Windows (2026-11-13).
+        - action: rebuild
+          path: ./unifacens-client/package.json
+        - action: rebuild
+          path: ./package-lock.json
+        - action: rebuild
+          path: ./packages/shared/package.json
     ports:
       - "8081:8081"
       - "8080:8081"
     env_file:
       - .env.client
+    environment:
+      # Hot reload em bind mount Windows (idem api — ver nota lá).
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "1000"
+      WATCHPACK_POLLING: "true"
     depends_on:
       - api
     volumes:

@@ -41,6 +41,9 @@ function friendlyFkMessage(constraint?: string): string {
   if (constraint.includes('categories_model_id')) {
     return 'Modelo vinculado a uma categoria. Desvincule antes de excluir.';
   }
+  if (constraint.includes('anchors_model_id')) {
+    return 'Modelo 3D informado não existe.';
+  }
   return 'Este registro está em uso por outro cadastro e não pode ser removido.';
 }
 
@@ -64,11 +67,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
+    const request = host
+      .switchToHttp()
+      .getRequest<Request & { requestId?: string }>();
+    // Correlação access log ↔ erro (requestLoggingMiddleware anexa o id).
+    const reqTag = `req:${request.requestId ?? '-'}`;
 
     const mapped = this.mapPostgres(exception);
     if (mapped) {
       const { status, body } = mapped;
-      this.logger.warn(`${status} · ${body.message} · ${mapped.constraint ?? ''}`);
+      this.logger.warn(`[${reqTag}] ${status} · ${body.message} · ${mapped.constraint ?? ''}`);
       response.status(status).json(this.envelope(status, body.error, body.message, host));
       return;
     }
@@ -81,7 +89,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       if (typeof body === 'object' && body !== null) {
         response.status(status).json({
           ...body,
-          path: host.switchToHttp().getRequest<Request>().url,
+          path: request.url,
           timestamp: new Date().toISOString(),
         });
         return;
@@ -94,7 +102,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // Desconhecido: log completo no servidor, resposta genérica.
     this.logger.error(
-      exception instanceof Error ? exception.stack : String(exception),
+      `[${reqTag}] ${exception instanceof Error ? exception.stack : String(exception)}`,
     );
     const message =
       this.nodeEnv === 'production'

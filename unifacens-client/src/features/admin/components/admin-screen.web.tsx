@@ -4,6 +4,7 @@ import {
   ScrollView,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Link } from 'expo-router';
@@ -14,22 +15,27 @@ import { AdminButton, AdminError, Pagination } from './admin-ui';
 import { PointEditor } from './point-editor.web';
 import { CategoryManager } from './category-manager.web';
 import { ModelManager } from './model-manager.web';
+import { OrphanAnchors } from './orphan-anchors.web';
 
 const SECTIONS: Array<{
   key: AdminSection;
   label: string;
+  /** Label curto para o modo rail (sidebar colapsada). */
+  shortLabel: string;
   icon: keyof typeof ICONS;
 }> = [
-  { key: 'points', label: 'Pontos do campus', icon: 'location-outline' },
-  { key: 'categories', label: 'Categorias', icon: 'pricetags-outline' },
-  { key: 'models', label: 'Modelos 3D', icon: 'cube-outline' },
-  { key: 'users', label: 'Usuários', icon: 'people-outline' },
+  { key: 'points', label: 'Pontos do campus', shortLabel: 'Pontos', icon: 'location-outline' },
+  { key: 'categories', label: 'Categorias', shortLabel: 'Categ.', icon: 'pricetags-outline' },
+  { key: 'models', label: 'Modelos 3D', shortLabel: 'Modelos', icon: 'cube-outline' },
+  { key: 'orphans', label: 'Âncoras órfãs', shortLabel: 'Órfãs', icon: 'cloud-offline-outline' },
+  { key: 'users', label: 'Usuários', shortLabel: 'Usuários', icon: 'people-outline' },
 ];
 
 const ICONS = {
   'location-outline': 'location-outline',
   'pricetags-outline': 'pricetags-outline',
   'cube-outline': 'cube-outline',
+  'cloud-offline-outline': 'cloud-offline-outline',
   'people-outline': 'people-outline',
 } as const;
 
@@ -44,7 +50,12 @@ const SECTION_HEADINGS: Record<AdminSection, { title: string; subtitle: string }
   },
   models: {
     title: 'Modelos 3D',
-    subtitle: 'Envie GLB, glTF, OBJ ou FBX (convertido para GLB) e vincule às categorias.',
+    subtitle: 'Envie GLB, glTF (com buffers embutidos), OBJ ou VRX e vincule às categorias.',
+  },
+  orphans: {
+    title: 'Âncoras órfãs',
+    subtitle:
+      'Âncoras hospedadas na plataforma sem ponto no banco (criação interrompida) — adote para registrá-las sem re-escanear.',
   },
   users: {
     title: 'Usuários cadastrados',
@@ -55,6 +66,12 @@ const SECTION_HEADINGS: Record<AdminSection, { title: string; subtitle: string }
 export function AdminScreen() {
   const panel = useAdminPanel();
   const { auth, section, query, points, users } = panel;
+  const { width } = useWindowDimensions();
+  const collapsed = panel.sidebarCollapsed;
+  // Expandida em telas pequenas = overlay sobre o conteúdo (a sidebar de
+  // 256px fixa deixaria o painel inutilizável abaixo de ~400px).
+  const overlayMenu = !collapsed && width < 768;
+
   if (!auth.isAdmin)
     return (
       <View className="flex-1 items-center justify-center gap-4 bg-slate-50 p-8">
@@ -72,66 +89,179 @@ export function AdminScreen() {
         </Link>
       </View>
     );
+
+  const orphanCount = panel.orphans.data?.length ?? 0;
+
   return (
     <>
       <Head>
         <title>Administração — UniFACENS Map</title>
       </Head>
-      <View className="flex-1 bg-slate-50 md:flex-row">
-        <View className="gap-5 bg-slate-950 px-5 py-6 md:w-64 md:py-9">
-          <View className="flex-row items-center gap-3">
-            <View className="h-11 w-11 items-center justify-center rounded-xl bg-blue-600">
-              <Ionicons name="map-outline" size={24} color="white" />
-            </View>
-            <View>
-              <Text className="text-lg font-bold text-white">UniFACENS</Text>
-              <Text className="text-xs tracking-widest text-slate-400">
-                MAP · ADMINISTRAÇÃO
-              </Text>
-            </View>
-          </View>
-          <Text className="mt-3 hidden text-xs font-semibold uppercase tracking-widest text-slate-400 md:flex">
-            Área de gestão
-          </Text>
-          <View className="flex-row gap-2 md:flex-col">
-            {SECTIONS.map((item) => (
-              <Pressable
-                key={item.key}
-                accessibilityRole="button"
-                accessibilityLabel={item.label}
-                accessibilityState={{ selected: section === item.key }}
-                onPress={() => panel.changeSection(item.key)}
-                className={`min-h-[48px] flex-1 flex-row items-center gap-3 rounded-xl px-4 py-3 md:flex-none ${section === item.key ? 'bg-blue-600' : 'bg-slate-900'}`}
-              >
-                <Ionicons
-                  name={item.icon}
-                  size={20}
-                  color="white"
-                />
-                <Text className="font-semibold text-white">{item.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <View className="hidden flex-1 md:flex" />
-          <Link
-            href="/campus"
-            className="py-3 text-sm font-semibold text-sky-300"
+      <View className="relative flex-1 bg-slate-50 md:flex-row">
+        {/* Backdrop: sidebar expandida em tela pequena (toque recolhe). */}
+        {overlayMenu && (
+          <div
+            role="presentation"
+            className="absolute inset-0 z-20 bg-slate-950/50"
+            onClick={panel.toggleSidebar}
+          />
+        )}
+        <View
+          className={`gap-4 bg-slate-950 ${
+            overlayMenu ? 'absolute bottom-0 left-0 top-0 z-30' : ''
+          } ${collapsed ? 'w-[76px] px-2.5 py-4' : 'w-64 px-5 py-6 md:py-9'}`}
+        >
+          <View
+            className={`items-center ${collapsed ? 'gap-3' : 'flex-row items-center gap-3'}`}
           >
-            ← Voltar ao mapa
-          </Link>
-          <View className="gap-2 border-t border-slate-800 pt-4">
-            <Text className="font-semibold text-white" numberOfLines={1}>
-              {auth.user?.name}
-            </Text>
-            <Text className="text-xs text-slate-400">Administrador</Text>
-            <Pressable
-              accessibilityRole="button"
-              className="min-h-[44px] justify-center"
-              onPress={() => void auth.signOut()}
-            >
-              <Text className="text-sm text-slate-300">Sair da conta</Text>
-            </Pressable>
+            {collapsed ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Expandir menu"
+                  onPress={panel.toggleSidebar}
+                  className="min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-900"
+                >
+                  <Ionicons name="menu-outline" size={22} color="#e2e8f0" />
+                </Pressable>
+                <View className="h-11 w-11 items-center justify-center rounded-xl bg-blue-600">
+                  <Ionicons name="map-outline" size={22} color="white" />
+                </View>
+              </>
+            ) : (
+              <>
+                <View className="h-11 w-11 items-center justify-center rounded-xl bg-blue-600">
+                  <Ionicons name="map-outline" size={24} color="white" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-lg font-bold text-white">UniFACENS</Text>
+                  <Text className="text-xs tracking-widest text-slate-400">
+                    MAP · ADMINISTRAÇÃO
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Recolher menu"
+                  onPress={panel.toggleSidebar}
+                  className="min-h-[44px] min-w-[44px] items-center justify-center rounded-xl"
+                >
+                  <Ionicons name="chevron-back-outline" size={22} color="#e2e8f0" />
+                </Pressable>
+              </>
+            )}
           </View>
+
+          {!collapsed && (
+            <Text className="mt-1 hidden text-xs font-semibold uppercase tracking-widest text-slate-400 md:flex">
+              Área de gestão
+            </Text>
+          )}
+
+          <View className="gap-2">
+            {SECTIONS.map((item) => {
+              const active = section === item.key;
+              const showBadge = item.key === 'orphans' && orphanCount > 0;
+              return collapsed ? (
+                <Pressable
+                  key={item.key}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.label}${showBadge ? ` (${orphanCount})` : ''}`}
+                  accessibilityState={{ selected: active }}
+                  onPress={() => panel.changeSection(item.key)}
+                  className={`relative min-h-[56px] w-full items-center justify-center gap-1 rounded-xl py-2 ${
+                    active ? 'bg-blue-600' : 'bg-slate-900'
+                  }`}
+                >
+                  <Ionicons name={item.icon} size={21} color="white" />
+                  <Text
+                    className="text-[10px] font-semibold leading-3 text-white"
+                    numberOfLines={1}
+                  >
+                    {item.shortLabel}
+                  </Text>
+                  {showBadge && (
+                    <View className="absolute right-1.5 top-1.5 min-w-[18px] items-center rounded-full bg-amber-500 px-1">
+                      <Text className="text-[10px] font-bold leading-4 text-slate-950">
+                        {orphanCount > 99 ? '99+' : orphanCount}
+                      </Text>
+                    </View>
+                  )}
+                </Pressable>
+              ) : (
+                <Pressable
+                  key={item.key}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
+                  accessibilityState={{ selected: active }}
+                  onPress={() => panel.changeSection(item.key)}
+                  className={`min-h-[48px] flex-row items-center gap-3 rounded-xl px-4 py-3 ${
+                    active ? 'bg-blue-600' : 'bg-slate-900'
+                  }`}
+                >
+                  <Ionicons name={item.icon} size={20} color="white" />
+                  <Text className="flex-1 font-semibold text-white" numberOfLines={1}>
+                    {item.label}
+                  </Text>
+                  {showBadge && (
+                    <View className="min-w-[22px] items-center rounded-full bg-amber-500 px-1.5">
+                      <Text className="text-xs font-bold leading-5 text-slate-950">
+                        {orphanCount > 99 ? '99+' : orphanCount}
+                      </Text>
+                    </View>
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <View className="flex-1" />
+
+          {collapsed ? (
+            <View className="items-center gap-2 border-t border-slate-800 pt-3">
+              <Link
+                href="/campus"
+                accessibilityLabel="Voltar ao mapa"
+                className="min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-900"
+              >
+                <Ionicons name="arrow-back-outline" size={20} color="#7dd3fc" />
+              </Link>
+              <View className="h-9 w-9 items-center justify-center rounded-full bg-slate-800">
+                <Text className="text-xs font-bold text-slate-300">
+                  {(auth.user?.name ?? '?').charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Sair da conta"
+                onPress={() => void auth.signOut()}
+                className="min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-900"
+              >
+                <Ionicons name="log-out-outline" size={20} color="#cbd5e1" />
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              <Link
+                href="/campus"
+                className="py-3 text-sm font-semibold text-sky-300"
+              >
+                ← Voltar ao mapa
+              </Link>
+              <View className="gap-2 border-t border-slate-800 pt-4">
+                <Text className="font-semibold text-white" numberOfLines={1}>
+                  {auth.user?.name}
+                </Text>
+                <Text className="text-xs text-slate-400">Administrador</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  className="min-h-[44px] justify-center"
+                  onPress={() => void auth.signOut()}
+                >
+                  <Text className="text-sm text-slate-300">Sair da conta</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
         </View>
         <ScrollView
           className="flex-1"
@@ -162,6 +292,14 @@ export function AdminScreen() {
                   {query.isFetching ? 'Atualizando…' : 'Atualizar lista'}
                 </AdminButton>
               )}
+              {section === 'orphans' && (
+                <AdminButton
+                  disabled={panel.orphans.isFetching}
+                  onPress={() => void panel.orphans.refetch()}
+                >
+                  {panel.orphans.isFetching ? 'Consultando…' : 'Atualizar lista'}
+                </AdminButton>
+              )}
             </View>
             {(section === 'points' || section === 'users') && (
               <View className="flex-row items-center gap-5 rounded-2xl border border-slate-200 bg-white p-5">
@@ -190,6 +328,21 @@ export function AdminScreen() {
                 </View>
               </View>
             )}
+            {section === 'orphans' && (
+              <View className="flex-row items-center gap-5 rounded-2xl border border-slate-200 bg-white p-5">
+                <View className="h-12 w-12 items-center justify-center rounded-xl bg-amber-50">
+                  <Ionicons name="cloud-offline-outline" size={24} color="#b45309" />
+                </View>
+                <View>
+                  <Text className="text-3xl font-bold text-slate-900">
+                    {panel.orphans.isPending ? '—' : orphanCount}
+                  </Text>
+                  <Text className="text-sm text-slate-500">
+                    Âncoras na plataforma sem ponto no banco
+                  </Text>
+                </View>
+              </View>
+            )}
             {!!panel.notice && (
               <Text
                 accessibilityLiveRegion="polite"
@@ -208,6 +361,15 @@ export function AdminScreen() {
             {section === 'models' && (
               <View className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
                 <ModelManager notice={(message) => panel.refresh(message)} />
+              </View>
+            )}
+            {section === 'orphans' && (
+              <View className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
+                <OrphanAnchors
+                  orphans={panel.orphans}
+                  notice={(message) => void panel.refresh(message)}
+                  categories={panel.categories.data ?? []}
+                />
               </View>
             )}
             {(section === 'points' || section === 'users') && (

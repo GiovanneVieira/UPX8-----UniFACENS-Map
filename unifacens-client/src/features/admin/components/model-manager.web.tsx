@@ -24,9 +24,9 @@ function formatSize(bytes: number) {
 }
 
 /**
- * Gestão de modelos 3D: upload com drag & drop (arquivo único até 1MB;
- * FBX é convertido para GLB pelo servidor), listagem e exclusão
- * bloqueada quando vinculado a categoria (409 tratado).
+ * Gestão de modelos 3D: upload com drag & drop (arquivo único até 1MB),
+ * listagem e exclusão bloqueada quando vinculado a categoria (409 tratado).
+ * FBX NÃO é aceito (decisão 2026-11-11) — o hint orienta exportar GLB.
  */
 export function ModelManager({ notice }: { notice: (message: string) => void }) {
   const client = useQueryClient();
@@ -44,7 +44,7 @@ export function ModelManager({ notice }: { notice: (message: string) => void }) 
     onSuccess: async (model) => {
       setFile(null);
       setError('');
-      notice(`Modelo "${model.name}" publicado${model.converted ? ' (FBX convertido para GLB)' : ''}.`);
+      notice(`Modelo "${model.name}" publicado.`);
       await client.invalidateQueries({ queryKey: ['admin', 'models'] });
     },
     onError: (mutationError) => setError(mutationError.message),
@@ -128,7 +128,7 @@ export function ModelManager({ notice }: { notice: (message: string) => void }) 
                   <Text className="text-base font-bold text-slate-900">{model.name}</Text>
                   <Text className="text-xs text-slate-500">
                     {model.format.toUpperCase()} · {formatSize(model.sizeBytes)} ·{' '}
-                    {model.converted ? 'FBX → GLB convertido' : 'arquivo original'}
+                    {model.boundingBox ? 'com bounding box' : 'sem bounding box'}
                   </Text>
                   {model.category ? (
                     <Text className="text-xs text-emerald-700">

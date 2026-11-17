@@ -123,7 +123,16 @@ export function loadThreeFromCdn(): Promise<ThreeBundle> {
   return bundlePromise;
 }
 
-/** Centraliza e escala o objeto para caber num enquadramento padrão. */
+/**
+ * Centraliza e escala o objeto para caber num enquadramento padrão.
+ *
+ * ⚠️ Ordem obrigatória: ESCALAR primeiro, recomputar o bbox do objeto já
+ * escalado e SÓ ENTÃO subtrair o centro. Na matrix T·R·S do three.js a
+ * posição NÃO é re-escalada — mover antes e escalar depois deixa o centro
+ * final em c·(k−1): um GLB de 100 unidades com pivô a 50 nasce ~49 unidades
+ * longe da origem (bug de device 2026-11-12: "modelos nascendo completamente
+ * distantes da origem" no preview web — modelos com pivô centrado mascaravam).
+ */
 export function fitObjectToView(
   THREE: ThreeModule,
   object3d: unknown,
@@ -133,10 +142,13 @@ export function fitObjectToView(
     position: { sub: (v: ThreeVector3Like) => void };
     scale: { multiplyScalar: (s: number) => void };
   };
-  const box = new THREE.Box3().setFromObject(object3d);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  positioned.position.sub(center);
+  // 1. Normaliza a maior dimensão para targetSize.
+  const box0 = new THREE.Box3().setFromObject(object3d);
+  const size0 = box0.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size0.x, size0.y, size0.z) || 1;
   positioned.scale.multiplyScalar(targetSize / maxDim);
+  // 2. Recomputa o bbox do objeto escalado e centraliza na origem.
+  const box1 = new THREE.Box3().setFromObject(object3d);
+  const center1 = box1.getCenter(new THREE.Vector3());
+  positioned.position.sub(center1);
 }

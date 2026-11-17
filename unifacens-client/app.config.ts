@@ -64,6 +64,27 @@ export default ({ config }: { config: ExpoConfig }): ExpoConfig => {
           },
         }
       : null),
+    android: {
+      ...(config.android ?? {}),
+      ...(googleMapsApiKey
+        ? {
+            config: {
+              ...(config.android?.config ?? {}),
+              googleMaps: { apiKey: googleMapsApiKey },
+            },
+          }
+        : null),
+      /**
+       * Deslocamento (activity recognition) — fusão de movimento do ARCore
+       * Geospatial/VPS. Nenhum plugin injeta (lição 2026-11-13); permissão
+       * perigosa: além de DECLARADA aqui, o useARPermissions solicita em
+       * runtime ao abrir a tab AR.
+       */
+      permissions: [
+        ...(config.android?.permissions ?? []),
+        'android.permission.ACTIVITY_RECOGNITION',
+      ],
+    },
     // EAS Build: projectId da conta Expo (@giovannevqs-team/unifacens-client)
     // — vinculado pelo `eas init` em 2026-11-11. NÃO é secret.
     extra: {
@@ -73,22 +94,38 @@ export default ({ config }: { config: ExpoConfig }): ExpoConfig => {
         projectId: 'ae6304bc-05e5-4a87-afa7-3b3e648c9cce',
       },
     },
-    plugins: (config.plugins ?? []).map((plugin) => {
-      if (Array.isArray(plugin) && plugin[0] === '@reactvision/react-viro') {
-        return [
-          plugin[0],
-          {
-            ...(typeof plugin[1] === 'object' && plugin[1] !== null ? plugin[1] : {}),
-            provider: 'arcore',
-            googleCloudApiKey: googleCloudApiKey ?? '',
-            // O plugin só escreve cada meta-data se a key existir — enviar
-            // vazio não polui o manifesto do prebuild.
-            ...(rvApiKey ? { rvApiKey } : {}),
-            ...(rvProjectId ? { rvProjectId } : {}),
-          },
-        ];
-      }
-      return plugin;
-    }),
+    plugins: [
+      ...(config.plugins ?? []).map((plugin) => {
+        if (Array.isArray(plugin) && plugin[0] === '@reactvision/react-viro') {
+          return [
+            plugin[0],
+            {
+              ...(typeof plugin[1] === 'object' && plugin[1] !== null ? plugin[1] : {}),
+              provider: 'arcore',
+              googleCloudApiKey: googleCloudApiKey ?? '',
+              // O plugin só escreve cada meta-data se a key existir — enviar
+              // vazio não polui o manifesto do prebuild.
+              ...(rvApiKey ? { rvApiKey } : {}),
+              ...(rvProjectId ? { rvProjectId } : {}),
+            },
+          ];
+        }
+        return plugin;
+      }),
+      /**
+       * Fotos dos pontos AR (F3, 2026-11-13): câmera + biblioteca no modal
+       * de criação/edição. Android: permissões vêm do manifest do pacote (a
+       * CAMERA já existe pelo AR); iOS: strings de uso OBRIGATÓRIAS via plugin.
+       */
+      [
+        'expo-image-picker',
+        {
+          cameraPermission:
+            'O app usa a câmera para fotografar os pontos do campus e anexar ao local.',
+          photoLibraryPermission:
+            'O app acessa sua biblioteca para anexar fotos aos pontos do campus.',
+        },
+      ],
+    ] as ExpoConfig['plugins'],
   };
 };

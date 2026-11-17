@@ -69,6 +69,23 @@ jobs:
         run: npm run build --workspace=shared
         working-directory: .
 
+      # Gate (2026-11-12): valida o CNG ANTES de submeter à fila EAS — prebuild
+      # real + assert das meta-data críticas do manifesto. Um prebuild pode ter
+      # SUCESSO gerando manifesto INCOMPLETO (o APK só crasha em runtime —
+      # lição do crash com.google.android.geo.API_KEY 2026-11-11). Dummies: o
+      # gate valida o pipeline config→manifesto; os segredos reais vivem nas
+      # EAS Environment Variables da nuvem.
+      - name: Gate — invariantes do manifesto Android (antes da fila EAS)
+        run: node scripts/assert-manifest.mjs
+        env:
+          EXPO_PUBLIC_API_URL: https://api.example.org
+          EXPO_PUBLIC_GOOGLE_AR_API_KEY: dummy-ci-ar-key
+          EXPO_PUBLIC_RV_API_KEY: dummy-ci-rv-key
+          EXPO_PUBLIC_RV_PROJECT_ID: dummy-ci-project-id
+          EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY: dummy-ci-maps-key
+          EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY: dummy-ci-maps-web-key
+          EXPO_PUBLIC_GOOGLE_MAPS_MAP_ID: dummy-ci-map-id
+
       - name: Submeter build ao EAS (nuvem)
         run: npx eas-cli@latest build --platform android --profile "${{ inputs.profile || 'preview' }}" --non-interactive --no-wait
         env:

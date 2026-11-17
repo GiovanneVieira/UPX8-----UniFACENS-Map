@@ -1,11 +1,14 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import { File } from 'expo-file-system';
 import { anchorSchema, z, type Anchor, type CreateAnchorDto, type UpdateAnchorDto } from 'shared';
 import { getTeamAuthorization } from './team-authorization';
 import { useAuthStore } from '@/stores/use-auth-store';
 
 /** Timeout padrão das chamadas à API (ms) — evita fetch pendurado eternamente. */
 const API_TIMEOUT_MS = 8000;
+/** Janela maior para upload multipart de fotos (várias MB via adb/wifi). */
+const UPLOAD_TIMEOUT_MS = 45_000;
 
 export function getApiBaseUrl(): string {
   if (process.env.EXPO_PUBLIC_API_URL) {
@@ -58,10 +61,19 @@ function friendlyStatusError(status: number): string {
  * Fetch com timeout, Bearer JWT (todas as rotas exigem autenticação) e
  * validação Zod da resposta (Single Source of Truth em `shared`).
  * Erros são sempre amigáveis ao usuário; detalhes técnicos ficam no console.
+ *
+ * `timeoutMs`: uploads multipart de fotos precisam de janela maior que o
+ * default de 8s (lição de device 2026-11-16: AbortError aos 8s virava
+ * "Não foi possível falar com o servidor" enganosamente).
  */
-async function request<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+  url: string,
+  schema: z.ZodType<T>,
+  init: RequestInit = {},
+  timeoutMs: number = API_TIMEOUT_MS,
+): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let response: Response;
   try {
@@ -160,4 +172,63 @@ export async function deleteAnchor(id: string): Promise<{ success: boolean }> {
       Accept: 'application/json',
     },
   });
+}
+
+/** Resposta dos endpoints de imagens do ponto. */
+const imageResultSchema = z.object({ images: z.array(z.string()) });
+
+/**
+ * Envia a fila de fotos do ponto NA ORDEM (multipart — o servidor grava a
+ * sequência do FormData no JSONB).
+ *
+ * ⚠️ Expo SDK 57 "winter" fetch (lição de device 2026-11-16): partes com
+ * `uri` NÃO são suportadas ("uri is not supported for React Native's
+ * FormData" — convertFormData.ts) — o conversor aceita apenas string |
+ * Blob | objeto com `bytes()`. O `File` do expo-file-system implementa a
+ * interface (`bytes(): Promise<Uint8Array>`); envolvemos num objeto com
+ * name/type EXPLÍCITOS porque o File não expõe `type` (sem content-type o
+ * multer leria application/octet-stream → 400 "Tipo não suportado").
+ */
+export async function uploadAnchorImages(
+  id: string,
+  photos: Array<{ uri: string; fileName: string; mime: string }>,
+): Promise<{ images: string[] }> {
+  const body = new FormData();
+  for (const photo of photos) {
+    const file = new File(photo.uri);
+    body.append('files', {
+      name: photo.fileName,
+      type: photo.mime,
+      bytes: () => file.bytes(),
+    } as unknown as Blob);
+  }
+  return request(`${getApiBaseUrl()}/anchors/${id}/images`, imageResultSchema, {
+    method: 'POST',
+    headers: {
+      ...getTeamAuthorization(),
+      Accept: 'application/json',
+    },
+    body,
+  }, UPLOAD_TIMEOUT_MS);
+}
+
+/**
+ * Exclui uma imagem do ponto (aceita URL resolvida ou chave — o servidor
+ * normaliza via storage.keyFor).
+ */
+export async function deleteAnchorImage(
+  id: string,
+  keyOrUrl: string,
+): Promise<{ images: string[] }> {
+  return request(
+    `${getApiBaseUrl()}/anchors/${id}/images?key=${encodeURIComponent(keyOrUrl)}`,
+    imageResultSchema,
+    {
+      method: 'DELETE',
+      headers: {
+        ...getTeamAuthorization(),
+        Accept: 'application/json',
+      },
+    },
+  );
 }

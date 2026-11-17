@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { modelFormatSchema } from './model.schema.js';
-
+import { boundingBoxSchema, modelFormatSchema } from './model.schema.js';
 const slugPattern = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
 
 /**
@@ -15,10 +14,12 @@ export type CategoryRef = z.infer<typeof categoryRefSchema>;
 
 /**
  * Modelo 3D vinculado à categoria — o que o pin AR renderiza.
+ * `boundingBox` (null para legados/VRX) alimenta a recentralização no AR.
  */
 export const categoryModelSchema = z.object({
   url: z.string().min(1),
   format: modelFormatSchema,
+  boundingBox: boundingBoxSchema.nullable(),
 });
 export type CategoryModel = z.infer<typeof categoryModelSchema>;
 

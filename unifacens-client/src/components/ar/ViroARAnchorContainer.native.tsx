@@ -14,22 +14,25 @@ import { GestureDetector } from "react-native-gesture-handler";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ViroARSceneNavigator } from "@reactvision/react-viro";
-import { useQueryClient } from "@tanstack/react-query";
-import { type Anchor, isUsablePoint } from "shared";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { type Anchor, type CategoryModel, isUsablePoint } from "shared";
 import {
   useAnchorsQuery,
   useCreateAnchorMutation,
   useDeleteAnchorMutation,
+  usePatchAnchorMutation,
   anchorKeys,
 } from "@/features/anchors/queries/use-anchors-query";
 import { useAuth } from "@/features/auth/hooks/use-auth";
 import { ViroARAnchorScene } from "./ViroARAnchorScene";
 import { useARGeolocation } from "./hooks/use-ar-geolocation";
+import { useARPermissions } from "./hooks/use-ar-permissions";
 import { useARProjection } from "./hooks/use-ar-projection";
 import { useGeospatialPose, isPoseFresh } from "./hooks/use-geospatial-pose";
 import { useNativeAnchors } from "./hooks/use-native-anchors";
 import { useCloudAnchors, isRealCloudAnchorId } from "./hooks/use-cloud-anchors";
 import { usePointHosting, GUIDE_MS } from "./hooks/use-point-hosting";
+import { useGeospatialHosting } from "./hooks/use-geospatial-hosting";
 import { useARWorldAlignment } from "./hooks/use-ar-world-alignment";
 import { useARZoom } from "./hooks/use-ar-zoom";
 import { ARStatusHud, ARTrackingBanner } from "./hud/ar-status-hud";
@@ -40,17 +43,22 @@ import { ARReticle } from "./hud/ar-reticle";
 import { NavInstructionHud } from "./hud/nav-instruction-hud";
 import { PlaceAnchorModal, PlaceAnchorPill } from "./modals/place-anchor-modal";
 import { AnchorListModal } from "./modals/anchor-list-modal";
+import { EditAnchorModal } from "./modals/edit-anchor-modal";
 import { ARAnchorToast, ANCHOR_TOAST_TTL_MS, type AnchorToastData } from "./hud/ar-anchor-toast";
 import { ARDiagnosticsModal, type ARDiagnosticsContext } from "./modals/ar-diagnostics-modal";
 import { AnchorDetailSheet } from "./modals/anchor-detail-sheet";
 import { useARNavigation } from "@/features/ar/hooks/use-ar-navigation";
 import { useCategoriesQuery } from "@/features/categories/queries/use-categories-query";
+import { adminApi } from "@/features/admin/services/admin-api";
+import { uploadAnchorImages } from "@/services/api";
+import type { PendingPhoto } from "./modals/anchor-image-queue";
 
 // Constante estática da cena inicial para nunca recriar a instância nativa do ViroARSceneNavigator
 const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
 
-/** Acurácia máxima da pose para CRIAR âncoras nativas (economia de quota). */
-const NATIVE_ANCHOR_MAX_POSE_ACCURACY_M = 20;
+/** Provider AR ativo — hostGeospatialAnchor/resolve são exclusivos do RV. */
+const AR_PROVIDER =
+  process.env.EXPO_PUBLIC_AR_PROVIDER === "reactvision" ? "reactvision" : "arcore";
 
 /**
  * Background ≥10s → RESET COMPLETO da sessão AR ao voltar (Frente B,
@@ -81,12 +89,28 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   const categoriesQuery = useCategoriesQuery();
   const createAnchorMutation = useCreateAnchorMutation();
   const deleteAnchorMutation = useDeleteAnchorMutation();
+  const patchAnchorMutation = usePatchAnchorMutation();
   const [isSaving, setIsSaving] = useState(false);
   const [mutationStatus, setMutationStatus] = useState<string | null>(null);
   const { isAdmin } = useAuth();
 
+  /** Biblioteca de modelos 3D para o carousel (F3) — só carrega para admin. */
+  const modelsQuery = useQuery({
+    queryKey: ['admin', 'models', 'ar-carousel'],
+    queryFn: ({ signal }) => adminApi.models.list(signal),
+    enabled: isAdmin,
+    staleTime: 60_000,
+  });
+
   // ── Motores de domínio (hooks dedicados) ─────────────────────────────────
   const cameraPosRef = useRef<[number, number, number]>([0, 0, 0]);
+  /**
+   * SALTO de GPS (refix indoor, lição 2026-11-16): invalida estimativas
+   * congeladas (a monotonicidade delas assume GPS sem saltos — a nativa
+   * resolve no frame pós-salto e o pin "desaparece" deslizando 76-125m).
+   * Ref de indireção: a projeção ainda não existe na criação do hook.
+   */
+  const handlePoseJumpRef = useRef<(jumpM: number) => void>(() => {});
   const cameraFwdRef = useRef<[number, number, number]>([0, 0, -1]);
   /** Yaw da câmera no mundo AR em GRAUS (rotation[1] do onCameraTransformUpdate). */
   const cameraYawRef = useRef<number>(0);
@@ -98,7 +122,12 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   const cloudInvalidateRef = useRef<(() => void) | null>(null);
 
   const geo = useARGeolocation();
-  const geospatial = useGeospatialPose();
+  // Diálogos de câmera + deslocamento ao ENTRAR na tab AR (a localização o
+  // geo hook pede acima; o Viro/ARCore não pede câmera por conta própria).
+  useARPermissions();
+  const geospatial = useGeospatialPose({
+    onPoseJump: (jumpM) => handlePoseJumpRef.current(jumpM),
+  });
 
   // ── Motor de alinhamento mundial: Δ (azimute do mundo AR ↔ Norte) ────────
   // Estimado 1× por sessão a partir da pose geospatial + forward da câmera
@@ -106,48 +135,142 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // congelado em seguida. Jamais fusão contínua (lição §11.5 do AGENTS.MD).
   const alignment = useARWorldAlignment(geospatial.pose, cameraFwdRef);
 
-  // ── SISTEMA PRIMÁRIO: âncoras NATIVAS ARCore (Terra-ancoradas) ──────────
-  // Gate de pose: só criar âncoras nativas (requests à ARCore API) quando a
-  // pose está fresca e razoável — resolver âncora com GPS ruim é request fútil
-  // (pendura até o timeout e falha). Economiza o quota da ARCore API.
-  const nativeAnchorGateReady = useMemo(() => {
+  // ── Earth-state do SDK (Frente A, 2026-11-16): a máquina de prontidão
+  //    oficial (VPS_LITE.md) — transição Localizing→Enabled travada em ~15m
+  //    INTERNA. Substitui o gate caseiro ≤20m da era arcore, que congelava
+  //    a fila geospatial sempre que o GPS ficava ruim (enquanto a cloud,
+  //    visual, seguia rodando — o sintoma "fetch às vezes não acontece").
+  const [earthState, setEarthState] = useState<'Stopped' | 'Localizing' | 'Enabled' | 'Paused'>('Stopped');
+  /** Localização aproximada concedida → Localizing eterno (HUD acionável). */
+  const [locationReduced, setLocationReduced] = useState(false);
+  /** VPS disponível na área (checkVPSAvailability 1×/sessão; null = não consultado). */
+  const [vpsAvailable, setVpsAvailable] = useState<boolean | null>(null);
+  const vpsCheckedRef = useRef(false);
+  /**
+   * Navigator completo (arSceneNavigator do callback onNavigatorReady) — tem
+   * TODOS os métodos geospatial. O `navigatorRef` (React ref do componente)
+   * NÃO expõe checkVPSAvailability na janela do primeiro mount (bug de device
+   * 2026-11-16: o VPS check nunca rodou porque o ref do componente não tinha
+   * o método — zero logs [ARGeo] VPS).
+   */
+  const sceneNavRef = useRef<any>(null);
+
+  const handleEarthState = useCallback((state: 'Stopped' | 'Localizing' | 'Enabled' | 'Paused') => {
+    setEarthState(state);
+  }, []);
+  const handleLocationReduced = useCallback((reduced: boolean) => {
+    setLocationReduced(reduced);
+  }, []);
+
+  // checkVPSAvailability 1× após a primeira pose válida (badge de expectativa:
+  // VPS ~1–5m vs GPS-only ±10–30m — pesquisa de precisão 2026-11-16).
+  // ⚠️ Usa o navigator do CALLBACK (sceneNavRef), não o React ref — este não
+  // expõe os métodos geospatial na janela do mount (bug corrigido 2026-11-16).
+  useEffect(() => {
     const pose = geospatial.pose;
-    return (
-      geospatial.isFresh &&
-      pose !== null &&
-      Number.isFinite(pose.horizontalAccuracy) &&
-      pose.horizontalAccuracy <= NATIVE_ANCHOR_MAX_POSE_ACCURACY_M
-    );
-  }, [geospatial.pose, geospatial.isFresh]);
+    if (vpsCheckedRef.current || !pose || !focused) return;
+    const nav = sceneNavRef.current;
+    if (!nav || typeof nav.checkVPSAvailability !== 'function') return;
+    vpsCheckedRef.current = true;
+    void (async () => {
+      try {
+        const result = (await nav.checkVPSAvailability(
+          pose.latitude,
+          pose.longitude,
+        )) as { availability?: string };
+        const available = result?.availability === 'Available';
+        console.log(`[ARGeo] VPS: ${result?.availability ?? 'Unknown'}`);
+        setVpsAvailable(available);
+      } catch (err) {
+        console.warn('[ARGeo] VPS check falhou:', err);
+        // best-effort: badge fica null (neutro)
+      }
+    })();
+  }, [geospatial.pose, focused]);
 
   const nativeAnchors = useNativeAnchors({
     serverAnchors: anchorsQuery.data,
-    poseReady: nativeAnchorGateReady,
+    // GATE NOVO: earth Enabled = o SDK diz que âncoras geospatial são
+    // viáveis (threshold interno ~15m). Localizing = fila espera (normal,
+    // segundos a ~1min); o gate antigo ≤20m morreu com a era arcore.
+    poseReady: earthState === 'Enabled',
     focused,
     trackingHealthy: trackingState >= 2,
-  });
-
-  // ── Âncoras de NUVEM VISUAIS — precisão centimétrica perto do pin ────────
-  const cloudAnchors = useCloudAnchors({
-    serverAnchors: anchorsQuery.data,
-    trackingState,
-    focused,
-    // Ordena candidatos por proximidade (pin perto = SIFT fecha antes).
+    // Pose atual (ref) — alimenta o gate de raio do resolve (≤5km).
     geoPoseRef: geospatial.poseRef,
+    // Fila nativa REATIVADA no reactvision (revertendo o gate do 43f71b3 —
+    // diagnóstico ERRADO: as posições em dezenas de km eram o FRAME DA
+    // SESSÃO correto, eixos rotacionados pelo yaw do launch; as magnitudes
+    // batiam com as distâncias reais dos pins, lição de device 2026-11-16
+    // noite. O SDK ancora na TERRA (doc: "creates a local AR anchor at
+    // that location") — não depende de onde o usuário está. O guard de
+    // range agora é 1000km (anti-ECEF), não mais 1km.
+    enabled: true,
   });
-  // Frente C: handleTrackingUpdate (useCallback []) lê via ref.
-  cloudInvalidateRef.current = cloudAnchors.invalidateEntries;
 
   // ── Hosting por PONTO (guia oficial Cloud Anchors, lição definitiva
   //    2026-11-10: dados da plataforma — finishScan: GPS null + 5% resolve;
   //    hostCloudAnchor: GPS ✓ + 54%). Tap na retícula → hit-test pontual →
-  //    createAnchoredNode NO PONTO → guia 8s → hostCloudAnchor(30d). ──────
+  //    createAnchoredNode NO PONTO → guia 20s → hostCloudAnchor(30d). ──────
   const pointHosting = usePointHosting({
     focused,
     trackingActive: trackingState >= 2,
     screenWidth,
     screenHeight,
   });
+  const hostingPhaseActive =
+    pointHosting.state.phase === 'placing' ||
+    pointHosting.state.phase === 'guiding' ||
+    pointHosting.state.phase === 'hosting';
+
+  // ── Hosting GEOESPACIAL em background (F2 — dupla ancoragem) ─────────────
+  // Dispara na fase 'hosted' (cloud visual já concluiu — one-op-por-vez
+  // §12.12) e persiste o UUID RV no pin: no POST quando resolve antes do
+  // save, via PATCH quando resolve depois. Falha/skip NUNCA bloqueia o save.
+  const geoSavedPinIdRef = useRef<string | null>(null);
+  const geoHostStashRef = useRef<{ anchorId: string; accuracyM: number } | null>(null);
+  const geoHosting = useGeospatialHosting({
+    hosted: pointHosting.state.phase === 'hosted',
+    provider: AR_PROVIDER,
+    averagedPose: geospatial.averagedPose,
+    // Gates de op nativa (§12.12) — o wait-loop só promove a host com ambos.
+    focused,
+    trackingHealthy: trackingState >= 2,
+    onHosted: (anchorId, accuracyM) => {
+      const pinId = geoSavedPinIdRef.current;
+      if (pinId) {
+        void patchAnchorMutation
+          .mutateAsync({
+            id: pinId,
+            dto: { geospatialAnchorId: anchorId, geospatialAccuracyM: accuracyM },
+          })
+          .then(() => console.log(`[ARGeoHost] PATCH aplicado ao pin salvo ${pinId}`))
+          .catch((err: unknown) =>
+            console.warn('[ARGeoHost] falha no PATCH pós-save:', err),
+          );
+      } else {
+        geoHostStashRef.current = { anchorId, accuracyM };
+        console.log('[ARGeoHost] host concluído antes do save — incluído no POST');
+      }
+    },
+  });
+
+  // ── Âncoras de NUVEM VISUAIS — precisão centimétrica perto do pin ────────
+  // ⚠️ hostingActive: durante a criação o loop de resolve PAUSA — o módulo
+  //    nativo é one-op-por-vez (§12.12) e um resolve concorrente pendurava o
+  //    hostCloudAnchor até o timeout de 90s (lição de device 2026-11-12).
+  const cloudAnchors = useCloudAnchors({
+    serverAnchors: anchorsQuery.data,
+    trackingState,
+    focused,
+    // Ordena candidatos por proximidade (pin perto = SIFT fecha antes).
+    geoPoseRef: geospatial.poseRef,
+    // ⚠️ Inclui o hosting geoespacial em background (F2): mesma disciplina
+    // one-op-por-vez do nativo.
+    hostingActive: hostingPhaseActive || geoHosting.pending,
+  });
+  // Frente C: handleTrackingUpdate (useCallback []) lê via ref.
+  cloudInvalidateRef.current = cloudAnchors.invalidateEntries;
 
   /** Entradas unificadas: visual (nuvem) tem prioridade sobre geospatial. */
   const mergedNativeEntries = useMemo(() => {
@@ -168,16 +291,36 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     delta: alignment.delta,
     poseTick: geospatial.pose,
     reprojectNonce,
-    // Pins cloud pendentes: invisíveis na cortesia, estimativa ghost depois
-    // (isGhost — não selecionável; resolve substitui com transição suave).
-    pendingIds: cloudAnchors.pendingIds,
-    ghostIds: cloudAnchors.ghostIds,
   });
+
+  // Salto de GPS → estimativas congeladas invalidadas + re-projeção do zero
+  // (a pose pós-salto é a nova verdade; alvos monótonos pré-salto são lixo).
+  handlePoseJumpRef.current = (jumpM: number) => {
+    console.log(
+      `[ARProj] salto de GPS ${jumpM.toFixed(0)}m — limpando estimativas congeladas e re-projetando`,
+    );
+    projection.clearFrozen();
+    setReprojectNonce((n) => n + 1);
+  };
 
   // ── Navegação ────────────────────────────────────────────────────────────
   const [detailSheetVisible, setDetailSheetVisible] = useState(false);
   /** Lista de pontos carregados ("Ir para" — rota AR). */
   const [listVisible, setListVisible] = useState(false);
+  /** Edição de ponto (F3, admin). */
+  const [editVisible, setEditVisible] = useState(false);
+  const [editAnchor, setEditAnchor] = useState<Anchor | null>(null);
+  /**
+   * PREVIEW VIVO da edição: modelo selecionado no carousel do EditAnchorModal
+   * sobrepõe o do pin REAL na cena atrás do sheet (undefined = sem override —
+   * modal fechado ou usuário não tocou; null = "Padrão da categoria").
+   */
+  const [editPreviewModelId, setEditPreviewModelId] = useState<string | null | undefined>(undefined);
+  /**
+   * PREVIEW VIVO do AJUSTE DE ALTITUDE: stepper do EditAnchorModal aplica o
+   * offset ao pin REAL na hora (mesma mecânica do render — camadas imprecisas).
+   */
+  const [editPreviewAltOffset, setEditPreviewAltOffset] = useState<number | undefined>(undefined);
   /** Toast de ponto encontrado (cloud resolve / primeiro projetado). */
   const [anchorToast, setAnchorToast] = useState<AnchorToastData | null>(null);
 
@@ -264,12 +407,19 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   const [anchorName, setAnchorName] = useState("");
   const [anchorDescription, setAnchorDescription] = useState("");
   const [anchorCategoryId, setAnchorCategoryId] = useState<string | null>(null);
+  /** Modelo 3D override do ponto (F3 — null = padrão da categoria). */
+  const [anchorModelId, setAnchorModelId] = useState<string | null>(null);
+  /** Fila de fotos pendentes do ponto (F3 — upload pós-salvar, na ordem). */
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
 
   // ── Status do HUD (pipeline oficial: scan → hosted; resolve → progresso
   //    real; pendentes = estado honesto "aproxime-se") ──────────────────────
   const cloudStatusDerived = useMemo(() => {
     if (anchorsQuery.isPending) return "Carregando pontos...";
     if (anchorsQuery.isError) return "Erro de conexão";
+    // Localização APPROXIMADA (Frente A): earth fica em Localizing PARA
+    // SEMPRE — a doc (VPS_LITE.md) exige erro ACIONÁVEL, não hang silencioso.
+    if (locationReduced) return "Ative Localização Precisa para este app";
     const total = anchorsQuery.data?.length ?? 0;
     if (total === 0) return "0 ponto(s)";
     // Hosting por ponto em curso: fases do fluxo (tap → guia → hosting).
@@ -308,16 +458,23 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     }
     // Mundo AR ainda não alinhado com o Norte → projeção aguardando Δ
     if (alignment.status === "aligning") return "Alinhando AR…";
-    // Pins do servidor existem mas nenhum projetado → calibrando
+    // Pins do servidor existem mas nenhum projetado → calibrando, com o
+    // estado do EARTH do SDK (Localizing é NORMAL: segundos a ~1min frio).
     if (projection.anchors.length === 0) {
       const pose = geospatial.pose;
       const acc = pose?.horizontalAccuracy;
+      if (earthState === 'Localizing') {
+        return acc !== undefined && acc !== null
+          ? `Localizando GPS ±${acc.toFixed(0)}m…`
+          : 'Localizando GPS…';
+      }
+      if (earthState === 'Paused') return 'GPS pausado';
       if (acc !== undefined && acc !== null) {
         return `Calibrando AR… ±${acc.toFixed(0)}m`;
       }
       return "Calibrando AR…";
     }
-    return `${projection.anchors.length} ponto(s)`;
+    return `${projection.anchors.length} ponto(s)${vpsAvailable === false ? ' · GPS only' : vpsAvailable === true ? ' · VPS ✓' : ''}`;
   }, [
     anchorsQuery.isPending,
     anchorsQuery.isError,
@@ -329,6 +486,9 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     cloudAnchors.resolveHud,
     cloudAnchors.ghostIds,
     pointHosting.state,
+    earthState,
+    locationReduced,
+    vpsAvailable,
   ]);
   const cloudStatus = mutationStatus ?? cloudStatusDerived;
 
@@ -439,6 +599,12 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // ── "Marcar Ponto" — âncora NO PONTO tocado ──────────────────────────────
   const handleOpenPlaceModal = useCallback(() => {
     pointHosting.cancel();
+    // Novo run de hosting geoespacial (F2): zera o bind pin↔UUID da run anterior.
+    geoSavedPinIdRef.current = null;
+    geoHostStashRef.current = null;
+    // Novo run do formulário (F3): modelo override e fila de fotos zerados.
+    setAnchorModelId(null);
+    setPendingPhotos([]);
     setModalVisible(true);
     console.log("[ARHost] modal de criação aberto — etapa POSICIONAR");
   }, [pointHosting]);
@@ -446,11 +612,14 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // ── Refresh REAL: refetch + retry de falhas + re-projeção + recalibra Δ ──
   const handleNavigatorReady = useCallback(
     (nav: any) => {
+      // Guarda o navigator completo (com métodos geospatial) para o VPS check.
+      sceneNavRef.current = nav;
       nativeAnchors.handleNavigatorReady(nav);
       cloudAnchors.handleNavigatorReady(nav);
       pointHosting.handleNavigatorReady(nav);
+      geoHosting.handleNavigatorReady(nav);
     },
-    [nativeAnchors, cloudAnchors, pointHosting],
+    [nativeAnchors, cloudAnchors, pointHosting, geoHosting],
   );
 
   const handleRegisterSceneRef = useCallback(
@@ -546,6 +715,38 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     return () => sub.remove();
   }, [resetARSession]);
 
+  // ── Exclusão de ponto (admin) — confirm + mutation + limpeza local ──────
+  const handleConfirmDeleteAnchor = useCallback(
+    (anchor: Anchor) => {
+      Alert.alert(
+        'Excluir ponto',
+        `Confirmar exclusão de "${anchor.name}"?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Excluir',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                try {
+                  setIsSaving(true);
+                  await deleteAnchorMutation.mutateAsync(anchor.id);
+                  nativeAnchors.removeLocal(anchor.id);
+                  cloudAnchors.removeLocal(anchor.id);
+                } catch {
+                  Alert.alert('Erro', 'Não foi possível excluir o ponto.');
+                } finally {
+                  setIsSaving(false);
+                }
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [deleteAnchorMutation, nativeAnchors, cloudAnchors],
+  );
+
   // ── Getters do modal de diagnóstico (Frente D) — PULL sob demanda ──────
   const getDiagnosticsSnapshot = useCallback(
     () => cloudDiagnosticsSnapshot(anchorsQuery.data ?? []),
@@ -570,11 +771,16 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       trackingState,
       deltaStatus: alignment.status,
       deltaValue: alignment.delta,
-      provider:
-        process.env.EXPO_PUBLIC_AR_PROVIDER === 'reactvision' ? 'reactvision' : 'arcore',
+      provider: AR_PROVIDER,
       poseAccM: pose?.horizontalAccuracy ?? null,
       poseFresh: geospatial.isFresh,
+      earthState,
+      locationReduced,
+      vpsAvailable,
       totalPins: anchorsQuery.data?.length ?? 0,
+      geoHostedPins:
+        anchorsQuery.data?.filter((a) => !!a.geospatialAnchorId).length ?? 0,
+      geoHostStatus: geoHosting.state.status,
       pinVisuals,
     };
   }, [
@@ -585,6 +791,10 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     geospatial.isFresh,
     projection.anchors,
     anchorsQuery.data,
+    geoHosting.state.status,
+    earthState,
+    locationReduced,
+    vpsAvailable,
   ]);
 
   // ── AUTO-REFRESH LEVE (Frente B + quota v2, 2026-11-11): enquanto houver
@@ -646,20 +856,33 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         cloudAnchorId: string;
         position: [number, number, number];
       };
+      // Dupla ancoragem (F2): UUID geoespacial hospedado em background —
+      // stash (host resolveu antes do save) ou estado atual do hook.
+      const geoHostedNow =
+        geoHosting.state.status === 'hosted' ? geoHosting.state : null;
+      const geoStash = geoHostStashRef.current;
       const saved = await createAnchorMutation.mutateAsync({
         name: anchorName.trim(),
         cloudAnchorId: hosted.cloudAnchorId,
         description: anchorDescription.trim() || undefined,
         categoryId: anchorCategoryId ?? undefined,
+        modelId: anchorModelId ?? undefined,
         latitude: targetLat,
         longitude: targetLon,
         altitude: Number(targetAlt.toFixed(2)),
         heading: avgPose ? Number(avgPose.heading.toFixed(1)) : 0,
+        geospatialAnchorId: geoStash?.anchorId ?? geoHostedNow?.anchorId,
+        geospatialAccuracyM: geoStash?.accuracyM ?? geoHostedNow?.accuracyM,
       });
 
       queryClient.setQueryData<Anchor[]>(anchorKeys.lists(), (old) =>
         old ? [saved, ...old] : [saved],
       );
+
+      // F2: bind pin↔hosting geoespacial — se o host concluir DEPOIS do
+      // save, o onHosted PATCHa este pin (stash já foi consumido no POST).
+      geoSavedPinIdRef.current = saved.id;
+      geoHostStashRef.current = null;
 
       cloudAnchors.setProvisionalEntry({
         pinId: saved.id,
@@ -670,10 +893,27 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         `[ARHost] pin "${saved.name}" visível AGORA NO PONTO — pos=[${hosted.position.map((v) => v.toFixed(2)).join(', ')}]`,
       );
 
+      // F3: upload da fila de fotos NA ORDEM (o ponto já existe). Falha é
+      // não-bloqueante — o pin está salvo; o admin pode reenviar editando.
+      if (pendingPhotos.length > 0) {
+        try {
+          setMutationStatus("Enviando fotos...");
+          await uploadAnchorImages(saved.id, pendingPhotos);
+        } catch (err) {
+          console.warn('[ARHost] upload de fotos falhou:', err);
+          Alert.alert(
+            "Fotos",
+            "O ponto foi salvo, mas algumas fotos não subiram. Abra a edição do ponto para tentar de novo.",
+          );
+        }
+      }
+
       setMutationStatus(null);
       setAnchorName("");
       setAnchorDescription("");
       setAnchorCategoryId(null);
+      setAnchorModelId(null);
+      setPendingPhotos([]);
       setModalVisible(false);
       pointHosting.cancel();
 
@@ -696,14 +936,104 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
 
   // ── Filtro de visibilidade ────────────────────────────────────────────────
   const visibleAnchors = useMemo(() => {
-    return projection.anchors.filter((a) => {
+    const base = projection.anchors.filter((a) => {
       if (!isUsablePoint(a.arPosition)) return false;
       if (radiusFilter > 0 && typeof a.distanceMeters === "number") {
         return a.distanceMeters <= radiusFilter;
       }
       return true;
     });
-  }, [projection.anchors, radiusFilter]);
+    // PREVIEW VIVO da edição (2026-11-16): o modelo escolhido no carousel
+    // substitui o do pin REAL na cena — o usuário vê o resultado no lugar
+    // antes de salvar. Cancelar/fechar reverte (override não persiste).
+    if (!editAnchor || editPreviewModelId === undefined) return base;
+    return base.map((a) => {
+      if (a.id !== editAnchor.id) return a;
+      // Ajuste de altitude em preview (stepper) — aplica na hora.
+      const altOffset =
+        editPreviewAltOffset !== undefined ? editPreviewAltOffset : a.altitudeOffsetM ?? 0;
+      const withAlt: Anchor =
+        altOffset !== (a.altitudeOffsetM ?? 0)
+          ? { ...a, altitudeOffsetM: altOffset }
+          : a;
+      if (editPreviewModelId === null) {
+        // "Padrão da categoria": limpa o override do ponto (herda categoria).
+        return { ...withAlt, modelId: null, model: null };
+      }
+      const found = modelsQuery.data?.items.find((m) => m.id === editPreviewModelId);
+      if (!found) return withAlt;
+      return {
+        ...withAlt,
+        modelId: found.id,
+        model: { url: found.url, format: found.format, boundingBox: found.boundingBox },
+      };
+    });
+  }, [projection.anchors, radiusFilter, editAnchor, editPreviewModelId, editPreviewAltOffset, modelsQuery.data]);
+
+  // ── Preview vivo do ponto em criação (F3): modelo selecionado no carousel
+  //    renderizado NO ponto tocado atrás do sheet (fallback = modelo da
+  //    categoria → diamante âmbar quando nada vinculado). ───────────────────
+  const hostedPreview =
+    pointHosting.state.phase === 'hosted' ? pointHosting.state.position : null;
+  /**
+   * SHOWCASE de modelo (2026-11-16): botão "ver na câmera" do carousel —
+   * posiciona o modelo 2.2m À FRENTE da câmera por 15s (precedência sobre
+   * o preview de criação). O preview real: o próprio Viro3DObjectPin.
+   */
+  const [showcasePreview, setShowcasePreview] = useState<{
+    position: [number, number, number];
+    model: CategoryModel;
+    until: number;
+  } | null>(null);
+  const handleModelShowcase = useCallback(
+    (model: { url: string; format: string; boundingBox: CategoryModel['boundingBox'] }) => {
+      const cam = cameraPosRef.current;
+      const fwd = cameraFwdRef.current;
+      const position: [number, number, number] = [
+        cam[0] + fwd[0] * 2.2,
+        cam[1] + fwd[1] * 2.2 - 0.35,
+        cam[2] + fwd[2] * 2.2,
+      ];
+      setShowcasePreview({
+        position,
+        model: {
+          url: model.url,
+          format: model.format as CategoryModel['format'],
+          boundingBox: model.boundingBox,
+        },
+        until: Date.now() + 15_000,
+      });
+      console.log('[ARHost] showcase de modelo à frente da câmera (15s)');
+    },
+    [],
+  );
+  const showcaseActive =
+    showcasePreview !== null && Date.now() < showcasePreview.until
+      ? showcasePreview
+      : null;
+  /** Expira o showcase no tempo certo (sem depender de re-render alheio). */
+  useEffect(() => {
+    if (!showcasePreview) return;
+    const remaining = showcasePreview.until - Date.now();
+    if (remaining <= 0) {
+      setShowcasePreview(null);
+      return;
+    }
+    const timer = setTimeout(() => setShowcasePreview(null), remaining);
+    return () => clearTimeout(timer);
+  }, [showcasePreview]);
+  const selectedPreviewModel: CategoryModel | null = useMemo(() => {
+    if (showcaseActive) return showcaseActive.model;
+    const models = modelsQuery.data?.items ?? [];
+    if (anchorModelId) {
+      const found = models.find((m) => m.id === anchorModelId);
+      if (found) {
+        return { url: found.url, format: found.format, boundingBox: found.boundingBox };
+      }
+    }
+    const category = (categoriesQuery.data ?? []).find((c) => c.id === anchorCategoryId);
+    return category?.model ?? null;
+  }, [showcaseActive, modelsQuery.data, anchorModelId, categoriesQuery.data, anchorCategoryId]);
 
   // ── viroAppProps ─────────────────────────────────────────────────────────
   const viroAppProps = useMemo(
@@ -716,9 +1046,28 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       focused,
       /** Tracking ≥ 2 (sessão viva) — gates de chamada nativa (§12.12). */
       trackingActive: trackingState >= 2,
+      /** Provider real (diagnóstico — lição 2026-11-16 do log hardcoded). */
+      provider: AR_PROVIDER,
+      /**
+       * Render dos planos detectados — APENAS no modo placing (feedback de
+       * "onde o ARCore já enxerga superfície" antes do toque; o quad azul
+       * permanente era o artefato §12.9 — na janela de posicionamento é
+       * pedagógico e some com o tap).
+       */
+      showPlanes: pointHosting.state.phase === 'placing',
+      // Preview do ponto em criação (F3) + SHOWCASE de modelo (2026-11-16,
+      // botão "ver na câmera" do carousel — precedência por 15s).
+      previewPosition: showcaseActive ? showcaseActive.position : hostedPreview,
+      previewModel: showcaseActive
+        ? showcaseActive.model
+        : hostedPreview
+          ? selectedPreviewModel
+          : null,
       routeChevrons: arRoute.active && !arRoute.arrived ? arRoute.chevrons : [],
       onGeospatialStatus: nativeAnchors.handleGeospatialStatus,
       onGeospatialPose: geospatial.handlePose,
+      onEarthState: handleEarthState,
+      onLocationAccuracyReduced: handleLocationReduced,
       onNavigatorReady: handleNavigatorReady,
       onSelectAnchor: handleTapByReticle,
       onCameraUpdate: handleCameraUpdate,
@@ -730,10 +1079,16 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       visibleAnchors,
       trackingState,
       focused,
+      pointHosting.state.phase,
+      hostedPreview,
+      showcaseActive,
+      selectedPreviewModel,
       arRoute.active,
       arRoute.arrived,
       arRoute.chevrons,
       nativeAnchors.handleGeospatialStatus,
+      handleEarthState,
+      handleLocationReduced,
       handleNavigatorReady,
       geospatial.handlePose,
       handleTapByReticle,
@@ -746,11 +1101,8 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
 
   // ── Pílula das fases ativas (FORA do Modal — lição 2026-11-10: janela
   //    modal do Android engole toques; a pílula precisa deixar o tap
-  //    atravessar até a câmera) + progresso da guia 8s ────────────────────
-  const hostingPhaseActive =
-    pointHosting.state.phase === 'placing' ||
-    pointHosting.state.phase === 'guiding' ||
-    pointHosting.state.phase === 'hosting';
+  //    atravessar até a câmera) + progresso da guia 20s ────────────────────
+  // (hostingPhaseActive derivado junto ao usePointHosting, lá em cima.)
   const [guideProgress, setGuideProgress] = useState(0);
   useEffect(() => {
     if (pointHosting.state.phase !== 'guiding') {
@@ -779,7 +1131,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
               // ÚNICO e troca Cloud + Geospatial JUNTOS (§15.1 AGENTS.MD).
               // "arcore" (default) ⇄ "reactvision" via EXPO_PUBLIC_AR_PROVIDER
               // no .env + Metro --clear — credenciais dos DOIS já no manifesto.
-              provider={process.env.EXPO_PUBLIC_AR_PROVIDER === 'reactvision' ? 'reactvision' : 'arcore'}
+              provider={AR_PROVIDER}
               autofocus={true}
               initialScene={INITIAL_AR_SCENE}
               viroAppProps={viroAppProps}
@@ -986,38 +1338,7 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
           setDetailSheetVisible(false);
           void startNavigation(anchor);
         }}
-        onDelete={
-          isAdmin
-            ? (anchor) => {
-                setDetailSheetVisible(false);
-                Alert.alert(
-                  "Excluir ponto",
-                  `Confirmar exclusão de "${anchor.name}"?`,
-                  [
-                    { text: "Cancelar", style: "cancel" },
-                    {
-                      text: "Excluir",
-                      style: "destructive",
-                      onPress: () => {
-                        void (async () => {
-                          try {
-                            setIsSaving(true);
-                            await deleteAnchorMutation.mutateAsync(anchor.id);
-                            nativeAnchors.removeLocal(anchor.id);
-                            cloudAnchors.removeLocal(anchor.id);
-                          } catch {
-                            Alert.alert("Erro", "Não foi possível excluir o ponto.");
-                          } finally {
-                            setIsSaving(false);
-                          }
-                        })();
-                      },
-                    },
-                  ],
-                );
-              }
-            : undefined
-        }
+        onDelete={isAdmin ? handleConfirmDeleteAnchor : undefined}
       />
 
       <PlaceAnchorModal
@@ -1032,6 +1353,14 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         categories={categoriesQuery.data ?? []}
         selectedCategoryId={anchorCategoryId}
         onSelectCategory={setAnchorCategoryId}
+        models={modelsQuery.data?.items ?? []}
+        selectedModelId={anchorModelId}
+        onSelectModel={setAnchorModelId}
+        onModelShowcase={handleModelShowcase}
+        photos={pendingPhotos}
+        onPhotosChange={setPendingPhotos}
+        gpsAccuracyM={isPoseFresh(geospatial.pose) ? geospatial.pose.horizontalAccuracy : null}
+        geoHostStatus={geoHosting.state}
         onCreate={handleCreate}
         onClose={() => {
           setModalVisible(false);
@@ -1043,9 +1372,40 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
       <AnchorListModal
         visible={listVisible}
         anchors={projection.anchors}
+        isAdmin={isAdmin}
         onClose={() => setListVisible(false)}
         onNavigate={(anchor) => {
           void startNavigation(anchor);
+        }}
+        onDetails={(anchor) => {
+          setDetailAnchor(anchor);
+          setDetailSheetVisible(true);
+        }}
+        onEdit={
+          isAdmin
+            ? (anchor) => {
+                setEditAnchor(anchor);
+                setEditVisible(true);
+              }
+            : undefined
+        }
+        onDelete={isAdmin ? handleConfirmDeleteAnchor : undefined}
+      />
+
+      {/* Edição de ponto (F3, admin) — mesmo contrato do editor web. */}
+      <EditAnchorModal
+        visible={editVisible}
+        anchor={editAnchor}
+        categories={categoriesQuery.data ?? []}
+        models={modelsQuery.data?.items ?? []}
+        onModelPreview={setEditPreviewModelId}
+        onAltitudePreview={setEditPreviewAltOffset}
+        onModelShowcase={handleModelShowcase}
+        onClose={() => {
+          setEditVisible(false);
+          setEditAnchor(null);
+          setEditPreviewModelId(undefined);
+          setEditPreviewAltOffset(undefined);
         }}
       />
 

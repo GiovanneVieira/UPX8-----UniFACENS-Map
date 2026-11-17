@@ -169,7 +169,7 @@ export function ModelPreviewModal({
           <div
             ref={mountRef}
             aria-label={`Preview 3D de ${model.name}`}
-            style={{ width: '100%', height: 420, display: 'block' }}
+            style={{ width: '100%', height: 'min(420px, 50vh)', display: 'block' }}
           />
           {loading && (
             <View className="absolute inset-0 items-center justify-center rounded-xl bg-slate-950/60">

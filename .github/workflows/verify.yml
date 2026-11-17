@@ -22,6 +22,19 @@ jobs:
       - run: npm run lint --workspace=unifacens-api
       - run: npm run test --workspace=unifacens-api
       - run: npx tsc --noEmit --project unifacens-client/tsconfig.json
+      # Gate do CNG (2026-11-12): prebuild real + assert de meta-data críticas
+      # do manifesto Android — pega erro de plugin/config E a classe "APK
+      # compila mas crasha em runtime por chave ausente" (crash do Maps
+      # 2026-11-11) sem queimar build EAS. Dummies: valida estrutura, não segredos.
+      - run: npm run manifest:check --workspace=unifacens-client
+        env:
+          EXPO_PUBLIC_API_URL: https://api.example.org
+          EXPO_PUBLIC_GOOGLE_AR_API_KEY: dummy-ci-ar-key
+          EXPO_PUBLIC_RV_API_KEY: dummy-ci-rv-key
+          EXPO_PUBLIC_RV_PROJECT_ID: dummy-ci-project-id
+          EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY: dummy-ci-maps-key
+          EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY: dummy-ci-maps-web-key
+          EXPO_PUBLIC_GOOGLE_MAPS_MAP_ID: dummy-ci-map-id
       - run: npm exec --workspace=unifacens-client -- expo export --platform web
         env:
           EXPO_PUBLIC_API_URL: https://api.example.org

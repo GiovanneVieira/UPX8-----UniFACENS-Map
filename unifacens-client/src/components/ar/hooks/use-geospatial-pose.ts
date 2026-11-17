@@ -1,6 +1,16 @@
 import { useCallback, useRef, useState } from 'react';
 import { geodeticToENU } from 'shared';
 
+/**
+ * Saltos de GPS entre amostras consecutivas além disto = REFIX indoor
+ * (troca de cômodo), não deslocamento real — andar rende ≤2m/s, então
+ * ~25m entre polls de 1-2.5s é teleporte. Lição de device 2026-11-16:
+ * a estimativa ENU congela (convergência monótona) com a pose PRÉ-salto
+ * e a âncora nativa resolve no frame PÓS-salto → pin "desaparece"
+ * deslizando 76-125m (gaps medidos em logs).
+ */
+const POSE_JUMP_M = 25;
+
 /** Pose geoespacial da câmera (ancorada na TERRA via VPS+GPS do ARCore). */
 export interface GeospatialPose {
   latitude: number;
@@ -70,7 +80,10 @@ export function isPoseFresh(pose: GeospatialPose | null): pose is GeospatialPose
  * disponível: posição e heading ancorados na Terra e auto-corrigidos
  * pelo VPS do Google — a raiz da correção de "pins seguindo o celular".
  */
-export function useGeospatialPose() {
+export function useGeospatialPose(options?: {
+  /** Disparado em SALTO de GPS (>25m entre amostras) — refix indoor. */
+  onPoseJump?: (jumpM: number) => void;
+}) {
   const poseRef = useRef<GeospatialPose | null>(null);
   const [pose, setPose] = useState<GeospatialPose | null>(null);
   /** null = desconhecido; true/false = suporte a Geospatial no device. */
@@ -78,6 +91,8 @@ export function useGeospatialPose() {
   const [lastError, setLastError] = useState<string | null>(null);
   /** Ring buffer das últimas poses (p/ média na criação de pins). */
   const poseBufferRef = useRef<GeospatialPose[]>([]);
+  const onPoseJumpRef = useRef(options?.onPoseJump);
+  onPoseJumpRef.current = options?.onPoseJump;
 
   const handleStatus = useCallback((isSupported: boolean, error?: string) => {
     setSupported((prev) => (prev === isSupported ? prev : isSupported));
@@ -85,6 +100,45 @@ export function useGeospatialPose() {
   }, []);
 
   const handlePose = useCallback((next: Omit<GeospatialPose, 'timestamp'>) => {
+    /**
+     * Guard Null-Island (lição de device 2026-11-16): o SDK RV devolve
+     * pose "válida" ZERADA (lat=0/lng=0) antes do primeiro fix GPS/VPS.
+     * Uma pose dessas envenena TUDO a jusante: estimativas nascem a
+     * ~5.850km (ENU (0,0)→Sorocaba — "distância bizarra de 5800km" nos
+     * detalhes) e congelam (convergência monótona), e a janela do Δ
+     * amostro heading-lixo. (0,0) fica no meio do oceano — impossível
+     * para os nossos usuários: descarta na INGESTÃO, ponto único para
+     * todos os consumers (projeção, Δ, hosting).
+     */
+    if (next.latitude === 0 && next.longitude === 0) {
+      console.warn('[ARGeo] pose zerada (0,0) descartada — RV sem fix GPS/VPS ainda');
+      return;
+    }
+    /**
+     * Detecção de SALTO (refix indoor): pose válida anterior deslocou
+     * >25m desde a última amostra — GPS re-fixou, não foi caminhada.
+     * Avisa o container para invalidar estimativas congeladas (a
+     * monotonicidade delas assume GPS sem saltos — lição dos gaps de
+     * 76-125m, 2026-11-16).
+     */
+    const prev = poseRef.current;
+    if (prev) {
+      const { east, north } = geodeticToENU(
+        prev.latitude,
+        prev.longitude,
+        0,
+        next.latitude,
+        next.longitude,
+        0,
+      );
+      const jumpM = Math.hypot(east, north);
+      if (jumpM > POSE_JUMP_M) {
+        console.warn(
+          `[ARGeo] SALTO de GPS de ${jumpM.toFixed(0)}m entre amostras (${((Date.now() - prev.timestamp) / 1000).toFixed(1)}s) — refix indoor; invalidando estimativas congeladas`,
+        );
+        onPoseJumpRef.current?.(jumpM);
+      }
+    }
     const stamped: GeospatialPose = { ...next, timestamp: Date.now() };
     poseRef.current = stamped;
     setPose(stamped);

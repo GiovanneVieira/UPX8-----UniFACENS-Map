@@ -19,6 +19,7 @@ import {
   type StorageAdapter,
 } from '../storage/storage.types.js';
 import { validateModelFile } from './model-file.js';
+import { computeModelBoundingBox } from './model-bbox.js';
 import {
   InvalidModelFileException,
   RecordInUseException,
@@ -78,6 +79,9 @@ export class ModelsService {
 
     const id = randomUUID();
     const fileSlug = slugify(baseName) || 'modelo';
+    // Bounding box canônico (parser puro) — alimenta recentralização no AR.
+    // Falha silenciosa → null (fallback honesto no client; nunca derruba o upload).
+    const boundingBox = computeModelBoundingBox(input.buffer, format);
     // put() devolve a chave CANÔNICA (com prefixo dev/|prod/) — é ela que
     // persiste; a chave lógica é só endereço de escrita. Falha de infra
     // (S3 fora, credencial ruim) → 503, não 500.
@@ -101,6 +105,7 @@ export class ModelsService {
         originalKey,
         derivedKey: null,
         sizeBytes: input.buffer.length,
+        boundingBox,
       })
       .returning();
     return this.serialize(row, null);
@@ -174,6 +179,7 @@ export class ModelsService {
       url: this.storage.url(row.derivedKey ?? row.originalKey),
       originalUrl: this.storage.url(row.originalKey),
       converted,
+      boundingBox: row.boundingBox ?? null,
       createdAt: row.createdAt.toISOString(),
       category,
     };

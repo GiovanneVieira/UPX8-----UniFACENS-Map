@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type Anchor } from 'shared';
+import { geodeticToENU, type Anchor } from 'shared';
+import type { GeospatialPose } from './use-geospatial-pose';
+
+/** Fonte da entrada nativa — determina honestidade visual do pin. */
+export type NativeAnchorSource = 'cloud' | 'geospatial' | 'slam';
 
 /** Entrada de âncora nativa — posição AR mantida pelo ARCore (Terra). */
 export interface NativeAnchorEntry {
@@ -9,6 +13,14 @@ export interface NativeAnchorEntry {
   nativeAnchorId: string;
   /** Posição AR mundial — ARCore mantém cravada na Terra. */
   position: [number, number, number];
+  /**
+   * Origem da âncora: 'cloud' = visual (cm, resolve SIFT); 'geospatial' =
+   * hospedada/criada por coordenadas (m — selo honesto "±Xm"); 'slam' =
+   * provisória do tap na sessão.
+   */
+  source?: NativeAnchorSource;
+  /** Acurácia horizontal (m) quando conhecida (hosting geoespacial). */
+  accuracyM?: number;
 }
 
 /** Requisição de âncora nativa na fila. */
@@ -19,15 +31,25 @@ interface PendingRequest {
   mode: 'terrain' | 'geospatial';
   /** altAboveTerrain (terrain) ou altitude absoluta WGS84 (geospatial). */
   value: number;
+  /**
+   * UUID da âncora geoespacial HOSPEDADA na plataforma RV: quando presente,
+   * o processador resolve por UUID (resolveGeospatialAnchor — posição
+   * server-backed) em vez de criar por lat/lng local. Falha esgotada →
+   * re-enfileira SEM o UUID (caminho local clássico).
+   */
+  hostedGeospatialId?: string;
 }
 
 interface UseNativeAnchorsParams {
   /** Pins vindos do server (com lat/lng válidos). */
   serverAnchors: Anchor[] | undefined;
   /**
-   * Pose fresca e com acurácia razoável — criar âncora nativa sem isso é
-   * request fútil à ARCore API (pendura até o timeout e falha). Economia de
-   * quota: cada criação/resolve conta como request no Cloud Console.
+   * Prontidão do EARTH tracking do SDK (Frente A, 2026-11-16): o container
+   * passa `getEarthTrackingState() === 'Enabled'` — a máquina de estados
+   * OFICIAL (VPS_LITE.md), com threshold interno de ~15m de acurácia.
+   * Substitui o gate caseiro ≤20m da era arcore, que congelava a fila
+   * sempre que o GPS ficava ruim (enquanto a cloud visual seguia rodando).
+   * `Localizing` = fila espera (normal, segundos a ~1min frio).
    */
   poseReady: boolean;
   /**
@@ -43,10 +65,33 @@ interface UseNativeAnchorsParams {
    * 14:56-14:57, §12.12).
    */
   trackingHealthy: boolean;
+  /**
+   * Pose geospatial atual (ref, lida no tick) — alimenta o gate de raio:
+   * resolve hospedado só para pins dentro de RESOLVE_RADIUS_M.
+   */
+  geoPoseRef: React.MutableRefObject<GeospatialPose | null>;
+  /**
+   * Fila de âncoras nativas geospatial (resolve hospedada por UUID +
+   * criação local por lat/lng). Valores 1000m→1000km no guard de datum à
+   * parte, as posições chegam no FRAME DA SESSÃO (eixos rotacionados pelo
+   * yaw do launch — lição de device 2026-11-16 noite: um pin a 74km
+   * LEGITIMAMENTE resolve a dezenas de km). O SDK ancora na Terra
+   * (doc: "creates a local AR anchor at that location") — a posição não
+   * depende de onde o usuário está; é a fonte autoritativa de render,
+   * acima da estimativa ENU e abaixo da cloud visual (cm).
+   */
+  enabled: boolean;
 }
 
 /** Máximo de âncoras nativas simultâneas. */
 const MAX_NATIVE_ANCHORS = 30;
+/**
+ * Gate de raio para resolve hospedado (lição 2026-11-16): pins além disto
+ * (ex.: campus a 74km vistos de casa) renderizam subpixel — o GET à
+ * plataforma + a op na fila one-op-por-vez são fúteis. 5km cobre qualquer
+ * POI navegável na sessão. Re-avaliado a cada tick (a pose muda).
+ */
+const RESOLVE_RADIUS_M = 5_000;
 /** Criações por tick (não estourar o ARCore). */
 const CREATIONS_PER_TICK = 3;
 /** Período do processador da fila. */
@@ -61,8 +106,16 @@ const ANCHOR_TIMEOUT_MS = 60_000;
 /** Retries por pin após a primeira falha (1ª + 2 retries = 3 tentativas). */
 const MAX_RETRIES = 2;
 /**
+ * Erros que indicam PROVIDER incompatível (a função existe no JS mas o
+ * nativo rejeita porque exige outro provider) — degrada IMEDIATAMENTE
+ * para o caminho local, sem retry (lição de device 2026-11-16: com
+ * provider=arcore, o resolveGeospatialAnchor erro "requires the
+ * ReactVision geospatial provider" e os retries eram puros churn).
+ */
+/**
  * Erros FATAIS: retry não vai mudar o resultado — pula direto ao esgotado
- * (cada retry seria mais um request fútil à ARCore API).
+ * (cada retry seria mais um request fútil à ARCore API). PROVIDER_MISMATCH
+ * degrada direto ao caminho local (createGeospatial do banco).
  */
 const FATAL_ERROR_PATTERNS = [
   'NOT_SUPPORTED',
@@ -72,6 +125,14 @@ const FATAL_ERROR_PATTERNS = [
   'UNAUTHORIZED',
   'ACCESS_DENIED',
 ];
+
+/**
+ * Provider incompatível: a função existe no JS mas o nativo rejeita porque
+ * exige outro provider (lição 2026-11-16: com provider=arcore, o
+ * resolveGeospatialAnchor erro "requires the ReactVision geospatial
+ * provider" e os retries eram puros churn). Degrada ao caminho local.
+ */
+const PROVIDER_MISMATCH_ERROR = /ReactVision geospatial provider/i;
 
 /**
  * SISTEMA PRIMÁRIO de posicionamento AR (pós-WorldAnchor):
@@ -86,7 +147,7 @@ const FATAL_ERROR_PATTERNS = [
  * posição. Falhas/pendências têm retry + timeout; esgotadas as tentativas,
  * o pin permanece no fallback de projeção (estimativa visível).
  */
-export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHealthy }: UseNativeAnchorsParams) {
+export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHealthy, enabled, geoPoseRef }: UseNativeAnchorsParams) {
   /** Mapa pinId -> entrada nativa (estado — dispara re-render da projeção). */
   const [entries, setEntries] = useState<Map<string, NativeAnchorEntry>>(new Map());
   const entriesRef = useRef<Map<string, NativeAnchorEntry>>(new Map());
@@ -110,12 +171,17 @@ export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHe
   const retriesRef = useRef<Map<string, number>>(new Map());
   /** Pins que esgotaram retries (elegíveis ao retryFailed explícito). */
   const failedRef = useRef<Set<string>>(new Set());
+  /** Pins pulados pelo gate de raio (log 1×; re-avaliáveis via retryFailed). */
+  const radiusSkippedRef = useRef<Set<string>>(new Set());
   /** Último serverAnchors (para o retryFailed re-enfileirar). */
   const serverAnchorsRef = useRef<Anchor[] | undefined>(serverAnchors);
   /** Âncoras nativas criadas por nós (para cleanup). */
   const nativeIdsRef = useRef<Set<string>>(new Set());
   /** Geospatial habilitado (só cria quando ativo). */
   const geoEnabledRef = useRef(false);
+  /** Fila habilitada (provider arcore — ver doc do param `enabled`). */
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   /** Guarda: hook vivo (SIGSEGV se chamarmos nativo após unmount). */
   const aliveRef = useRef(true);
   /** Guarda anti-sobreposição de lotes (awaits de até 60s no interval). */
@@ -151,7 +217,7 @@ export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHe
   /** Detecta pins novos → enfileira para criação de âncora nativa. */
   useEffect(() => {
     serverAnchorsRef.current = serverAnchors;
-    if (!serverAnchors) return;
+    if (!serverAnchors || !enabled) return;
 
     for (const anchor of serverAnchors) {
       if (createdRef.current.has(anchor.id) || inFlightRef.current.has(anchor.id)) continue;
@@ -168,19 +234,28 @@ export function useNativeAnchors({ serverAnchors, poseReady, focused, trackingHe
       // Respeita o limite
       if (createdRef.current.size >= MAX_NATIVE_ANCHORS) break;
 
-      // Roteamento por dado: altitude registrada = altura absoluta de
-      // criação (createGeospatialAnchor); sem altitude = terreno + 1.5m.
-      const hasAltitude =
-        typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude);
-      pendingRef.current.push({
-        pinId: anchor.id,
-        lat: anchor.latitude,
-        lng: anchor.longitude,
-        mode: hasAltitude ? 'geospatial' : 'terrain',
-        value: hasAltitude ? (anchor.altitude as number) : PIN_HEIGHT_ABOVE_TERRAIN_M,
-      });
+      pendingRef.current.push(buildRequest(anchor));
     }
   }, [serverAnchors]);
+
+  /**
+   * Roteamento por dado: UUID geoespacial hospedado → resolve por UUID
+   * (posição server-backed); senão altitude registrada = altura absoluta
+   * (createGeospatialAnchor); sem altitude = terreno + 1.5m.
+   */
+  function buildRequest(anchor: Anchor, withHosted = true): PendingRequest {
+    const hasAltitude =
+      typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude);
+    return {
+      pinId: anchor.id,
+      lat: anchor.latitude as number,
+      lng: anchor.longitude as number,
+      mode: hasAltitude ? 'geospatial' : 'terrain',
+      value: hasAltitude ? (anchor.altitude as number) : PIN_HEIGHT_ABOVE_TERRAIN_M,
+      hostedGeospatialId:
+        withHosted && anchor.geospatialAnchorId ? anchor.geospatialAnchorId : undefined,
+    };
+  }
 
 /** Resultado das APIs createGeospatialAnchor/createTerrainAnchor do Viro. */
 interface GeospatialAnchorResult {
@@ -206,6 +281,65 @@ const withTimeout = async <T,>(
   ]);
 };
 
+/**
+ * Resolve a âncora geoespacial HOSPEDADA (UUID RV) — DEFENSIVO (lição de
+ * device 2026-11-16): a DOC promete `anchor.position` (coords de mundo), mas
+ * o docstring da impl 3.1.1 retorna `{anchorId, latitude, longitude,
+ * altitude}` SEM position. Shape A usa a position direta; shape B faz
+ * two-step com a coordenada AUTORITATIVA da plataforma + criação local
+ * (createGeospatial/createTerrain com o roteamento de altitude do banco).
+ */
+async function resolveHostedAnchor(
+  nav: any,
+  req: PendingRequest,
+): Promise<{ anchorId: string; position: [number, number, number]; shape: 'A' | 'B' }> {
+  const result = (await withTimeout(
+    nav.resolveGeospatialAnchor(req.hostedGeospatialId as string),
+    ANCHOR_TIMEOUT_MS,
+    `resolveGeospatial(${req.pinId})`,
+  )) as {
+    success?: boolean;
+    error?: string;
+    anchor?: {
+      anchorId?: string;
+      position?: [number, number, number];
+      latitude?: number;
+      longitude?: number;
+    };
+  };
+  if (!result?.success || !result.anchor) {
+    throw new Error(result?.error ?? 'resolve hospedado falhou (sem detalhe)');
+  }
+  // Shape A: position de mundo direto (contrato documentado).
+  if (result.anchor.position) {
+    return {
+      anchorId: result.anchor.anchorId ?? (req.hostedGeospatialId as string),
+      position: result.anchor.position,
+      shape: 'A',
+    };
+  }
+  // Shape B (docstring 3.1.1): só coordenadas — cria a âncora local com elas.
+  const { latitude, longitude } = result.anchor;
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    throw new Error('resolve hospedado sem position nem lat/lng (shape desconhecido)');
+  }
+  const local = (await withTimeout(
+    req.mode === 'geospatial'
+      ? nav.createGeospatialAnchor(latitude, longitude, req.value)
+      : nav.createTerrainAnchor(latitude, longitude, req.value),
+    ANCHOR_TIMEOUT_MS,
+    `createAnchorTwoStep(${req.pinId})`,
+  )) as GeospatialAnchorResult;
+  if (!local?.success || !local.anchor?.position) {
+    throw new Error(local?.error ?? 'two-step falhou (sem detalhe)');
+  }
+  return {
+    anchorId: local.anchor.anchorId ?? '',
+    position: local.anchor.position as [number, number, number],
+    shape: 'B',
+  };
+}
+
   /** Último valor de poseReady (lido pelo interval sem recriá-lo). */
   const poseReadyRef = useRef(poseReady);
   poseReadyRef.current = poseReady;
@@ -214,6 +348,9 @@ const withTimeout = async <T,>(
   useEffect(() => {
     const timer = setInterval(async () => {
       if (!aliveRef.current || !geoEnabledRef.current) return;
+      // Fila desligada (provider reactvision — posições em frame de terra,
+      // lição 2026-11-16): nada a processar.
+      if (!enabledRef.current) return;
       // Blur da tab OU tracking degradado (sinal do detach): NÃO criar
       // âncoras nativas — createGeospatialAnchor/createTerrainAnchor são
       // UIBlocks interop e a view está a caminho da destruição (§12.12).
@@ -234,42 +371,130 @@ const withTimeout = async <T,>(
             console.warn('[ARNative] navigator morto — abortando lote');
             return;
           }
+          /**
+           * GATE DE RAIO (lição 2026-11-16): pin além de RESOLVE_RADIUS_M
+           * não vira op nativa — GET fútil à plataforma + fila one-op-por-vez
+           * ocupada (campus a 74km vistos de casa). Sem pose ainda: espera
+           * (a distância é re-avaliada no próximo tick).
+           */
+          const pose = geoPoseRef.current;
+          if (pose) {
+            const { east, north } = geodeticToENU(
+              pose.latitude,
+              pose.longitude,
+              0,
+              req.lat,
+              req.lng,
+              0,
+            );
+            const distM = Math.hypot(east, north);
+            if (distM > RESOLVE_RADIUS_M) {
+              if (!radiusSkippedRef.current.has(req.pinId)) {
+                radiusSkippedRef.current.add(req.pinId);
+                console.log(
+                  `[ARNative] ${req.pinId} fora do raio de resolve (${(distM / 1000).toFixed(1)}km > ${(RESOLVE_RADIUS_M / 1000).toFixed(0)}km) — sem op nativa (subpixel)`,
+                );
+              }
+              // Consome a requisição sem criar: o render fica com a projeção
+              // ENU (estimativa honesta ±Xm); re-enfileirado só via retryFailed.
+              createdRef.current.add(req.pinId);
+              continue;
+            }
+          }
           inFlightRef.current.add(req.pinId);
           try {
-            const result = (await withTimeout(
-              req.mode === 'geospatial'
-                ? navigatorRef.current.createGeospatialAnchor(req.lat, req.lng, req.value)
-                : navigatorRef.current.createTerrainAnchor(req.lat, req.lng, req.value),
-              ANCHOR_TIMEOUT_MS,
-              `createAnchor(${req.pinId})`,
-            )) as GeospatialAnchorResult;
-            if (result?.success && result.anchor?.position) {
-              entriesRef.current.set(req.pinId, {
-                pinId: req.pinId,
-                nativeAnchorId: result.anchor.anchorId ?? '',
-                position: result.anchor.position as [number, number, number],
-              });
-              if (result.anchor.anchorId) {
-                nativeIdsRef.current.add(result.anchor.anchorId);
-              }
-              // Marca criado SÓ APÓS o sucesso (falha → retry).
-              createdRef.current.add(req.pinId);
-              failedRef.current.delete(req.pinId);
-              retriesRef.current.delete(req.pinId);
-              setEntries(new Map(entriesRef.current));
+            /**
+             * Dupla ancoragem (F2): UUID hospedado no RV → resolve por UUID
+             * (posição server-backed, entre sessões e usuários; DEFENSIVO
+             * shape A/B — lição 2026-11-16); senão o caminho local clássico
+             * por lat/lng do banco.
+             */
+            const hostedId = req.hostedGeospatialId;
+            const useHostedResolve =
+              !!hostedId &&
+              typeof navigatorRef.current.resolveGeospatialAnchor === 'function';
+            let nativeAnchorId = '';
+            let resolvedPosition: [number, number, number] | null = null;
+            let resolvedShape: 'A' | 'B' | null = null;
+
+            if (useHostedResolve) {
+              const resolved = await resolveHostedAnchor(navigatorRef.current, req);
+              nativeAnchorId = resolved.anchorId;
+              resolvedPosition = resolved.position;
+              resolvedShape = resolved.shape;
             } else {
-              throw new Error(result?.error ?? 'falha sem detalhe');
+              const result = (await withTimeout(
+                req.mode === 'geospatial'
+                  ? navigatorRef.current.createGeospatialAnchor(req.lat, req.lng, req.value)
+                  : navigatorRef.current.createTerrainAnchor(req.lat, req.lng, req.value),
+                ANCHOR_TIMEOUT_MS,
+                `createAnchor(${req.pinId})`,
+              )) as GeospatialAnchorResult;
+              if (result?.success && result.anchor?.position) {
+                nativeAnchorId = result.anchor.anchorId ?? '';
+                resolvedPosition = result.anchor.position as [number, number, number];
+              } else {
+                throw new Error(result?.error ?? 'falha sem detalhe');
+              }
+            }
+
+            entriesRef.current.set(req.pinId, {
+              pinId: req.pinId,
+              nativeAnchorId,
+              position: resolvedPosition,
+              source: 'geospatial',
+            });
+            if (nativeAnchorId) {
+              nativeIdsRef.current.add(nativeAnchorId);
+            }
+            // Marca criado SÓ APÓS o sucesso (falha → retry).
+            createdRef.current.add(req.pinId);
+            failedRef.current.delete(req.pinId);
+            retriesRef.current.delete(req.pinId);
+            setEntries(new Map(entriesRef.current));
+            if (useHostedResolve) {
+              console.log(
+                `[ARNative] ${req.pinId} âncora geoespacial HOSPEDADA resolvida (shape ${resolvedShape}) — server-backed`,
+              );
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            /**
+             * PROVIDER MISMATCH (lição 2026-11-16): com provider=arcore, o
+             * resolveGeospatialAnchor erro "requires the ReactVision
+             * geospatial provider" — o método EXISTE no JS mas o nativo
+             * rejeita. Degrada IMEDIATAMENTE ao caminho local (coords do
+             * banco via createGeospatial/Terrain), sem desperdiçar retries.
+             */
+            if (PROVIDER_MISMATCH_ERROR.test(message)) {
+              console.warn(
+                `[ARNative] ${req.pinId} resolve hospedado incompatível com o provider — degradando p/ criação local por lat/lng`,
+              );
+              retriesRef.current.delete(req.pinId);
+              pendingRef.current.push({ ...req, hostedGeospatialId: undefined });
+              continue;
+            }
             const isFatal = FATAL_ERROR_PATTERNS.some((p) => message.toUpperCase().includes(p));
             const retries = (retriesRef.current.get(req.pinId) ?? 0) + 1;
             retriesRef.current.set(req.pinId, retries);
+            /**
+             * UUID hospedado esgotado → UMA degradação para o caminho local
+             * (createGeospatial/createTerrain por lat/lng do banco): a âncora
+             * existe na plataforma mas este device não a resolveu agora.
+             */
+            const degradeToLocal =
+              req.hostedGeospatialId !== undefined && retries > MAX_RETRIES && !isFatal;
             if (!isFatal && retries <= MAX_RETRIES) {
               console.warn(
                 `[ARNative] ${req.pinId} falhou (tentativa ${retries}/${MAX_RETRIES + 1}): ${message} — re-enfileirando`,
               );
               pendingRef.current.push(req);
+            } else if (degradeToLocal) {
+              console.warn(
+                `[ARNative] ${req.pinId} resolve hospedado esgotado (${message}) — degradando p/ criação local por lat/lng`,
+              );
+              retriesRef.current.delete(req.pinId);
+              pendingRef.current.push({ ...req, hostedGeospatialId: undefined });
             } else {
               console.warn(
                 `[ARNative] ${req.pinId} ${isFatal ? 'erro fatal' : `esgotou ${MAX_RETRIES + 1} tentativas`} (${message}) — permanece no fallback de projeção`,
@@ -303,12 +528,13 @@ const withTimeout = async <T,>(
     inFlightRef.current.clear();
     retriesRef.current.clear();
     failedRef.current.clear();
+    radiusSkippedRef.current.clear();
     nativeIdsRef.current.clear();
     setEntries(new Map());
   }, []);
 
   /** Re-enfileira pins que esgotaram retries (refresh manual explícito). */
-  const retryFailed = useCallback(() => {    if (failedRef.current.size === 0) return;
+  const retryFailed = useCallback(() => {    if (failedRef.current.size === 0 || !enabledRef.current) return;
     const anchors = serverAnchorsRef.current;
     if (!anchors) return;
     const ids = [...failedRef.current];
@@ -324,18 +550,11 @@ const withTimeout = async <T,>(
       ) {
         continue;
       }
-      const hasAltitude =
-        typeof anchor.altitude === 'number' && Number.isFinite(anchor.altitude);
-      pendingRef.current.push({
-        pinId: id,
-        lat: anchor.latitude,
-        lng: anchor.longitude,
-        mode: hasAltitude ? 'geospatial' : 'terrain',
-        value: hasAltitude ? (anchor.altitude as number) : PIN_HEIGHT_ABOVE_TERRAIN_M,
-      });
+      pendingRef.current.push(buildRequest(anchor));
       createdRef.current.delete(id);
       failedRef.current.delete(id);
       retriesRef.current.delete(id);
+      radiusSkippedRef.current.delete(id);
       requeued++;
     }
     if (requeued > 0) {
@@ -363,7 +582,12 @@ const withTimeout = async <T,>(
 
   /** Adiciona um pin recém-criado (exibição imediata + cria âncora nativa). */
   const addLocal = useCallback((pinId: string, position: [number, number, number]) => {
-    const entry: NativeAnchorEntry = { pinId, nativeAnchorId: '', position };
+    const entry: NativeAnchorEntry = {
+      pinId,
+      nativeAnchorId: '',
+      position,
+      source: 'slam',
+    };
     entriesRef.current.set(pinId, entry);
     setEntries(new Map(entriesRef.current));
     // A âncora nativa será criada no próximo tick quando o serverAnchor chegar

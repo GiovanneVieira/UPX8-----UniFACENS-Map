@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { anchorCategorySchema } from './category.schema.js';
+import { anchorCategorySchema, categoryModelSchema } from './category.schema.js';
 
 /**
  * Tupla 3D cartesiana [x, y, z] em metros (usada pelo ARCore em tempo de execução).
@@ -36,6 +36,10 @@ export const anchorSchema = z.object({
   distanceMeters: z.number().optional(),
   /** Categoria do ponto — define o modelo 3D renderizado no AR (null = padrão). */
   category: anchorCategorySchema.nullable().default(null),
+  /** Modelo 3D OVERRIDE do pin (null = usa o modelo da categoria). */
+  modelId: z.string().uuid().optional().nullable(),
+  /** Modelo renderizável do pin (join pelo modelId; null = herda da categoria). */
+  model: categoryModelSchema.nullable().optional(),
   /** Runtime-only (client): pin sem âncora nativa — projeção estimada. */
   estimated: z.boolean().optional(),
   /** Runtime-only (client): envelope de erro da estimativa (m). */
@@ -52,6 +56,25 @@ export const anchorSchema = z.object({
    * o frame da cloud anchor é estável — o offset persiste com significado.
    */
   frameOffset: vector3Schema.optional().nullable(),
+  /**
+   * UUID da plataforma ReactVision da âncora geoespacial hospedada
+   * (hostGeospatialAnchor). Camada intermediária de precisão: cloud visual
+   * (cm) > geospatial (m) > projeção client-side. Null = pin cloud-only.
+   */
+  geospatialAnchorId: z.string().optional().nullable(),
+  /** Acurácia horizontal (m, 95%) da pose no momento do hosting geoespacial. */
+  geospatialAccuracyM: z.number().optional().nullable(),
+  /**
+   * Ajuste fino de ALTITUDE por ponto (m, −50..+50): somado ao Y apenas
+   * nas camadas imprecisas (âncora geospatial nativa + estimativa ENU) —
+   * corrige o viés vertical do GPS no hosting (±5–15m fácil). O cloud
+   * anchor visual (cm, onde o usuário tocou) NÃO recebe offset.
+   */
+  altitudeOffsetM: z.number().min(-50).max(50).optional().nullable(),
+  /** Imagens do ponto (URLs resolvidas pelo serializer — ordem = ordem de exibição). */
+  images: z.array(z.string()).optional(),
+  /** Informações detalhadas do ponto (texto longo, opcional). */
+  longDescription: z.string().optional().nullable(),
 });
 export type Anchor = z.infer<typeof anchorSchema>;
 
@@ -67,10 +90,17 @@ export const createAnchorSchema = z.object({
   cloudAnchorId: z.string().trim().min(1, 'O Cloud Anchor ID é obrigatório'),
   description: z.string().trim().max(1000).optional().nullable(),
   categoryId: z.string().uuid('Categoria inválida').optional().nullable(),
+  /** Modelo 3D override do pin (null = modelo da categoria). */
+  modelId: z.string().uuid('Modelo inválido').optional().nullable(),
   latitude: latitudeRange.optional().nullable(),
   longitude: longitudeRange.optional().nullable(),
   altitude: altitudeRange.optional().nullable(),
   heading: headingRange.optional().nullable(),
+  /** UUID RV da âncora geoespacial, quando o host resolveu antes do save. */
+  geospatialAnchorId: z.string().trim().min(1).optional(),
+  geospatialAccuracyM: z.number().min(0).max(10000).optional(),
+  /** Ajuste fino de altitude (m) — corrigiu viés vertical do hosting. */
+  altitudeOffsetM: z.number().min(-50).max(50).optional().nullable(),
 });
 export type CreateAnchorDto = z.infer<typeof createAnchorSchema>;
 
@@ -84,12 +114,19 @@ export const updateAnchorSchema = z
     cloudAnchorId: z.string().trim().min(1).optional(),
     frameOffset: vector3Schema.optional().nullable(),
     categoryId: z.string().uuid('Categoria inválida').optional().nullable(),
+    /** UUID RV da âncora geoespacial hospedada (grava quando o host resolve após o save). */
+    geospatialAnchorId: z.string().trim().min(1).optional(),
+    geospatialAccuracyM: z.number().min(0).max(10000).optional(),
+    /** Ajuste fino de altitude (m) — null zera. */
+    altitudeOffsetM: z.number().min(-50).max(50).nullable().optional(),
   })
   .refine(
     (dto) =>
       dto.cloudAnchorId !== undefined ||
       dto.frameOffset !== undefined ||
-      dto.categoryId !== undefined,
+      dto.categoryId !== undefined ||
+      dto.geospatialAnchorId !== undefined ||
+      dto.geospatialAccuracyM !== undefined,
     {
       message: 'Informe ao menos um campo para atualizar',
     },
