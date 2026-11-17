@@ -146,6 +146,14 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   /** VPS disponível na área (checkVPSAvailability 1×/sessão; null = não consultado). */
   const [vpsAvailable, setVpsAvailable] = useState<boolean | null>(null);
   const vpsCheckedRef = useRef(false);
+  /**
+   * Navigator completo (arSceneNavigator do callback onNavigatorReady) — tem
+   * TODOS os métodos geospatial. O `navigatorRef` (React ref do componente)
+   * NÃO expõe checkVPSAvailability na janela do primeiro mount (bug de device
+   * 2026-11-16: o VPS check nunca rodou porque o ref do componente não tinha
+   * o método — zero logs [ARGeo] VPS).
+   */
+  const sceneNavRef = useRef<any>(null);
 
   const handleEarthState = useCallback((state: 'Stopped' | 'Localizing' | 'Enabled' | 'Paused') => {
     setEarthState(state);
@@ -156,12 +164,14 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
 
   // checkVPSAvailability 1× após a primeira pose válida (badge de expectativa:
   // VPS ~1–5m vs GPS-only ±10–30m — pesquisa de precisão 2026-11-16).
+  // ⚠️ Usa o navigator do CALLBACK (sceneNavRef), não o React ref — este não
+  // expõe os métodos geospatial na janela do mount (bug corrigido 2026-11-16).
   useEffect(() => {
     const pose = geospatial.pose;
     if (vpsCheckedRef.current || !pose || !focused) return;
+    const nav = sceneNavRef.current;
+    if (!nav || typeof nav.checkVPSAvailability !== 'function') return;
     vpsCheckedRef.current = true;
-    const nav = navigatorRef.current;
-    if (typeof nav?.checkVPSAvailability !== 'function') return;
     void (async () => {
       try {
         const result = (await nav.checkVPSAvailability(
@@ -171,7 +181,8 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         const available = result?.availability === 'Available';
         console.log(`[ARGeo] VPS: ${result?.availability ?? 'Unknown'}`);
         setVpsAvailable(available);
-      } catch {
+      } catch (err) {
+        console.warn('[ARGeo] VPS check falhou:', err);
         // best-effort: badge fica null (neutro)
       }
     })();
@@ -601,6 +612,8 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
   // ── Refresh REAL: refetch + retry de falhas + re-projeção + recalibra Δ ──
   const handleNavigatorReady = useCallback(
     (nav: any) => {
+      // Guarda o navigator completo (com métodos geospatial) para o VPS check.
+      sceneNavRef.current = nav;
       nativeAnchors.handleNavigatorReady(nav);
       cloudAnchors.handleNavigatorReady(nav);
       pointHosting.handleNavigatorReady(nav);
