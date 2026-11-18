@@ -14,6 +14,26 @@ describe('Variáveis de publicação', () => {
       'DATABASE_URL, BETTER_AUTH_SECRET',
     );
   });
+  it('exige SMTP_URL em produção (fail-fast: sem e-mail ninguém verifica conta)', () => {
+    expect(() =>
+      loadApiConfig({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://fixture:fixture@db:5432/x',
+        BETTER_AUTH_SECRET: 'fixture-secret-with-at-least-32-characters',
+      }),
+    ).toThrow('SMTP_URL');
+  });
+  it('valida REDIS_URL e SMTP_URL (protocolos e formato)', () => {
+    const config = loadApiConfig({
+      REDIS_URL: 'redis://redis:6379',
+      SMTP_URL: 'smtps://user:pass@smtp.example.org:465',
+      SMTP_FROM: 'UniFACENS Map <no-reply@facens.br>',
+    });
+    expect(config.REDIS_URL).toBe('redis://redis:6379');
+    expect(config.SMTP_URL).toBe('smtps://user:pass@smtp.example.org:465');
+    expect(() => loadApiConfig({ REDIS_URL: 'http://redis:6379' })).toThrow('REDIS_URL');
+    expect(() => loadApiConfig({ SMTP_URL: 'http://smtp:587' })).toThrow('SMTP_URL');
+  });
   it('valida configuração sem expor credenciais nos erros', () => {
     const secret = 'fixture-secret-never-print';
     let message = '';
@@ -36,6 +56,7 @@ describe('Variáveis de publicação', () => {
       NODE_ENV: 'production',
       DATABASE_URL: url,
       BETTER_AUTH_SECRET: 'fixture-secret-with-at-least-32-characters',
+      SMTP_URL: 'smtp://fixture:fixture@smtp.example.org:587',
       CORS_ORIGINS: 'https://campus.example.org/, https://outro.example.org',
     });
     expect(config.DATABASE_URL).toBe(url);

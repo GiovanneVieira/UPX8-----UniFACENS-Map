@@ -40,6 +40,8 @@ export const storageKeys = {
     `models/originals/${modelId}/${filename}`,
   modelDerived: (modelId: string, filename: string) =>
     `models/derived/${modelId}/${filename}`,
+  userAvatar: (userId: string, filename: string) =>
+    `users/avatars/${userId}/${filename}`,
 } as const;
 
 /** Rejeita path traversal em chaves vindas de fora (ex.: delete por query). */

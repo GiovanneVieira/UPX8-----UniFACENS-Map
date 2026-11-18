@@ -14,6 +14,7 @@ import { MapUnavailable } from './map-unavailable';
  */
 const CampusMapBase = React.memo(function CampusMap({
   places,
+  anchors,
   selectedPlace,
   onSelect,
 }: CampusMapProps) {
@@ -71,6 +72,25 @@ const CampusMapBase = React.memo(function CampusMap({
                 : 'Consulte as informações na lista'
             }
             onPress={() => onSelect(place.id)}
+          />
+        ))}
+        {/* Pins AR (âncoras): roxo, callout nativo — o detalhe completo vive
+            na tab AR (decisão de escopo: sem fluxo de detalhe aqui). */}
+        {anchors.map((anchor) => (
+          <Marker
+            key={`anchor-${anchor.id}`}
+            coordinate={{
+              latitude: anchor.latitude,
+              longitude: anchor.longitude,
+            }}
+            title={anchor.name}
+            description={
+              anchor.categoryLabel
+                ? `Ponto AR · ${anchor.categoryLabel}`
+                : 'Ponto AR'
+            }
+            pinColor="#8B5CF6"
+            tracksViewChanges={false}
           />
         ))}
       </MapView>

@@ -7,6 +7,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { usePlacesExplorer } from "../hooks/use-places-explorer";
+import { useAnchorsQuery } from "@/features/anchors/queries/use-anchors-query";
 import CampusMap from "./campus-map";
 import { PlaceFormModal } from "./place-form-modal";
 import { PlaceCard } from "./place-card";
@@ -19,6 +20,21 @@ export function PlacesFeature() {
   const explorer = usePlacesExplorer();
   const { isAdmin } = useAuth();
   const { query, details, places, selectedId, selectPlace, total } = explorer;
+  // Pins AR no mapa 2D: âncoras com coordenada — falha silenciosa (o mapa
+  // segue mostrando places; a tab AR tem o estado completo delas).
+  const { data: anchorsData } = useAnchorsQuery();
+  const anchorMarkers = (anchorsData ?? [])
+    .filter(
+      (anchor): anchor is typeof anchor & { latitude: number; longitude: number } =>
+        anchor.latitude != null && anchor.longitude != null,
+    )
+    .map((anchor) => ({
+      id: anchor.id,
+      name: anchor.name,
+      latitude: anchor.latitude,
+      longitude: anchor.longitude,
+      categoryLabel: anchor.category?.label ?? null,
+    }));
   return (
     <SafeAreaView
       className="flex-1 bg-slate-950"
@@ -75,12 +91,14 @@ export function PlacesFeature() {
             </Text>
             <CampusMap
               places={places}
+              anchors={anchorMarkers}
               selectedPlace={details.data ?? null}
               onSelect={selectPlace}
             />
             <Text className="text-xs text-slate-400">
-              O mapa apresenta os locais carregados nesta busca. Confira a
-              origem e a verificação dos dados antes de utilizá-los.
+              O mapa apresenta os locais carregados nesta busca e os pontos AR
+              (pins roxos). Confira a origem e a verificação dos dados antes de
+              utilizá-los.
             </Text>
           </View>
           {details.isFetching && selectedId ? (

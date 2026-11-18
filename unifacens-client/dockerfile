@@ -21,6 +21,9 @@ COPY packages/shared/package.json ./packages/shared/
 COPY unifacens-api/package.json ./unifacens-api/
 COPY unifacens-client/package.json ./unifacens-client/
 COPY scripts ./scripts
+# Postinstall do client (guarda interna: pula o build do shared neste
+# estágio — só os manifests existem; o builder compila depois).
+COPY unifacens-client/scripts ./unifacens-client/scripts
 
 # Instala todas as dependências respeitando os workspaces do npm
 RUN npm ci

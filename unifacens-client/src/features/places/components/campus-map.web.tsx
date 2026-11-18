@@ -4,6 +4,7 @@ import { GoogleMapFrame, GOOGLE_MAP_ID } from "./google-map-frame.web";
 
 export default function CampusMap({
   places,
+  anchors,
   selectedPlace,
   onSelect,
 }: CampusMapProps) {
@@ -32,6 +33,14 @@ export default function CampusMap({
             title={place.name}
             position={{ lat: place.latitude, lng: place.longitude }}
             onClick={() => onSelect(place.id)}
+          />
+        ))}
+        {/* Pins AR (âncoras) — mesmo pin roxo do nativo, título via tooltip. */}
+        {anchors.map((anchor) => (
+          <AdvancedMarker
+            key={`anchor-${anchor.id}`}
+            title={anchor.name}
+            position={{ lat: anchor.latitude, lng: anchor.longitude }}
           />
         ))}
       </Map>

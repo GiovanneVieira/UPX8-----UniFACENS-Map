@@ -7,10 +7,17 @@ interface SessionUserShape {
   name: string;
   email: string;
   role?: string;
+  image?: string | null;
 }
 
 function mapSessionUser(user: SessionUserShape): AuthUser {
-  return { id: user.id, name: user.name, email: user.email, role: user.role ?? 'user' };
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role ?? 'user',
+    image: user.image ?? null,
+  };
 }
 
 async function issueAndStoreJwt(): Promise<string> {
@@ -29,6 +36,75 @@ async function issueAndStoreJwt(): Promise<string> {
   }
   await saveJwt(token);
   return token;
+}
+
+/** Login bloqueado por e-mail não verificado (requireEmailVerification). */
+export class EmailNotVerifiedError extends Error {
+  constructor(public readonly email: string) {
+    super('Verifique seu e-mail para entrar.');
+    this.name = 'EmailNotVerifiedError';
+  }
+}
+
+/** Envia o código OTP de verificação de e-mail (6 dígitos, 5 min). */
+export async function sendEmailVerificationOtp(email: string): Promise<void> {
+  const { error } = await authClient.emailOtp.sendVerificationOtp({
+    email,
+    type: 'email-verification',
+  });
+  if (error) {
+    console.warn(
+      '[auth] sendVerificationOtp(email-verification) erro:',
+      JSON.stringify({ code: (error as { code?: string }).code, status: (error as { status?: number }).status }),
+    );
+    throw new Error('Não foi possível enviar o código de verificação. Tente novamente em instantes.');
+  }
+}
+
+/**
+ * Verifica o e-mail com o OTP e, quando a senha é conhecida (fluxo de
+ * criação de conta), entra automaticamente — o store atualiza e o AuthGate
+ * reage (navegação reativa, sem callback manual).
+ */
+export async function verifyEmailAndSignIn(email: string, otp: string, password?: string): Promise<void> {
+  const { error } = await authClient.emailOtp.verifyEmail({ email, otp });
+  if (error) {
+    throw new Error('Código inválido ou expirado. Solicite um novo código.');
+  }
+  if (password) {
+    await signInWithEmail(email, password);
+  }
+}
+
+/** Envia o código OTP de redefinição de senha (resposta neutra no servidor). */
+export async function sendPasswordResetOtp(email: string): Promise<void> {
+  const { error } = await authClient.emailOtp.sendVerificationOtp({
+    email,
+    type: 'forget-password',
+  });
+  if (error) {
+    console.warn(
+      '[auth] sendVerificationOtp(forget-password) erro:',
+      JSON.stringify({ code: (error as { code?: string }).code, status: (error as { status?: number }).status }),
+    );
+    throw new Error('Não foi possível enviar o código. Confira o e-mail informado e tente novamente.');
+  }
+}
+
+/** Redefine a senha com o OTP recebido (esqueceu a senha). */
+export async function resetPasswordWithOtp(
+  email: string,
+  otp: string,
+  newPassword: string,
+): Promise<void> {
+  const { error } = await authClient.emailOtp.resetPassword({
+    email,
+    otp,
+    password: newPassword,
+  });
+  if (error) {
+    throw new Error('Código inválido ou expirado. Solicite um novo código.');
+  }
 }
 
 /**
@@ -66,6 +142,9 @@ export async function signInWithEmail(email: string, password: string): Promise<
       '[auth] signIn.email erro:',
       JSON.stringify({ code: (error as { code?: string }).code, status: (error as { status?: number }).status, message: error.message }),
     );
+    if ((error as { code?: string }).code === 'EMAIL_NOT_VERIFIED') {
+      throw new EmailNotVerifiedError(email);
+    }
     throw new Error(
       error.code === 'INVALID_EMAIL_OR_PASSWORD'
         ? 'E-mail ou senha incorretos.'
@@ -83,11 +162,17 @@ export async function signInWithEmail(email: string, password: string): Promise<
   return user;
 }
 
+/**
+ * Cria a conta e dispara o OTP de verificação — NÃO autentica.
+ * Com requireEmailVerification no servidor, o login fica bloqueado até o
+ * e-mail ser verificado; a senha fica em memória (componente) para o
+ * sign-in automático logo após a verificação.
+ */
 export async function signUpWithEmail(
   email: string,
   password: string,
   name: string,
-): Promise<AuthUser> {
+): Promise<void> {
   const { error } = await authClient.signUp.email({ email, password, name });
   if (error) {
     throw new Error(
@@ -96,15 +181,10 @@ export async function signUpWithEmail(
         : 'Não foi possível criar a conta. Tente novamente.',
     );
   }
-  const { data: session } = await authClient.getSession();
-  if (!session?.user) {
-    console.warn('[auth] signUp ok, mas getSession sem usuário — cookie não persistiu?');
-    throw new Error('Não foi possível concluir o acesso. Tente novamente.');
-  }
-  const jwt = await issueAndStoreJwt();
-  const user = mapSessionUser(session.user as SessionUserShape);
-  useAuthStore.getState().setSession(jwt, user);
-  return user;
+  // O sign-up pode deixar cookie de sessão não utilizável (conta não
+  // verificada) — descarta para o hydrate não "logar" conta pendente.
+  await authClient.signOut().catch(() => undefined);
+  await sendEmailVerificationOtp(email);
 }
 
 export async function signOutEverywhere(): Promise<void> {

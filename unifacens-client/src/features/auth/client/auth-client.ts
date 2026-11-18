@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { createAuthClient } from 'better-auth/react';
+import { emailOTPClient } from 'better-auth/client/plugins';
 import { expoClient } from '@better-auth/expo/client';
 import * as SecureStore from 'expo-secure-store';
 import { getApiBaseUrl } from '@/services/api';
@@ -35,6 +36,8 @@ const authPlugins =
  *   (refresh silencioso do JWT de 24h sem re-login);
  * - WEB: cookies do navegador (exige credentials:'include' — sem isto o
  *   navegador descarta o Set-Cookie do login em requisições cross-origin).
+ * - `emailOTPClient` (ambas as plataformas): fluxos OTP de verificação de
+ *   e-mail e redefinição de senha (sendVerificationOtp/verifyEmail/resetPassword).
  * - O JWT é obtido em `GET /auth/token` via `authClient.$fetch`.
  */
 export const authClient = createAuthClient({
@@ -45,7 +48,7 @@ export const authClient = createAuthClient({
   fetchOptions: {
     credentials: 'include',
   },
-  plugins: authPlugins,
+  plugins: [...authPlugins, emailOTPClient()],
 });
 
 export async function saveJwt(token: string): Promise<void> {

@@ -127,6 +127,8 @@ describe('Navegação: persistência, publicação, JWT e cálculo por HTTP', ()
       DATABASE_URL: container.getConnectionUri(),
       BETTER_AUTH_URL: baseUrl,
       BETTER_AUTH_SECRET: 'navigation-test-secret-at-least-32-characters',
+      // Produção exige SMTP (fail-fast do requireEmailVerification).
+      SMTP_URL: 'smtp://fixture:fixture@smtp.example.org:587',
     });
     const auth = createBetterAuth(config, db);
     // O módulo global abaixo fornece a conexão real aos providers da feature.
@@ -159,7 +161,15 @@ describe('Navegação: persistência, publicação, JWT e cálculo por HTTP', ()
       const email = `${role}@navigation.example.org`;
       const password = 'synthetic-password-123';
       await auth.api.createUser({
-        body: { name: role, email, password, role },
+        body: {
+          name: role,
+          email,
+          password,
+          role,
+          // requireEmailVerification ativo: fixtures precisam nascer verificadas
+          // (invariante §13.14 do AGENTS.md).
+          data: { emailVerified: true },
+        },
       });
       const login = await fetch(`${baseUrl}/auth/sign-in/email`, {
         method: 'POST',

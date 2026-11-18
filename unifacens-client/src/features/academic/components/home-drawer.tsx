@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/hooks/use-auth';
+import { AvatarPicker } from '@/features/profile/components/avatar-picker';
 
 const APP_VERSION = '1.0.0-dev';
 
@@ -106,11 +107,9 @@ export function HomeDrawer({ visible, onClose }: DrawerProps) {
               <Text className="text-2xl font-bold text-white">Menu</Text>
             </View>
 
-            {/* Perfil: avatar + nome + curso (espelho oficial) */}
+            {/* Perfil: avatar (troca de foto) + nome + curso (espelho oficial) */}
             <View className="flex-row items-center gap-4 px-6 py-4">
-              <View className="h-14 w-14 items-center justify-center rounded-full bg-neutral-800">
-                <Ionicons name="person" size={26} color="#D4D4D4" />
-              </View>
+              <AvatarPicker size={56} />
               <View className="flex-1 gap-0.5">
                 <Text className="text-base font-bold text-white">{user?.name ?? '—'}</Text>
                 <Text className="text-sm text-neutral-400">

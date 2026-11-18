@@ -1,5 +1,6 @@
-import React, { useId } from "react";
-import { View, Text, TextInput, type TextInputProps } from "react-native";
+import React, { useId, useState } from "react";
+import { View, Text, TextInput, Pressable, type TextInputProps } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 interface FormInputFieldProps extends TextInputProps {
   label: string;
@@ -9,6 +10,11 @@ interface FormInputFieldProps extends TextInputProps {
   errors?: string[];
   helperText?: string;
   className?: string;
+  /**
+   * Acessório à direita do input (ex.: toggle de visibilidade da senha).
+   * O input ocupa o espaço restante (flex-1) — sem o acessório, largura total.
+   */
+  rightElement?: React.ReactNode;
 }
 
 /**
@@ -25,6 +31,7 @@ export const FormInputField = React.forwardRef<TextInput, FormInputFieldProps>(
       errors = [],
       helperText,
       className = "",
+      rightElement,
       ...textInputProps
     },
     ref,
@@ -40,19 +47,22 @@ export const FormInputField = React.forwardRef<TextInput, FormInputFieldProps>(
         >
           {label}
         </Text>
-        <TextInput
-          ref={ref}
-          accessibilityLabel={label}
-          accessibilityLabelledBy={labelId}
-          className={`min-h-[44px] w-full bg-slate-900 border rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-sky-400 ${
-            hasError ? "border-rose-500" : "border-slate-700"
-          } ${className}`}
-          value={value}
-          onChangeText={onChangeText}
-          onBlur={onBlur}
-          placeholderTextColor="#94A3B8"
-          {...textInputProps}
-        />
+        <View className="flex-row items-center">
+          <TextInput
+            ref={ref}
+            accessibilityLabel={label}
+            accessibilityLabelledBy={labelId}
+            className={`min-h-[44px] flex-1 bg-slate-900 border rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-sky-400 ${
+              hasError ? "border-rose-500" : "border-slate-700"
+            } ${className}`}
+            value={value}
+            onChangeText={onChangeText}
+            onBlur={onBlur}
+            placeholderTextColor="#94A3B8"
+            {...textInputProps}
+          />
+          {rightElement}
+        </View>
         {hasError ? (
           <Text
             accessibilityLiveRegion="polite"
@@ -64,6 +74,42 @@ export const FormInputField = React.forwardRef<TextInput, FormInputFieldProps>(
           <Text className="text-xs text-slate-400 mt-1">{helperText}</Text>
         ) : null}
       </View>
+    );
+  },
+);
+
+type PasswordFieldProps = Omit<FormInputFieldProps, "secureTextEntry" | "rightElement">;
+
+/**
+ * Campo de senha com toggle de visibilidade (ícone de olho — acessível:
+ * label dinâmico "Exibir/Ocultar senha", tap target de 44×44 dp).
+ * Forwarda ref como FormInputField (Enter avança p/ o próximo campo).
+ */
+export const PasswordField = React.forwardRef<TextInput, PasswordFieldProps>(
+  function PasswordField(props, ref) {
+    const [visible, setVisible] = useState(false);
+    return (
+      <FormInputField
+        ref={ref}
+        {...props}
+        secureTextEntry={!visible}
+        rightElement={
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={visible ? "Ocultar senha" : "Exibir senha"}
+            accessibilityState={{ expanded: visible }}
+            onPress={() => setVisible((current) => !current)}
+            hitSlop={8}
+            className="h-11 w-11 items-center justify-center"
+          >
+            <Ionicons
+              name={visible ? "eye-off-outline" : "eye-outline"}
+              size={22}
+              color="#94A3B8"
+            />
+          </Pressable>
+        }
+      />
     );
   },
 );
