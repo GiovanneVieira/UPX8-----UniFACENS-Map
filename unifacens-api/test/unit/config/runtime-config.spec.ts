@@ -31,6 +31,11 @@ describe('Variáveis de publicação', () => {
     });
     expect(config.REDIS_URL).toBe('redis://redis:6379');
     expect(config.SMTP_URL).toBe('smtps://user:pass@smtp.example.org:465');
+    // rediss:// (TLS — Upstash/Render externo) é aceito.
+    expect(
+      loadApiConfig({ REDIS_URL: 'rediss://default:pass@db.upstash.io:6379' })
+        .REDIS_URL,
+    ).toContain('rediss://');
     expect(() => loadApiConfig({ REDIS_URL: 'http://redis:6379' })).toThrow('REDIS_URL');
     expect(() => loadApiConfig({ SMTP_URL: 'http://smtp:587' })).toThrow('SMTP_URL');
   });

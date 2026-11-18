@@ -109,14 +109,18 @@ export const apiEnvironmentSchema = z
      * Redis (better-auth secondaryStorage): OTPs do plugin emailOTP e
      * rate-limits vivem aqui quando configurado (TTL nativo). Vazio =
      * fallback graceful para a `verification` table do Postgres.
+     * `rediss://` (TLS) incluído — provedores gerenciados (Upstash, Render
+     * Key Value externo) exigem; node-redis ativa TLS pela scheme da URL.
      */
     REDIS_URL: optionalValue.pipe(
       z
         .string()
         .url()
         .refine(
-          (value) => new URL(value).protocol === "redis:",
-          "Informe uma URL redis:// válida",
+          (value) =>
+            new URL(value).protocol === 'redis:' ||
+            new URL(value).protocol === 'rediss:',
+          'Informe uma URL redis:// ou rediss:// (TLS) válida',
         )
         .optional(),
     ),
