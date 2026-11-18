@@ -1,12 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { OtpInput } from '@/components/ui/otp-input';
+import { useResendCooldown } from '../hooks/use-resend-cooldown';
 import {
   sendEmailVerificationOtp,
   verifyEmailAndSignIn,
 } from '../services/auth-session';
-
-const RESEND_COOLDOWN_SECONDS = 60;
 
 interface VerifyEmailStepProps {
   email: string;
@@ -32,15 +31,7 @@ export function VerifyEmailStep({
   const [submitting, setSubmitting] = useState(false);
   const [resending, setResending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
-
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const timer = setInterval(() => {
-      setCooldown((current) => (current > 0 ? current - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [cooldown]);
+  const { cooldown, restart } = useResendCooldown();
 
   async function handleResend() {
     if (cooldown > 0 || resending) return;
@@ -48,7 +39,7 @@ export function VerifyEmailStep({
     setError(null);
     try {
       await sendEmailVerificationOtp(email);
-      setCooldown(RESEND_COOLDOWN_SECONDS);
+      restart();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível reenviar o código.');
     } finally {
