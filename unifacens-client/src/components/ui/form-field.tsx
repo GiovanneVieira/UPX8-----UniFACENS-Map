@@ -47,21 +47,27 @@ export const FormInputField = React.forwardRef<TextInput, FormInputFieldProps>(
         >
           {label}
         </Text>
-        <View className="flex-row items-center">
+        <View className="relative">
           <TextInput
             ref={ref}
             accessibilityLabel={label}
             accessibilityLabelledBy={labelId}
-            className={`min-h-[44px] flex-1 bg-slate-900 border rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-sky-400 ${
+            className={`min-h-[44px] w-full bg-slate-900 border rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:border-sky-400 ${
               hasError ? "border-rose-500" : "border-slate-700"
-            } ${className}`}
+            } ${rightElement ? "pr-12" : ""} ${className}`}
             value={value}
             onChangeText={onChangeText}
             onBlur={onBlur}
             placeholderTextColor="#94A3B8"
             {...textInputProps}
           />
-          {rightElement}
+          {rightElement ? (
+            <View
+              pointerEvents="box-none"
+              className="absolute right-1 top-0 h-full justify-center">
+              {rightElement}
+            </View>
+          ) : null}
         </View>
         {hasError ? (
           <Text
@@ -78,32 +84,46 @@ export const FormInputField = React.forwardRef<TextInput, FormInputFieldProps>(
   },
 );
 
-type PasswordFieldProps = Omit<FormInputFieldProps, "secureTextEntry" | "rightElement">;
+type PasswordFieldProps = Omit<
+  FormInputFieldProps,
+  "secureTextEntry" | "rightElement"
+> & {
+  /**
+   * Visibilidade controlada — quando fornecida junto com `onToggleVisible`,
+   * permite COMPARTILHAR o toggle entre campos (ex.: senha + confirmar
+   * senha: abrir um abre o outro). Sem os props, estado interno do campo.
+   */
+  visible?: boolean;
+  onToggleVisible?: () => void;
+};
 
 /**
- * Campo de senha com toggle de visibilidade (ícone de olho — acessível:
- * label dinâmico "Exibir/Ocultar senha", tap target de 44×44 dp).
- * Forwarda ref como FormInputField (Enter avança p/ o próximo campo).
+ * Campo de senha com toggle de visibilidade (ícone de olho DENTRO do input,
+ * sobreposto à direita — acessível: label dinâmico "Exibir/Ocultar senha",
+ * tap target de 44×44 dp). Forwarda ref como FormInputField (Enter avança
+ * p/ o próximo campo).
  */
 export const PasswordField = React.forwardRef<TextInput, PasswordFieldProps>(
-  function PasswordField(props, ref) {
-    const [visible, setVisible] = useState(false);
+  function PasswordField({ visible, onToggleVisible, ...props }, ref) {
+    const [internalVisible, setInternalVisible] = useState(false);
+    const isShown = visible ?? internalVisible;
+    const toggle = () =>
+      onToggleVisible ? onToggleVisible() : setInternalVisible((current) => !current);
     return (
       <FormInputField
         ref={ref}
         {...props}
-        secureTextEntry={!visible}
+        secureTextEntry={!isShown}
         rightElement={
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={visible ? "Ocultar senha" : "Exibir senha"}
-            accessibilityState={{ expanded: visible }}
-            onPress={() => setVisible((current) => !current)}
+            accessibilityLabel={isShown ? "Ocultar senha" : "Exibir senha"}
+            accessibilityState={{ expanded: isShown }}
+            onPress={toggle}
             hitSlop={8}
-            className="h-11 w-11 items-center justify-center"
-          >
+            className="h-11 w-11 items-center justify-center">
             <Ionicons
-              name={visible ? "eye-off-outline" : "eye-outline"}
+              name={isShown ? "eye-off-outline" : "eye-outline"}
               size={22}
               color="#94A3B8"
             />

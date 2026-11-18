@@ -24,6 +24,9 @@ export function ForgotPasswordFlow({ onDone, onBack }: ForgotPasswordFlowProps) 
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Visibilidade COMPARTILHADA entre nova senha e confirmação.
+  const [showPasswords, setShowPasswords] = useState(false);
+  const togglePasswords = () => setShowPasswords((current) => !current);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const passwordsMatch =
@@ -130,6 +133,8 @@ export function ForgotPasswordFlow({ onDone, onBack }: ForgotPasswordFlowProps) 
         autoCapitalize="none"
         autoCorrect={false}
         maxLength={128}
+        visible={showPasswords}
+        onToggleVisible={togglePasswords}
         value={password}
         onChangeText={setPassword}
         helperText="Mínimo de 8 caracteres."
@@ -139,6 +144,8 @@ export function ForgotPasswordFlow({ onDone, onBack }: ForgotPasswordFlowProps) 
         autoCapitalize="none"
         autoCorrect={false}
         maxLength={128}
+        visible={showPasswords}
+        onToggleVisible={togglePasswords}
         value={confirmPassword}
         onChangeText={setConfirmPassword}
         errors={

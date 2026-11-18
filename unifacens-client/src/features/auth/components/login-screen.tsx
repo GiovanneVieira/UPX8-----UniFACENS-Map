@@ -141,6 +141,9 @@ function SignUpBody({ onPendingVerification }: { onPendingVerification: (email: 
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   const confirmPasswordRef = useRef<TextInput>(null);
+  // Visibilidade COMPARTILHADA: abrir um campo de senha abre o outro.
+  const [showPasswords, setShowPasswords] = useState(false);
+  const togglePasswords = () => setShowPasswords((current) => !current);
   return (
     <View className="gap-3">
       <form.Field name="name">
@@ -187,6 +190,8 @@ function SignUpBody({ onPendingVerification }: { onPendingVerification: (email: 
             maxLength={128}
             returnKeyType="next"
             onSubmitEditing={() => confirmPasswordRef.current?.focus()}
+            visible={showPasswords}
+            onToggleVisible={togglePasswords}
             value={field.state.value}
             onChangeText={field.handleChange}
             onBlur={field.handleBlur}
@@ -215,6 +220,8 @@ function SignUpBody({ onPendingVerification }: { onPendingVerification: (email: 
             maxLength={128}
             returnKeyType="go"
             onSubmitEditing={() => void form.handleSubmit()}
+            visible={showPasswords}
+            onToggleVisible={togglePasswords}
             value={field.state.value}
             onChangeText={field.handleChange}
             onBlur={field.handleBlur}
