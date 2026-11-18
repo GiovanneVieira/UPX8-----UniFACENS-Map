@@ -19,6 +19,8 @@ export interface CampusMapProps {
   anchors: CampusAnchorMarker[];
   selectedPlace: Place | null;
   onSelect: (id: string) => void;
+  /** Tap em marcador de âncora → abre o modal de detalhes (reuso do AR). */
+  onSelectAnchor?: (id: string) => void;
 }
 // Centro inicial aproximado; os dados cadastrados determinam os marcadores.
 export const CAMPUS_MAP_CENTER = { latitude: -23.4699, longitude: -47.4297 };

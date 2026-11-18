@@ -17,6 +17,7 @@ const CampusMapBase = React.memo(function CampusMap({
   anchors,
   selectedPlace,
   onSelect,
+  onSelectAnchor,
 }: CampusMapProps) {
   const mapRef = useRef<MapView>(null);
   const lastSelectedId = useRef<string | null>(null);
@@ -74,8 +75,8 @@ const CampusMapBase = React.memo(function CampusMap({
             onPress={() => onSelect(place.id)}
           />
         ))}
-        {/* Pins AR (âncoras): roxo, callout nativo — o detalhe completo vive
-            na tab AR (decisão de escopo: sem fluxo de detalhe aqui). */}
+        {/* Pins AR (âncoras): roxo — tap abre o modal de detalhes (mesmo
+            sheet da tab AR: carrossel, descrição, distância, etc.). */}
         {anchors.map((anchor) => (
           <Marker
             key={`anchor-${anchor.id}`}
@@ -91,6 +92,7 @@ const CampusMapBase = React.memo(function CampusMap({
             }
             pinColor="#8B5CF6"
             tracksViewChanges={false}
+            onPress={() => onSelectAnchor?.(anchor.id)}
           />
         ))}
       </MapView>

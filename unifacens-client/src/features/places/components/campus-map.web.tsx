@@ -7,6 +7,7 @@ export default function CampusMap({
   anchors,
   selectedPlace,
   onSelect,
+  onSelectAnchor,
 }: CampusMapProps) {
   const center = selectedPlace ?? CAMPUS_MAP_CENTER;
   return (
@@ -35,12 +36,13 @@ export default function CampusMap({
             onClick={() => onSelect(place.id)}
           />
         ))}
-        {/* Pins AR (âncoras) — mesmo pin roxo do nativo, título via tooltip. */}
+        {/* Pins AR (âncoras) — mesmo pin roxo do nativo; tap abre detalhes. */}
         {anchors.map((anchor) => (
           <AdvancedMarker
             key={`anchor-${anchor.id}`}
             title={anchor.name}
             position={{ lat: anchor.latitude, lng: anchor.longitude }}
+            onClick={() => onSelectAnchor?.(anchor.id)}
           />
         ))}
       </Map>

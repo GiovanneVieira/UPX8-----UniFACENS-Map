@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -6,8 +7,12 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { router } from "expo-router";
 import { usePlacesExplorer } from "../hooks/use-places-explorer";
+import { haversineMeters, useUserLocation } from "../hooks/use-user-location";
 import { useAnchorsQuery } from "@/features/anchors/queries/use-anchors-query";
+import { useDeleteAnchorMutation } from "@/features/anchors/queries/use-anchors-query";
+import { AnchorDetailSheet } from "@/components/ar/modals/anchor-detail-sheet";
 import CampusMap from "./campus-map";
 import { PlaceFormModal } from "./place-form-modal";
 import { PlaceCard } from "./place-card";
@@ -35,6 +40,25 @@ export function PlacesFeature() {
       longitude: anchor.longitude,
       categoryLabel: anchor.category?.label ?? null,
     }));
+
+  // Detalhes da âncora pelo marcador do mapa — MESMO sheet da tab AR
+  // (carrossel de imagens, descrição, distância do usuário, "Ir para").
+  const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null);
+  const userCoords = useUserLocation();
+  const deleteAnchor = useDeleteAnchorMutation();
+  const selectedAnchor = useMemo(
+    () => anchorsData?.find((anchor) => anchor.id === selectedAnchorId) ?? null,
+    [anchorsData, selectedAnchorId],
+  );
+  const anchorDistanceM = useMemo(() => {
+    if (!selectedAnchor || !userCoords || selectedAnchor.latitude == null || selectedAnchor.longitude == null) {
+      return undefined;
+    }
+    return haversineMeters(userCoords, {
+      latitude: selectedAnchor.latitude,
+      longitude: selectedAnchor.longitude,
+    });
+  }, [selectedAnchor, userCoords]);
   return (
     <SafeAreaView
       className="flex-1 bg-slate-950"
@@ -94,6 +118,7 @@ export function PlacesFeature() {
               anchors={anchorMarkers}
               selectedPlace={details.data ?? null}
               onSelect={selectPlace}
+              onSelectAnchor={setSelectedAnchorId}
             />
             <Text className="text-xs text-slate-400">
               O mapa apresenta os locais carregados nesta busca e os pontos AR
@@ -215,6 +240,27 @@ export function PlacesFeature() {
           onSaved={explorer.onSaved}
         />
       ) : null}
+
+      {/* Detalhes da âncora AR tocada no mapa (reuso do sheet da tab AR) */}
+      <AnchorDetailSheet
+        visible={selectedAnchor !== null}
+        anchor={selectedAnchor}
+        distanceMeters={anchorDistanceM}
+        onClose={() => setSelectedAnchorId(null)}
+        onNavigate={() => {
+          // Do mapa 2D: leva à tab AR (onde a navegação de verdade acontece)
+          setSelectedAnchorId(null);
+          router.push("/(tabs)/ar");
+        }}
+        onDelete={
+          isAdmin
+            ? (anchor) => {
+                setSelectedAnchorId(null);
+                deleteAnchor.mutate(anchor.id);
+              }
+            : undefined
+        }
+      />
     </SafeAreaView>
   );
 }
