@@ -45,11 +45,18 @@ export function createBetterAuth(
     // Em desenvolvimento, confia na origem do próprio request: o client
     // expo envia como Origin a URL do Metro (IP de LAN que muda com a rede),
     // que de outra forma recebe 403 INVALID_ORIGIN. Em produção, somente a
-    // origem da API e as origens explicitamente listadas em CORS_ORIGINS são aceitas.
+    // origem da API, as origens HTTP(S) do CORS_ORIGINS e os schemes de app
+    // nativo do TRUSTED_APP_ORIGINS são aceitos.
     trustedOrigins: (request?: Request) => {
       const origins = [
         new URL(config.BETTER_AUTH_URL).origin,
         ...config.CORS_ORIGINS,
+        // O plugin expo SOBRESCREVE o `origin` do request com o header
+        // `expo-origin` (scheme do app, ex.: unifacensclient://) e o
+        // formCsrfMiddleware do sign-in valida a origem mesmo sem cookie —
+        // sem o scheme aqui, todo login nativo recebe 403 em produção
+        // (lição de device 2026-11-18: "Invalid origin: unifacensclient://").
+        ...config.TRUSTED_APP_ORIGINS,
       ];
       if (config.NODE_ENV !== 'production' && request) {
         const requestOrigin = request.headers.get('origin');

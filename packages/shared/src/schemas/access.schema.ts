@@ -80,6 +80,31 @@ export const apiEnvironmentSchema = z
         ),
       )
       .transform((origins) => origins.map((origin) => new URL(origin).origin)),
+    /**
+     * Schemes de app nativo confiáveis no better-auth (origem do header
+     * `expo-origin` enviado pelo expoClient). O plugin expo do servidor
+     * SOBRESCREVE o `origin` do request com esse valor e o sign-in valida a
+     * origem mesmo sem cookie — sem o scheme listado, TODO login do app
+     * nativo em produção recebe 403 INVALID_ORIGIN (lição 2026-11-18).
+     * Apenas `scheme://` (sem host/caminho); origens HTTP(S) → CORS_ORIGINS.
+     */
+    TRUSTED_APP_ORIGINS: z
+      .string()
+      .default("")
+      .transform((value) =>
+        value
+          .split(",")
+          .map((origin) => origin.trim())
+          .filter(Boolean),
+      )
+      .pipe(
+        z.array(
+          z.string().regex(
+            /^[a-z][a-z0-9+.-]*:\/\/$/,
+            "Informe apenas o scheme do app (ex.: unifacensclient://), sem host ou caminho; origens HTTP(S) pertencem ao CORS_ORIGINS",
+          ),
+        ),
+      ),
   })
   .superRefine((environment, context) => {
     if (environment.NODE_ENV !== "production") return;

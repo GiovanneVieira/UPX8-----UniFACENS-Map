@@ -6,6 +6,7 @@ describe('Variáveis de publicação', () => {
     expect(loadApiConfig({ NODE_ENV: 'development' })).toMatchObject({
       PORT: 8000,
       CORS_ORIGINS: [],
+      TRUSTED_APP_ORIGINS: [],
     });
   });
   it('recusa produção sem banco e sem secret do better-auth', () => {
@@ -49,5 +50,25 @@ describe('Variáveis de publicação', () => {
     'https://campus.example.org?token=teste',
   ])('recusa CORS com caminho, credenciais ou query: %s', (CORS_ORIGINS) => {
     expect(() => loadApiConfig({ CORS_ORIGINS })).toThrow('CORS_ORIGINS');
+  });
+  it('parseia schemes de app nativo em TRUSTED_APP_ORIGINS (CSV com espaços)', () => {
+    const config = loadApiConfig({
+      TRUSTED_APP_ORIGINS: 'unifacensclient:// , exp://',
+    });
+    expect(config.TRUSTED_APP_ORIGINS).toEqual([
+      'unifacensclient://',
+      'exp://',
+    ]);
+  });
+  it.each([
+    'unifacensclient://host',
+    'unifacensclient:///caminho',
+    'unifacensclient:',
+    'unifacensclient',
+    'https://app.example.org',
+  ])('recusa TRUSTED_APP_ORIGINS fora do formato scheme:// (%s)', (TRUSTED_APP_ORIGINS) => {
+    expect(() => loadApiConfig({ TRUSTED_APP_ORIGINS })).toThrow(
+      'TRUSTED_APP_ORIGINS',
+    );
   });
 });

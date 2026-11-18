@@ -145,6 +145,7 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
       BETTER_AUTH_URL: baseUrl,
       BETTER_AUTH_SECRET: 'fixture-integration-secret-with-32-chars-min',
       CORS_ORIGINS: origin,
+      TRUSTED_APP_ORIGINS: 'unifacensclient://',
     });
 
     const moduleFixture = await Test.createTestingModule({
@@ -495,6 +496,32 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     expect(retry.ok).toBeTruthy();
     const body = (await retry.json()) as { user: { email: string } };
     expect(body.user.email).toBe(adminFixture.email);
+  });
+
+  it('primeiro login do app nativo (expo-origin, sem Origin e sem cookie) não recebe 403', async () => {
+    // Regressão de produção 2026-11-18: `Invalid origin: unifacensclient://`
+    // → 403 INVALID_ORIGIN em POST /auth/sign-in/email. O plugin expo do
+    // better-auth SOBRESCREVE o header `origin` com o `expo-origin` do app
+    // (nativos não enviam Origin) e o formCsrfMiddleware do sign-in força a
+    // validação de origem mesmo sem cookie — o scheme do app precisa estar
+    // em TRUSTED_APP_ORIGINS (produção não aceita a origin do request).
+    const firstLogin = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'expo-origin': 'unifacensclient://',
+        'user-agent': 'okhttp/4.9.2',
+      },
+      body: JSON.stringify(commonFixture),
+    });
+    expect(firstLogin.status).not.toBe(403);
+    expect(firstLogin.ok).toBeTruthy();
+    const sessionCookie = firstLogin.headers
+      .getSetCookie()
+      .find((cookie) => /session_token/i.test(cookie));
+    expect(sessionCookie).toBeDefined();
+    const body = (await firstLogin.json()) as { user: { email: string } };
+    expect(body.user.email).toBe(commonFixture.email);
   });
   it('restringe listagem de usuários e edição dos pontos aos administradores', async () => {
     await request(app.getHttpServer()).get('/admin/users').expect(401);
