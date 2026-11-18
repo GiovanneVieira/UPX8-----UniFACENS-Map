@@ -207,7 +207,11 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     // GATE NOVO: earth Enabled = o SDK diz que âncoras geospatial são
     // viáveis (threshold interno ~15m). Localizing = fila espera (normal,
     // segundos a ~1min); o gate antigo ≤20m morreu com a era arcore.
-    poseReady: earthState === 'Enabled',
+    // ⚠️ + GPS FIX do device (hasFix, acurácia ≤20m): earth Enabled (RV
+    // localizou) NÃO implica fix de GPS — sem ele o Spatial SDK rejeita o
+    // resolve com "GPS position not available yet" e o pin perde um tick
+    // inteiro em retry (lição de device 2026-11-18, logs 19:57:21).
+    poseReady: earthState === 'Enabled' && geo.hasFix,
     focused,
     trackingHealthy: trackingState >= 2,
     // Pose atual (ref) — alimenta o gate de raio do resolve (≤5km).

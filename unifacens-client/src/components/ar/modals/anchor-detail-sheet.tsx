@@ -59,7 +59,12 @@ export function AnchorDetailSheet({
   // com largura variável virava faixa panorâmica em telas largas).
   const { width: windowW } = useWindowDimensions();
   const cardMaxWidth = windowW >= 768 ? 540 : 460;
-  const carouselItemW = Math.min(cardMaxWidth, windowW - 48) - 36;
+  // Largura REAL do carrossel medida por onLayout — o item usa EXATAMENTE
+  // a largura da lista (pagingEnabled snapa pela largura da LISTA: item
+  // 1px mais estreito = preview da próxima foto desalinhada, lição de
+  // device 2026-11-18 — card width:'100%'+margins faz a lista ficar mais
+  // larga que qualquer cálculo aritmético presumisse).
+  const [carouselWidth, setCarouselWidth] = useState(0);
 
   if (!visible || !anchor) return null;
 
@@ -68,11 +73,6 @@ export function AnchorDetailSheet({
   const model = anchor.model ?? anchor.category?.model ?? null;
   const dims = modelDims(anchor);
   const createdAt = anchor.createdAt ? new Date(anchor.createdAt) : null;
-  /**
-   * Largura EXPLÍCITA do item do carrossel (bug de device 2026-11-16:
-   * Image com '100%' dentro de Pressable auto-width colapsava — nada
-   * renderizava). Item = largura do conteúdo do card (paging 1:1).
-   */
 
   const goImage = (index: number) => {
     const clamped = Math.max(0, Math.min(images.length - 1, index));
@@ -126,38 +126,46 @@ export function AnchorDetailSheet({
               </View>
             ) : null}
 
-            {/* Carrossel de imagens (paging + indicadores) */}
+            {/* Carrossel de imagens (paging 1:1 — item = largura MEDIDA da
+                lista; ver comentário do carouselWidth no componente) */}
             {images.length > 0 ? (
-              <View style={styles.carouselWrap}>
-                <FlatList
-                  ref={carouselRef}
-                  data={images}
-                  keyExtractor={(uri) => uri}
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  getItemLayout={(_data, index) => ({
-                    length: carouselItemW,
-                    offset: carouselItemW * index,
-                    index,
-                  })}
-                  onMomentumScrollEnd={(e) => {
-                    const idx = Math.round(e.nativeEvent.contentOffset.x / carouselItemW);
-                    setImageIndex(idx);
-                  }}
-                  renderItem={({ item }) => (
-                    <Pressable
-                      accessibilityLabel={`Imagem ${images.indexOf(item) + 1} de ${images.length}`}
-                      onPress={() => goImage(images.indexOf(item) + 1)}>
-                      <Image
-                        source={{ uri: item }}
-                        style={[styles.carouselImage, { width: carouselItemW }]}
-                      />
-                    </Pressable>
-                  )}
-                  style={styles.carousel}
-                />
-                {images.length > 1 ? (
+              <View
+                style={styles.carouselWrap}
+                onLayout={(e) => {
+                  const width = e.nativeEvent.layout.width;
+                  setCarouselWidth((current) => (current === width ? current : width));
+                }}>
+                {carouselWidth > 0 ? (
+                  <FlatList
+                    ref={carouselRef}
+                    data={images}
+                    keyExtractor={(uri) => uri}
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={false}
+                    getItemLayout={(_data, index) => ({
+                      length: carouselWidth,
+                      offset: carouselWidth * index,
+                      index,
+                    })}
+                    onMomentumScrollEnd={(e) => {
+                      const idx = Math.round(e.nativeEvent.contentOffset.x / carouselWidth);
+                      setImageIndex(idx);
+                    }}
+                    renderItem={({ item }) => (
+                      <Pressable
+                        accessibilityLabel={`Imagem ${images.indexOf(item) + 1} de ${images.length}`}
+                        onPress={() => goImage(images.indexOf(item) + 1)}>
+                        <Image
+                          source={{ uri: item }}
+                          style={[styles.carouselImage, { width: carouselWidth }]}
+                        />
+                      </Pressable>
+                    )}
+                    style={styles.carousel}
+                  />
+                ) : null}
+                {images.length > 1 && carouselWidth > 0 ? (
                   <View style={styles.dotsRow}>
                     {images.map((uri, i) => (
                       <Pressable
