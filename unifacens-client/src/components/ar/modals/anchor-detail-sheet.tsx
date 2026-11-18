@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react';
 import {
-  Dimensions,
   FlatList,
   Image,
   Modal,
@@ -8,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -53,6 +53,13 @@ export function AnchorDetailSheet({
   const { isAdmin } = useAuth();
   const [imageIndex, setImageIndex] = useState(0);
   const carouselRef = useRef<FlatList<string> | null>(null);
+  // Responsivo (reage a rotação/resize — Dimensions.get é estático):
+  // BREAKPOINT 768px — telas largas (web/tablet/paisagem) ganham card
+  // maior; a FOTO mantém 4:3 em qualquer largura (antes: height fixa 170
+  // com largura variável virava faixa panorâmica em telas largas).
+  const { width: windowW } = useWindowDimensions();
+  const cardMaxWidth = windowW >= 768 ? 540 : 460;
+  const carouselItemW = Math.min(cardMaxWidth, windowW - 48) - 36;
 
   if (!visible || !anchor) return null;
 
@@ -61,13 +68,11 @@ export function AnchorDetailSheet({
   const model = anchor.model ?? anchor.category?.model ?? null;
   const dims = modelDims(anchor);
   const createdAt = anchor.createdAt ? new Date(anchor.createdAt) : null;
-  const screenW = Dimensions.get('window').width;
   /**
    * Largura EXPLÍCITA do item do carrossel (bug de device 2026-11-16:
    * Image com '100%' dentro de Pressable auto-width colapsava — nada
-   * renderizava). Card = min(460, tela−48) − padding 36.
+   * renderizava). Item = largura do conteúdo do card (paging 1:1).
    */
-  const carouselItemW = Math.min(460, screenW - 48) - 36;
 
   const goImage = (index: number) => {
     const clamped = Math.max(0, Math.min(images.length - 1, index));
@@ -83,6 +88,8 @@ export function AnchorDetailSheet({
           style={[
             styles.card,
             { paddingBottom: Math.max(insets.bottom + 16, 24) },
+            // Breakpoint: card maior em telas largas (web/tablet).
+            { maxWidth: cardMaxWidth },
           ]}>
           <ScrollView keyboardShouldPersistTaps="handled" bounces={false}>
             {/* Cabeçalho: título + fechar */}
@@ -265,10 +272,10 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-  /** Modal CENTRALIZADO (redesign 2026-11-16 — era bottom-sheet/drawer). */
+  /** Modal CENTRALIZADO (redesign 2026-11-16 — era bottom-sheet/drawer).
+   *  maxWidth é DINÂMICO (breakpoint 768px — ver inline no componente). */
   card: {
     width: '100%',
-    maxWidth: 460,
     marginHorizontal: 24,
     maxHeight: '82%',
     backgroundColor: '#0F172A',
@@ -342,7 +349,9 @@ const styles = StyleSheet.create({
     flexGrow: 0,
   },
   carouselImage: {
-    height: 170,
+    // 4:3 em qualquer largura — a foto nunca vira faixa panorâmica
+    // (a altura acompanha a largura do item em cada breakpoint).
+    aspectRatio: 4 / 3,
     borderRadius: 14,
     backgroundColor: '#1E293B',
   },
