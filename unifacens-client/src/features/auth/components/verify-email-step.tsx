@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
-import { FormInputField } from '@/components/ui/form-field';
+import { OtpInput } from '@/components/ui/otp-input';
 import {
   sendEmailVerificationOtp,
   verifyEmailAndSignIn,
@@ -84,15 +84,12 @@ export function VerifyEmailStep({
         </Text>
       </View>
 
-      <FormInputField
+      <OtpInput
         label="Código de verificação"
-        keyboardType="number-pad"
-        maxLength={6}
         value={otp}
         onChangeText={(text) => setOtp(text.replace(/\D/g, '').slice(0, 6))}
-        autoCorrect={false}
-        autoCapitalize="none"
-        helperText="Digite os 6 dígitos recebidos por e-mail."
+        autoFocus
+        error={Boolean(error)}
       />
 
       {error ? (

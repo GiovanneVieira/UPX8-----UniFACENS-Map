@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { FormInputField, PasswordField } from '@/components/ui/form-field';
+import { OtpInput } from '@/components/ui/otp-input';
 import { resetPasswordWithOtp, sendPasswordResetOtp } from '../services/auth-session';
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -121,12 +122,12 @@ export function ForgotPasswordFlow({ onDone, onBack }: ForgotPasswordFlowProps) 
           <Text className="font-semibold text-sky-300">{email.trim()}</Text>.
         </Text>
       </View>
-      <FormInputField
+      <OtpInput
         label="Código recebido"
-        keyboardType="number-pad"
-        maxLength={6}
         value={otp}
         onChangeText={(text) => setOtp(text.replace(/\D/g, '').slice(0, 6))}
+        autoFocus
+        error={Boolean(error)}
       />
       <PasswordField
         label="Nova senha"
