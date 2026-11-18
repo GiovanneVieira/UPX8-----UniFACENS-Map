@@ -56,9 +56,23 @@ import type { PendingPhoto } from "./modals/anchor-image-queue";
 // Constante estática da cena inicial para nunca recriar a instância nativa do ViroARSceneNavigator
 const INITIAL_AR_SCENE = { scene: ViroARAnchorScene as any };
 
-/** Provider AR ativo — hostGeospatialAnchor/resolve são exclusivos do RV. */
+/**
+ * Provider AR ativo — hostGeospatialAnchor/resolve são exclusivos do RV.
+ * ⚠️ O fallback para "arcore" é SILENCIOSO por padrão: cloud anchor hosting
+ * pelo ARCore devolve "Not Authorized" (A/B 2026-11-10). A env
+ * EXPO_PUBLIC_AR_PROVIDER vive no .env.client (Metro do CONTAINER — nunca
+ * apenas no unifacens-client/.env, lição 2026-11-18 do bundle sem credenciais).
+ */
 const AR_PROVIDER =
   process.env.EXPO_PUBLIC_AR_PROVIDER === "reactvision" ? "reactvision" : "arcore";
+
+if (process.env.EXPO_PUBLIC_AR_PROVIDER !== "reactvision") {
+  console.warn(
+    `[ARProvider] EXPO_PUBLIC_AR_PROVIDER="${process.env.EXPO_PUBLIC_AR_PROVIDER ?? ""}" — ` +
+      'usando fallback "arcore" (cloud anchor hosting DEVOLVE "Not Authorized" neste provider). ' +
+      'Confira o .env.client do compose e recarregue o app (env é inline constant do bundle).',
+  );
+}
 
 /**
  * Background ≥10s → RESET COMPLETO da sessão AR ao voltar (Frente B,
@@ -899,6 +913,10 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
         try {
           setMutationStatus("Enviando fotos...");
           await uploadAnchorImages(saved.id, pendingPhotos);
+          // ⚠️ O createAnchor JÁ invalidou a lista ANTES do upload rodar —
+          // sem isto o cache do TanStack fica com o pin SEM imagens e o
+          // sheet de detalhes não as exibe (lição de device 2026-11-18).
+          await queryClient.invalidateQueries({ queryKey: anchorKeys.lists() });
         } catch (err) {
           console.warn('[ARHost] upload de fotos falhou:', err);
           Alert.alert(
@@ -1116,6 +1134,24 @@ export const ViroARAnchorContainer: FC<{ focused?: boolean }> = ({ focused = tru
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pointHosting.state.phase, pointHosting.state.phase === 'guiding' ? pointHosting.state.startedAt : 0]);
+
+  // ── Unmount: cancelar ops cloud pendentes ANTES da view nativa morrer ──
+  // (§12.12): a race do crash na troca de aba é uma chamada nativa in-flight
+  // (host/resolve/poll) aterrissando entre o detach e a destruição da view.
+  // O cancel explícito das ops cloud (provider reactvision — §15.2) reduz a
+  // janela: resolve/host pendurados não sobrevivem ao unmount.
+  // O fix DEFINITIVO é upstream (viro 3.2.1: "AR scene hidden by a tab
+  // switch no longer crashes on a queued call") — exige Expo 58/RN 0.88.
+  useEffect(() => {
+    return () => {
+      try {
+        sceneNavRef.current?.cancelCloudAnchorOperations?.();
+      } catch {
+        /* view já morta — melhor esforço */
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <View style={styles.rootContainer}>
