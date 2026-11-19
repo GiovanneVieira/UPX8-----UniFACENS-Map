@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -15,6 +16,8 @@ import { confirmPasswordValidator, useSignUpForm } from '../hooks/use-sign-up-fo
 import { EmailNotVerifiedError } from '../services/auth-session';
 import { VerifyEmailStep } from './verify-email-step';
 import { ForgotPasswordFlow } from './forgot-password-flow';
+
+const LOGO = require('../../../../assets/images/UnifacensMapLogo.png');
 
 type AuthMode = 'sign-in' | 'sign-up' | 'verify-email' | 'forgot-password';
 
@@ -270,8 +273,15 @@ export function LoginScreen() {
         keyboardShouldPersistTaps="handled">
         <View className="w-full max-w-md self-center gap-5 px-5">
           <View className="items-center gap-2">
-            <Text className="text-4xl font-bold text-white">UniFACENS</Text>
-            <Text className="text-lg font-semibold text-sky-300">Map</Text>
+            <Image
+              source={LOGO}
+              accessible
+              accessibilityLabel="UnifacensMAP"
+              style={{ width: 96, height: 96, borderRadius: 22 }}
+            />
+            <Text className="mt-2 text-3xl font-extrabold tracking-tight text-white">
+              Unifacens<Text className="text-sky-300">MAP</Text>
+            </Text>
             <Text className="mt-2 text-center text-sm text-neutral-300">
               Navegação pelo campus e realidade aumentada. Entre para começar.
             </Text>

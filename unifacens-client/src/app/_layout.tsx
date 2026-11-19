@@ -9,6 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { useAuthStore } from '@/stores/use-auth-store';
 import { LoginScreen } from '@/features/auth/components/login-screen';
+import { LoadingScreen } from '@/components/loading-screen';
 import { hydrateAuth } from '@/features/auth/services/auth-session';
 import { Stack } from 'expo-router';
 
@@ -59,7 +60,9 @@ export default function TabLayout() {
             {/* AuthGate: identidade primeiro — nada do app sem login.
                 O Stack raiz permite empilhar /aulas, /notas, /faltas,
                 /carteirinha e /servicos sobre o grupo de abas (tabs). */}
-            {!hydrated ? null : jwt === null ? (
+            {!hydrated ? (
+              <LoadingScreen />
+            ) : jwt === null ? (
               <LoginScreen />
             ) : (
               <Stack screenOptions={{ headerShown: false }} />
