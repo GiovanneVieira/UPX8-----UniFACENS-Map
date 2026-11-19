@@ -299,4 +299,21 @@ describe('Rascunho de rede de navegação gerado da grade caminhável', () => {
     expect(result.status).toBe(200);
     expect((result.body as { status: string }).status).toBe('insufficient_data');
   });
+
+  it('rejeita networkId fora do formato do summary (500 da listagem, lição 2026-11-19) e conflito de versão vira 409', async () => {
+    const invalid = await http('/routing/navigation/drafts', 'POST', {
+      networkId: 'campus lev', // espaço: passa no identifier permissivo, FALHA no summary
+      version: 'v1',
+      anchorIds: [originAnchorId, destinationAnchorId],
+    });
+    expect(invalid.status).toBe(400);
+
+    // Retry com a MESMA versão de rede já criada → 409 amigável (não 400).
+    const duplicate = await http('/routing/navigation/drafts', 'POST', {
+      networkId: 'campus-draft',
+      version: 'gen-v1',
+      anchorIds: [originAnchorId, destinationAnchorId],
+    });
+    expect(duplicate.status).toBe(409);
+  });
 });

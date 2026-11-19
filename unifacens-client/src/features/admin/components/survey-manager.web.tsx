@@ -132,31 +132,61 @@ export function SurveyManager() {
           />
         </View>
         {anchors.isPending ? <ActivityIndicator /> : null}
-        <View className="flex-row flex-wrap gap-2">
-          {anchorsWithCoords.map((anchor) => {
-            const picked = pickedAnchors.includes(anchor.id);
-            return (
+        <View className="gap-2">
+          <View className="flex-row items-center justify-between gap-2">
+            <Text className="text-xs font-semibold text-slate-500">
+              Pontos AR a conectar — toque para selecionar ({pickedAnchors.length}{' '}
+              de {anchorsWithCoords.length} selecionados
+              {pickedAnchors.length < 2 ? ' · mínimo 2' : ''})
+            </Text>
+            <View className="flex-row gap-2">
               <Pressable
-                key={anchor.id}
+                accessibilityRole="button"
                 onPress={() =>
-                  setPickedAnchors((current) =>
-                    picked
-                      ? current.filter((id) => id !== anchor.id)
-                      : [...current, anchor.id],
-                  )
+                  setPickedAnchors(anchorsWithCoords.map((anchor) => anchor.id))
                 }
-                className={`min-h-[36px] justify-center rounded-full border px-3 ${
-                  picked
-                    ? 'border-sky-500 bg-sky-100'
-                    : 'border-slate-300 bg-slate-50'
-                }`}>
-                <Text className="text-sm text-slate-800">{anchor.name}</Text>
+                className="min-h-[32px] justify-center rounded-md border border-slate-300 bg-slate-50 px-2">
+                <Text className="text-xs text-slate-700">Selecionar todos</Text>
               </Pressable>
-            );
-          })}
+              <Pressable
+                accessibilityRole="button"
+                disabled={pickedAnchors.length === 0}
+                onPress={() => setPickedAnchors([])}
+                className="min-h-[32px] justify-center rounded-md border border-slate-300 bg-slate-50 px-2 disabled:opacity-50">
+                <Text className="text-xs text-slate-700">Limpar</Text>
+              </Pressable>
+            </View>
+          </View>
+          <View className="flex-row flex-wrap gap-2">
+            {anchorsWithCoords.map((anchor) => {
+              const picked = pickedAnchors.includes(anchor.id);
+              return (
+                <Pressable
+                  key={anchor.id}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: picked }}
+                  onPress={() =>
+                    setPickedAnchors((current) =>
+                      picked
+                        ? current.filter((id) => id !== anchor.id)
+                        : [...current, anchor.id],
+                    )
+                  }
+                  className={`min-h-[36px] flex-row items-center gap-1 rounded-full border px-3 ${
+                    picked
+                      ? 'border-sky-600 bg-sky-100'
+                      : 'border-slate-300 bg-slate-50'
+                  }`}>
+                  <Text className="text-xs">{picked ? '✓' : '＋'}</Text>
+                  <Text className="text-sm text-slate-800">{anchor.name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
         <AdminButton
-          label={busy === 'draft' ? 'Gerando…' : 'Gerar rascunho'}
+          primary
+          label="Gerar rascunho"
           disabled={busy !== null || pickedAnchors.length < 2}
           onPress={() =>
             void run('draft', async () => {
@@ -167,8 +197,9 @@ export function SurveyManager() {
               });
               setPickedAnchors([]);
             })
-          }
-        />
+          }>
+          {busy === 'draft' ? 'Gerando…' : 'Gerar rascunho'}
+        </AdminButton>
       </View>
 
       {error ? <AdminError message={error} /> : null}
@@ -489,7 +520,6 @@ function VersionEditor({
             className="min-h-[40px] w-44 rounded-lg border border-slate-300 px-3 text-sm text-slate-900"
           />
           <AdminButton
-            label={busy === 'save' ? 'Salvando…' : 'Salvar nova versão'}
             disabled={busy !== null}
             onPress={() =>
               onBusy('save', () =>
@@ -499,8 +529,9 @@ function VersionEditor({
                   edges: working,
                 }),
               )
-            }
-          />
+            }>
+            {busy === 'save' ? 'Salvando…' : 'Salvar nova versão'}
+          </AdminButton>
         </View>
         {versionStatus !== 'published' ? (
           <View className="flex-row flex-wrap items-center gap-2">
@@ -517,7 +548,7 @@ function VersionEditor({
               className="min-h-[40px] w-48 rounded-lg border border-slate-300 px-3 text-sm text-slate-900"
             />
             <AdminButton
-              label={busy === 'publish' ? 'Publicando…' : 'Publicar com revisão'}
+              primary
               disabled={busy !== null}
               onPress={() =>
                 onBusy('publish', () =>
@@ -534,8 +565,9 @@ function VersionEditor({
                     },
                   ),
                 )
-              }
-            />
+              }>
+              {busy === 'publish' ? 'Publicando…' : 'Publicar com revisão'}
+            </AdminButton>
           </View>
         ) : (
           <Text className="text-xs text-emerald-700">

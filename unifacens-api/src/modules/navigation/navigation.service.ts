@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   findNavigationRoute,
+  importNavigationNetworkSchema,
   type ImportNavigationNetworkDto,
   type NavigationNetworkParams,
   type NavigationNetworksQuery,
@@ -36,9 +37,14 @@ export class NavigationService {
   }
 
   async importVersion(graph: ImportNavigationNetworkDto, actorId: string) {
-    await this.repository.importVersion(graph, actorId);
+    // Validação no SERVICE (ponto único): o endpoint HTTP valida via pipe,
+    // mas callers diretos (gerador de rascunho) também passam por aqui —
+    // sem isto um networkId fora do formato do summary entra e QUEBRA a
+    // listagem com 500 (lição de device 2026-11-19).
+    const parsed = importNavigationNetworkSchema.parse(graph);
+    await this.repository.importVersion(parsed, actorId);
     return this.getVersion(
-      { networkId: graph.id, version: graph.version },
+      { networkId: parsed.id, version: parsed.version },
       true,
     );
   }

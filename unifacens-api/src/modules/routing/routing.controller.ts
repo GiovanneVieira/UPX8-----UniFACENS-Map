@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, Req } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, ConflictException, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import type { Request } from 'express';
 import type { RouteRequest, RouteResponse } from 'shared';
@@ -48,7 +48,12 @@ export class RoutingController {
         request.user?.id ?? '',
       );
     } catch (err) {
-      if (err instanceof BadRequestException) throw err;
+      // 409 (versão já cadastrada) e 400 (âncoras/validação) preservam a
+      // mensagem real — o catch-all genérico virava tudo 400 e escondia a
+      // causa (retry com a mesma versão parecia "erro misterioso").
+      if (err instanceof BadRequestException || err instanceof ConflictException) {
+        throw err;
+      }
       throw new BadRequestException(
         err instanceof Error ? err.message : 'Não foi possível gerar a malha.',
       );

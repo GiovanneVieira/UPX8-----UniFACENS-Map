@@ -1,6 +1,19 @@
 import { z } from "zod";
 
 const identifier = z.string().trim().min(1).max(128);
+
+/**
+ * Identificador de REDE/VERSÃO (slug): o mesmo formato exigido pelos
+ * summaries e paths da API — o import valida por AQUI também (senão um id
+ * permissivo entra pelo service e quebra a LISTAGEM com 500 — lição de
+ * device 2026-11-19: schemas desalinhados entre graph e summary).
+ */
+export const networkIdentifierSchema = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/,
+    "Use letras, números, ponto, hífen ou sublinhado.",
+  );
 const positiveMeters = z.number().finite().positive();
 const percentage = z.number().finite().nonnegative();
 const instant = z.string().datetime({ offset: true });
@@ -251,8 +264,8 @@ export type NavigationResult = z.infer<typeof navigationResultSchema>;
  * para a equipe completar no levantamento de campo.
  */
 export const navigationDraftRequestSchema = z.strictObject({
-  networkId: identifier,
-  version: identifier,
+  networkId: networkIdentifierSchema,
+  version: networkIdentifierSchema,
   /** Pontos AR que a malha deve conectar (tour vizinho-mais-proximo). */
   anchorIds: z.array(z.string().uuid()).min(2).max(30),
 });
