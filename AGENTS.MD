@@ -58,6 +58,7 @@ O **UniFACENS-Map** é uma plataforma que mapeia e fornece navegação interativ
 
 - O ponto AR cadastrado representa o próprio local de interesse; sua identidade é `anchors.id` (`anchorId`). O planejamento pesquisa essas âncoras por nome e referências, sem exigir cadastro duplicado em `places` ou vínculo `placeId`.
 - A associação entre o ponto AR e a rede de caminhos usa `navigation_nodes.anchor_id`. Os trechos e suas condições continuam necessários para calcular um percurso compatível; a busca de locais funciona mesmo sem uma rede publicada.
+- **Híbrido de roteamento (2026-11-19)**: a **geometria** da rede vem de RASCUNHO AUTO-GERADO da grade caminhável (`POST /routing/navigation/drafts`, `@AdminOnly` — grid A* + tour vizinho-mais-próximo; nós mesclados por célula 2m); a **acessibilidade** segue sendo dado de campo, completada no editor do painel admin ("Levantamento de percursos": atributos por trecho + publicar com revisão). O rascunho nasce HONESTO: trechos `unverified`/`null` são excluídos pelo motor com motivo (`insufficient_data`) — nunca rota inventada. Deep-link "Abrir no Google Maps" (gratuito) complementa com rota externa. `profile` foi REMOVIDO do `/routing/route` (campo morto — a acessibilidade vive na rede).
 - A categoria visual da âncora não limita quais pontos podem ser selecionados como destino. Não deduzir conexões por nome/proximidade nem usar o cálculo legado como garantia de acessibilidade.
 
 ## 3. Estrutura do Monorepo & Montagem dos Packages

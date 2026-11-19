@@ -87,7 +87,8 @@ export function NodePicker({
           </View>
           {!matches.length ? (
             <Text className="text-slate-300">
-              Nenhum ponto encontrado nesta área.
+              Nenhum ponto encontrado. Busque pelo nome ou referência do
+              cadastro.
             </Text>
           ) : null}
           {matches.length > limit ? (

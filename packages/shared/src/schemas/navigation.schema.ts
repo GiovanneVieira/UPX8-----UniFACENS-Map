@@ -113,8 +113,7 @@ export const navigationGraphSchema = z
     dataSource: z.enum(["demo", "field_survey"]),
     nodes: z.array(navigationNodeSchema).min(1),
     edges: z.array(navigationEdgeSchema),
-  })
-  .superRefine((graph, context) => {
+  })  .superRefine((graph, context) => {
     const nodes = new Set<string>();
     const edges = new Set<string>();
     const anchorIds = new Set<string>();
@@ -244,3 +243,17 @@ export const navigationResultSchema = z.discriminatedUnion("status", [
   }),
 ]);
 export type NavigationResult = z.infer<typeof navigationResultSchema>;
+
+/**
+ * Pedido de geracao de MALHA EM RASCUNHO a partir da grade caminhavel do
+ * campus (grid A* do RoutingModule): geometria automatica entre os pontos
+ * AR; atributos de acessibilidade ficam DESCONHECIDOS (null/unverified)
+ * para a equipe completar no levantamento de campo.
+ */
+export const navigationDraftRequestSchema = z.strictObject({
+  networkId: identifier,
+  version: identifier,
+  /** Pontos AR que a malha deve conectar (tour vizinho-mais-proximo). */
+  anchorIds: z.array(z.string().uuid()).min(2).max(30),
+});
+export type NavigationDraftRequest = z.infer<typeof navigationDraftRequestSchema>;

@@ -9,6 +9,7 @@ export type AdminSection =
   | 'points'
   | 'categories'
   | 'models'
+  | 'survey'
   | 'orphans'
   | 'users';
 
@@ -16,6 +17,7 @@ const SECTIONS: AdminSection[] = [
   'points',
   'categories',
   'models',
+  'survey',
   'orphans',
   'users',
 ];

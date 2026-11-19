@@ -1,8 +1,10 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import type { Request } from 'express';
 import type { RouteRequest, RouteResponse } from 'shared';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
-import { routeRequestSchema } from 'shared';
+import { routeRequestSchema, navigationDraftRequestSchema, type NavigationDraftRequest } from 'shared';
+import { AdminOnly } from '../../common/auth/access.decorators.js';
 import { RoutingService } from './routing.service.js';
 
 @ApiTags('routing')
@@ -24,6 +26,31 @@ export class RoutingController {
     } catch (err) {
       throw new BadRequestException(
         err instanceof Error ? err.message : 'Não foi possível calcular a rota.',
+      );
+    }
+  }
+
+  @Post('navigation/drafts')
+  @AdminOnly()
+  @HttpCode(HttpStatus.CREATED)
+  @ApiBearerAuth('admin-bearer')
+  @ApiOperation({
+    summary:
+      'Gerar MALHA EM RASCUNHO da rede de navegação a partir da grade caminhável (geometria automática; atributos de acessibilidade ficam desconhecidos para o levantamento)',
+  })
+  async generateNavigationDraft(
+    @Body(new ZodValidationPipe(navigationDraftRequestSchema)) dto: NavigationDraftRequest,
+    @Req() request: Request,
+  ) {
+    try {
+      return await this.routingService.generateNavigationDraft(
+        dto,
+        request.user?.id ?? '',
+      );
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'Não foi possível gerar a malha.',
       );
     }
   }

@@ -215,7 +215,10 @@ export const routeRequestSchema = z.strictObject({
       longitude: z.number().min(-180).max(180),
     }),
   ]),
-  profile: z.enum(['fast', 'accessible']).optional().default('fast'),
+  // ⚠️ `profile` (fast|accessible) foi REMOVIDO (2026-11-19): era aceito e
+  // silenciosamente ignorado pelo service — campo morto que enganava. A
+  // acessibilidade vive na rede de navegação (navigation/networks); esta
+  // rota é o grid A* da tab AR (sem noção de acessibilidade).
 });
 export type RouteRequest = z.infer<typeof routeRequestSchema>;
 

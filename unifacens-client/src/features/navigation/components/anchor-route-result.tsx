@@ -5,6 +5,7 @@ import type {
   NavigationNetworkParams,
 } from "shared";
 import { useNavigationVersionQuery } from "../queries/use-navigation-query";
+import { openInGoogleMaps } from "../utils/open-in-google-maps";
 import { PlanningButton, PlanningNotice } from "./planning-ui";
 import { RouteMap } from "./route-map";
 import { RoutePreview } from "./route-preview";
@@ -13,10 +14,13 @@ export function AnchorRouteResult({
   result,
   network,
   anchors,
+  destination,
 }: {
   result: NavigationAnchorResult;
   network: NavigationNetworkParams;
   anchors: Anchor[];
+  /** Âncora de chegada (para o deep-link "Abrir no Google Maps"). */
+  destination?: Anchor | null;
 }) {
   const query = useNavigationVersionQuery(
     network,
@@ -97,6 +101,17 @@ export function AnchorRouteResult({
       <RoutePreview graph={graph} result={result} />
       {result.status === "ok" ? (
         <RouteMap nodeIds={result.nodeIds} nodes={graph.nodes} anchors={anchors} />
+      ) : null}
+      {destination &&
+      typeof destination.latitude === "number" &&
+      typeof destination.longitude === "number" ? (
+        <PlanningButton
+          onPress={() =>
+            openInGoogleMaps(destination.latitude as number, destination.longitude as number)
+          }
+        >
+          Abrir no Google Maps (rota externa)
+        </PlanningButton>
       ) : null}
     </View>
   );
