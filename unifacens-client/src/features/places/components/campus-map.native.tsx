@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Platform, View } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { CAMPUS_MAP_CENTER, type CampusMapProps } from './campus-map.types';
 import { MapUnavailable } from './map-unavailable';
 
@@ -18,6 +18,7 @@ const CampusMapBase = React.memo(function CampusMap({
   selectedPlace,
   onSelect,
   onSelectAnchor,
+  routePolyline,
 }: CampusMapProps) {
   const mapRef = useRef<MapView>(null);
   const lastSelectedId = useRef<string | null>(null);
@@ -38,6 +39,17 @@ const CampusMapBase = React.memo(function CampusMap({
       );
     }
   }, [selectedPlace]);
+
+  // Percurso calculado: enquadra a câmera na polyline (a rota pode ser
+  // ~100m — o initialRegion do campus a deixaria subpixel).
+  useEffect(() => {
+    if (routePolyline && routePolyline.length >= 2) {
+      mapRef.current?.fitToCoordinates(routePolyline, {
+        edgePadding: { top: 48, right: 48, bottom: 48, left: 48 },
+        animated: true,
+      });
+    }
+  }, [routePolyline]);
 
   if (
     Platform.OS === 'android' &&
@@ -95,6 +107,15 @@ const CampusMapBase = React.memo(function CampusMap({
             onPress={() => onSelectAnchor?.(anchor.id)}
           />
         ))}
+        {/* Percurso calculado (planejamento) — polyline azul Sky. */}
+        {routePolyline && routePolyline.length >= 2 ? (
+          <Polyline
+            coordinates={routePolyline}
+            strokeColor="#38BDF8"
+            strokeWidth={4}
+            lineDashPattern={routePolyline.length === 2 ? [12, 8] : undefined}
+          />
+        ) : null}
       </MapView>
     </View>
   );

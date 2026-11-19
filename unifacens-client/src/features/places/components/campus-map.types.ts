@@ -9,6 +9,12 @@ export interface CampusAnchorMarker {
   categoryLabel: string | null;
 }
 
+/** Ponto da polyline do percurso calculado (WGS84). */
+export interface RoutePolylinePoint {
+  latitude: number;
+  longitude: number;
+}
+
 export interface CampusMapProps {
   places: Place[];
   /**
@@ -21,6 +27,11 @@ export interface CampusMapProps {
   onSelect: (id: string) => void;
   /** Tap em marcador de âncora → abre o modal de detalhes (reuso do AR). */
   onSelectAnchor?: (id: string) => void;
+  /**
+   * Percurso calculado (planejamento): desenha a polyline e AJUSTA o
+   * enquadramento da câmera para ela (fitToCoordinates/fitBounds).
+   */
+  routePolyline?: RoutePolylinePoint[];
 }
 // Centro inicial aproximado; os dados cadastrados determinam os marcadores.
 export const CAMPUS_MAP_CENTER = { latitude: -23.4699, longitude: -47.4297 };

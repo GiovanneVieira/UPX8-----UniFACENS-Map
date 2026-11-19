@@ -1,6 +1,30 @@
-import { AdvancedMarker, Map } from "@vis.gl/react-google-maps";
+import { useEffect } from "react";
+import {
+  AdvancedMarker,
+  Map,
+  Polyline,
+  useMap,
+} from "@vis.gl/react-google-maps";
 import { CAMPUS_MAP_CENTER, type CampusMapProps } from "./campus-map.types";
 import { GoogleMapFrame, GOOGLE_MAP_ID } from "./google-map-frame.web";
+
+/** Enquadra a câmera na polyline do percurso (child do <Map>). */
+function RouteFitter({
+  points,
+}: {
+  points: Array<{ latitude: number; longitude: number }>;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map || points.length < 2) return;
+    const bounds = new google.maps.LatLngBounds();
+    for (const point of points) {
+      bounds.extend({ lat: point.latitude, lng: point.longitude });
+    }
+    map.fitBounds(bounds, 48);
+  }, [map, points]);
+  return null;
+}
 
 export default function CampusMap({
   places,
@@ -8,6 +32,7 @@ export default function CampusMap({
   selectedPlace,
   onSelect,
   onSelectAnchor,
+  routePolyline,
 }: CampusMapProps) {
   const center = selectedPlace ?? CAMPUS_MAP_CENTER;
   return (
@@ -45,6 +70,20 @@ export default function CampusMap({
             onClick={() => onSelectAnchor?.(anchor.id)}
           />
         ))}
+        {/* Percurso calculado (planejamento) — mesma polyline Sky do nativo. */}
+        {routePolyline && routePolyline.length >= 2 ? (
+          <>
+            <RouteFitter points={routePolyline} />
+            <Polyline
+              path={routePolyline.map((point) => ({
+                lat: point.latitude,
+                lng: point.longitude,
+              }))}
+              strokeColor="#38BDF8"
+              strokeWeight={4}
+            />
+          </>
+        ) : null}
       </Map>
     </GoogleMapFrame>
   );

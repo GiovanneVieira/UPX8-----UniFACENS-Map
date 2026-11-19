@@ -6,6 +6,7 @@ import type {
 } from "shared";
 import { useNavigationVersionQuery } from "../queries/use-navigation-query";
 import { PlanningButton, PlanningNotice } from "./planning-ui";
+import { RouteMap } from "./route-map";
 import { RoutePreview } from "./route-preview";
 
 export function AnchorRouteResult({
@@ -92,8 +93,11 @@ export function AnchorRouteResult({
     })),
   };
   return (
-    <View>
+    <View className="gap-5">
       <RoutePreview graph={graph} result={result} />
+      {result.status === "ok" ? (
+        <RouteMap nodeIds={result.nodeIds} nodes={graph.nodes} anchors={anchors} />
+      ) : null}
     </View>
   );
 }
