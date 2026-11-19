@@ -1,17 +1,13 @@
 import { z } from "zod";
 import {
   navigationGraphSchema,
+  networkIdentifierSchema,
   navigationRequestSchema,
   navigationResultSchema,
   navigationNeedsSchema,
 } from "./navigation.schema.js";
 
-const networkKey = z
-  .string()
-  .regex(
-    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/,
-    "Use letras, números, ponto, hífen ou sublinhado.",
-  );
+const networkKey = networkIdentifierSchema;
 const instant = z.string().datetime({ offset: true });
 
 export const navigationNetworkParamsSchema = z.strictObject({

@@ -22,7 +22,7 @@ const failures = {
   ],
   insufficient_data: [
     "Faltam dados para recomendar um caminho",
-    "Há passagens que precisam de medição ou conferência atualizada. Não foi possível confirmar um percurso com suas necessidades.",
+    "Há passagens que precisam de medição ou conferência atualizada. A equipe do campus completa esses dados no levantamento de percursos; assim que publicarem, o cálculo ficará disponível.",
   ],
   node_not_found: [
     "Ponto indisponível",

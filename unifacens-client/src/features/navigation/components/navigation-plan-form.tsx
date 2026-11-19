@@ -137,7 +137,15 @@ export function NavigationPlanForm({
                   result={plan.mutation.data}
                   network={parsed.data.network}
                   anchors={anchors}
+                  destination={anchors.find(
+                    (anchor) => anchor.id === values.destinationAnchorId,
+                  )}
                 />
+              ) : null}
+              {current && plan.mutation.data ? (
+                <PlanningButton onPress={() => plan.mutation.reset()}>
+                  Apagar percurso
+                </PlanningButton>
               ) : null}
             </View>
           );

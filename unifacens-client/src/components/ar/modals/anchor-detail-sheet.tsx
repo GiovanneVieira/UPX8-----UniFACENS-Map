@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react';
 import {
-  Dimensions,
   FlatList,
   Image,
   Modal,
@@ -8,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -53,6 +53,18 @@ export function AnchorDetailSheet({
   const { isAdmin } = useAuth();
   const [imageIndex, setImageIndex] = useState(0);
   const carouselRef = useRef<FlatList<string> | null>(null);
+  // Responsivo (reage a rotação/resize — Dimensions.get é estático):
+  // BREAKPOINT 768px — telas largas (web/tablet/paisagem) ganham card
+  // maior; a FOTO mantém 4:3 em qualquer largura (antes: height fixa 170
+  // com largura variável virava faixa panorâmica em telas largas).
+  const { width: windowW } = useWindowDimensions();
+  const cardMaxWidth = windowW >= 768 ? 540 : 460;
+  // Largura REAL do carrossel medida por onLayout — o item usa EXATAMENTE
+  // a largura da lista (pagingEnabled snapa pela largura da LISTA: item
+  // 1px mais estreito = preview da próxima foto desalinhada, lição de
+  // device 2026-11-18 — card width:'100%'+margins faz a lista ficar mais
+  // larga que qualquer cálculo aritmético presumisse).
+  const [carouselWidth, setCarouselWidth] = useState(0);
 
   if (!visible || !anchor) return null;
 
@@ -61,13 +73,6 @@ export function AnchorDetailSheet({
   const model = anchor.model ?? anchor.category?.model ?? null;
   const dims = modelDims(anchor);
   const createdAt = anchor.createdAt ? new Date(anchor.createdAt) : null;
-  const screenW = Dimensions.get('window').width;
-  /**
-   * Largura EXPLÍCITA do item do carrossel (bug de device 2026-11-16:
-   * Image com '100%' dentro de Pressable auto-width colapsava — nada
-   * renderizava). Card = min(460, tela−48) − padding 36.
-   */
-  const carouselItemW = Math.min(460, screenW - 48) - 36;
 
   const goImage = (index: number) => {
     const clamped = Math.max(0, Math.min(images.length - 1, index));
@@ -83,6 +88,8 @@ export function AnchorDetailSheet({
           style={[
             styles.card,
             { paddingBottom: Math.max(insets.bottom + 16, 24) },
+            // Breakpoint: card maior em telas largas (web/tablet).
+            { maxWidth: cardMaxWidth },
           ]}>
           <ScrollView keyboardShouldPersistTaps="handled" bounces={false}>
             {/* Cabeçalho: título + fechar */}
@@ -119,38 +126,46 @@ export function AnchorDetailSheet({
               </View>
             ) : null}
 
-            {/* Carrossel de imagens (paging + indicadores) */}
+            {/* Carrossel de imagens (paging 1:1 — item = largura MEDIDA da
+                lista; ver comentário do carouselWidth no componente) */}
             {images.length > 0 ? (
-              <View style={styles.carouselWrap}>
-                <FlatList
-                  ref={carouselRef}
-                  data={images}
-                  keyExtractor={(uri) => uri}
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  getItemLayout={(_data, index) => ({
-                    length: carouselItemW,
-                    offset: carouselItemW * index,
-                    index,
-                  })}
-                  onMomentumScrollEnd={(e) => {
-                    const idx = Math.round(e.nativeEvent.contentOffset.x / carouselItemW);
-                    setImageIndex(idx);
-                  }}
-                  renderItem={({ item }) => (
-                    <Pressable
-                      accessibilityLabel={`Imagem ${images.indexOf(item) + 1} de ${images.length}`}
-                      onPress={() => goImage(images.indexOf(item) + 1)}>
-                      <Image
-                        source={{ uri: item }}
-                        style={[styles.carouselImage, { width: carouselItemW }]}
-                      />
-                    </Pressable>
-                  )}
-                  style={styles.carousel}
-                />
-                {images.length > 1 ? (
+              <View
+                style={styles.carouselWrap}
+                onLayout={(e) => {
+                  const width = e.nativeEvent.layout.width;
+                  setCarouselWidth((current) => (current === width ? current : width));
+                }}>
+                {carouselWidth > 0 ? (
+                  <FlatList
+                    ref={carouselRef}
+                    data={images}
+                    keyExtractor={(uri) => uri}
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={false}
+                    getItemLayout={(_data, index) => ({
+                      length: carouselWidth,
+                      offset: carouselWidth * index,
+                      index,
+                    })}
+                    onMomentumScrollEnd={(e) => {
+                      const idx = Math.round(e.nativeEvent.contentOffset.x / carouselWidth);
+                      setImageIndex(idx);
+                    }}
+                    renderItem={({ item }) => (
+                      <Pressable
+                        accessibilityLabel={`Imagem ${images.indexOf(item) + 1} de ${images.length}`}
+                        onPress={() => goImage(images.indexOf(item) + 1)}>
+                        <Image
+                          source={{ uri: item }}
+                          style={[styles.carouselImage, { width: carouselWidth }]}
+                        />
+                      </Pressable>
+                    )}
+                    style={styles.carousel}
+                  />
+                ) : null}
+                {images.length > 1 && carouselWidth > 0 ? (
                   <View style={styles.dotsRow}>
                     {images.map((uri, i) => (
                       <Pressable
@@ -265,10 +280,10 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-  /** Modal CENTRALIZADO (redesign 2026-11-16 — era bottom-sheet/drawer). */
+  /** Modal CENTRALIZADO (redesign 2026-11-16 — era bottom-sheet/drawer).
+   *  maxWidth é DINÂMICO (breakpoint 768px — ver inline no componente). */
   card: {
     width: '100%',
-    maxWidth: 460,
     marginHorizontal: 24,
     maxHeight: '82%',
     backgroundColor: '#0F172A',
@@ -342,7 +357,9 @@ const styles = StyleSheet.create({
     flexGrow: 0,
   },
   carouselImage: {
-    height: 170,
+    // 4:3 em qualquer largura — a foto nunca vira faixa panorâmica
+    // (a altura acompanha a largura do item em cada breakpoint).
+    aspectRatio: 4 / 3,
     borderRadius: 14,
     backgroundColor: '#1E293B',
   },

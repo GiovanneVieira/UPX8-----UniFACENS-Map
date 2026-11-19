@@ -1,8 +1,9 @@
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/hooks/use-auth';
+import { resolveAssetUrl } from '@/services/api';
 
 /**
  * Carteirinha estudantil — fidelidade ao app oficial: card em formato de
@@ -82,9 +83,17 @@ export function IdCardScreen() {
                 }}
               />
             ))}
-            {/* Avatar circular sobre a divisória */}
-            <View className="absolute -left-8 top-5 h-16 w-16 items-center justify-center rounded-full bg-neutral-800 ring-4 ring-[#1C1C1C]">
-              <Ionicons name="person" size={30} color="#D4D4D4" />
+            {/* Avatar circular sobre a divisória (foto de perfil ou fallback) */}
+            <View className="absolute -left-8 top-5 h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-neutral-800 ring-4 ring-[#1C1C1C]">
+              {user?.image ? (
+                <Image
+                  source={{ uri: resolveAssetUrl(user.image) }}
+                  style={{ width: 64, height: 64 }}
+                  accessibilityLabel={`Foto de perfil de ${user.name}`}
+                />
+              ) : (
+                <Ionicons name="person" size={30} color="#D4D4D4" />
+              )}
             </View>
             <View className="w-full px-3">
               <Text className="text-[13px] font-bold leading-tight text-white">

@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { admin } from 'better-auth/plugins';
+import { admin, emailOTP } from 'better-auth/plugins';
 import { jwt } from 'better-auth/plugins/jwt';
 import { expo } from '@better-auth/expo';
 import type { ApiEnvironment } from 'shared';
@@ -12,6 +12,8 @@ import {
   verification,
   jwks,
 } from '../../db/schema.js';
+import { MailerService } from '../mailer/mailer.service.js';
+import { createRedisSecondaryStorage } from './secondary-storage.js';
 
 export const BETTER_AUTH = Symbol('BETTER_AUTH');
 
@@ -21,8 +23,10 @@ export const BETTER_AUTH = Symbol('BETTER_AUTH');
  * - Estratégia primária no mobile: JWT (plugin `jwt`) resgatado em
  *   `POST /auth/jwt/token` e enviado como `Authorization: Bearer` —
  *   validado localmente pelo guard contra o JWKS de `/auth/jwks`.
- * - Plugins: `admin` (roles `user`/`admin`; default `user`) e `jwt`
- *   (expiração 24h com refresh silencioso via sessão persistida).
+ * - Plugins: `admin` (roles `user`/`admin`; default `user`), `jwt`
+ *   (expiração 24h com refresh silencioso via sessão persistida) e
+ *   `emailOTP` (OTP 6 dígitos/5min p/ verificação de e-mail e reset de
+ *   senha — códigos no Redis via secondaryStorage quando REDIS_URL existe).
  *
  * Nota: NÃO anotar o tipo de retorno manualmente — a inferência preserva
  * os endpoints tipados dos plugins (auth.api.createUser, jwt etc.).
@@ -30,10 +34,25 @@ export const BETTER_AUTH = Symbol('BETTER_AUTH');
 export function createBetterAuth(
   config: ApiEnvironment,
   db: DrizzleDB,
+  mailer: MailerService = new MailerService(config),
+  /**
+   * Testes de integração desabilitam o rate-limit nativo: com o contador no
+   * Redis (persistente na suite), os 3 sign-ins/10s tornariam a suíte
+   * flaky. Produção mantém os limites padrão (3/60s nos endpoints de OTP).
+   */
+  options: { disableRateLimit?: boolean } = {},
 ) {
   return betterAuth({
     baseURL: config.BETTER_AUTH_URL,
     basePath: '/auth',
+    ...(options.disableRateLimit
+      ? { rateLimit: { enabled: false as const } }
+      : {}),
+    // OTPs (emailOTP) e rate-limits no Redis quando disponível — sem
+    // REDIS_URL, fallback graceful para a `verification` table (Postgres).
+    ...(config.REDIS_URL
+      ? { secondaryStorage: createRedisSecondaryStorage(config.REDIS_URL) }
+      : {}),
     database: drizzleAdapter(db, {
       provider: 'pg',
       schema: { user, session, account, verification, jwks },
@@ -41,6 +60,9 @@ export function createBetterAuth(
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
+      // Conta nova só entra com e-mail verificado (OTP). Seeds/fixtures
+      // criam com emailVerified: true — invariante §13 do AGENTS.md.
+      requireEmailVerification: true,
     },
     // Em desenvolvimento, confia na origem do próprio request: o client
     // expo envia como Origin a URL do Metro (IP de LAN que muda com a rede),
@@ -83,6 +105,15 @@ export function createBetterAuth(
       // re-login fica impossível (lição de device 2026-11-12: sessões
       // revogadas pelo seed do boot dispararam a primeira ocorrência).
       expo(),
+      // OTP 6 dígitos, TTL 5 min (verificação de e-mail + reset de senha).
+      // Rate-limit nativo do better-auth: 3 envios/60s por endpoint.
+      emailOTP({
+        otpLength: 6,
+        expiresIn: 300,
+        async sendVerificationOTP({ email, otp, type }) {
+          await mailer.sendOtpEmail(email, otp, type);
+        },
+      }),
       admin({
         defaultRole: 'user',
         adminRoles: ['admin'],

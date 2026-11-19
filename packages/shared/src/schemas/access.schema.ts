@@ -105,10 +105,47 @@ export const apiEnvironmentSchema = z
           ),
         ),
       ),
+    /**
+     * Redis (better-auth secondaryStorage): OTPs do plugin emailOTP e
+     * rate-limits vivem aqui quando configurado (TTL nativo). Vazio =
+     * fallback graceful para a `verification` table do Postgres.
+     * `rediss://` (TLS) incluído — provedores gerenciados (Upstash, Render
+     * Key Value externo) exigem; node-redis ativa TLS pela scheme da URL.
+     */
+    REDIS_URL: optionalValue.pipe(
+      z
+        .string()
+        .url()
+        .refine(
+          (value) =>
+            new URL(value).protocol === 'redis:' ||
+            new URL(value).protocol === 'rediss:',
+          'Informe uma URL redis:// ou rediss:// (TLS) válida',
+        )
+        .optional(),
+    ),
+    /**
+     * Envio de e-mail (nodemailer) para os OTPs de verificação/reset.
+     * Em produção é OBRIGATÓRIA (fail-fast no boot): com
+     * requireEmailVerification ativo, novos usuários não conseguem verificar
+     * a conta sem e-mail de verdade. Fora de produção, vazio = dev fallback
+     * (OTP logado no console da API).
+     */
+    SMTP_URL: optionalValue.pipe(
+      z
+        .string()
+        .url()
+        .refine(
+          (value) => new URL(value).protocol === "smtp:" || new URL(value).protocol === "smtps:",
+          "Informe uma URL smtp:// ou smtps:// (host:port; 587 STARTTLS ou 465 TLS)",
+        )
+        .optional(),
+    ),
+    SMTP_FROM: optionalValue.pipe(z.string().min(3).max(320).optional()),
   })
   .superRefine((environment, context) => {
     if (environment.NODE_ENV !== "production") return;
-    for (const key of ["DATABASE_URL", "BETTER_AUTH_SECRET"] as const) {
+    for (const key of ["DATABASE_URL", "BETTER_AUTH_SECRET", "SMTP_URL"] as const) {
       if (!environment[key])
         context.addIssue({
           code: "custom",
@@ -141,6 +178,8 @@ export const authUserSchema = z.object({
   name: z.string(),
   email: z.string(),
   role: z.string(),
+  /** URL do avatar (S3) — null quando o usuário nunca enviou foto. */
+  image: z.string().nullable().default(null),
 });
 export type AuthUser = z.infer<typeof authUserSchema>;
 
@@ -176,7 +215,10 @@ export const routeRequestSchema = z.strictObject({
       longitude: z.number().min(-180).max(180),
     }),
   ]),
-  profile: z.enum(['fast', 'accessible']).optional().default('fast'),
+  // ⚠️ `profile` (fast|accessible) foi REMOVIDO (2026-11-19): era aceito e
+  // silenciosamente ignorado pelo service — campo morto que enganava. A
+  // acessibilidade vive na rede de navegação (navigation/networks); esta
+  // rota é o grid A* da tab AR (sem noção de acessibilidade).
 });
 export type RouteRequest = z.infer<typeof routeRequestSchema>;
 

@@ -232,3 +232,39 @@ export async function deleteAnchorImage(
     },
   );
 }
+
+/** Resposta dos endpoints de avatar do usuário. */
+const avatarResultSchema = z.object({ image: z.string().nullable() });
+
+/**
+ * Envia a foto de perfil (multipart, mesma técnica do upload de fotos do
+ * ponto — File do expo-file-system com bytes()/name/type explícitos).
+ */
+export async function uploadUserAvatar(photo: {
+  uri: string;
+  fileName: string;
+  mime: string;
+}): Promise<{ image: string | null }> {
+  const body = new FormData();
+  const file = new File(photo.uri);
+  body.append('file', {
+    name: photo.fileName,
+    type: photo.mime,
+    bytes: () => file.bytes(),
+  } as unknown as Blob);
+  return request(`${getApiBaseUrl()}/users/me/avatar`, avatarResultSchema, {
+    method: 'POST',
+    headers: {
+      ...getTeamAuthorization(),
+      Accept: 'application/json',
+    },
+    body,
+  }, UPLOAD_TIMEOUT_MS);
+}
+
+/** Remove a foto de perfil do usuário autenticado. */
+export async function removeUserAvatar(): Promise<{ image: string | null }> {
+  return request(`${getApiBaseUrl()}/users/me/avatar`, avatarResultSchema, {
+    method: 'DELETE',
+  });
+}

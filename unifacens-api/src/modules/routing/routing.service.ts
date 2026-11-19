@@ -1,5 +1,5 @@
-import { Injectable, Inject, OnModuleInit } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { Injectable, Inject, OnModuleInit, BadRequestException } from '@nestjs/common';
+import { eq, inArray } from 'drizzle-orm';
 import { DRIZZLE } from '../../db/database.module.js';
 import type { DrizzleDB } from '../../db/database.module.js';
 import { campusObstacles, campusEntrances, anchors } from '../../db/schema.js';
@@ -7,6 +7,8 @@ import type { RouteRequest, RouteResponse, RoutePoint, RouteSegment } from 'shar
 import { buildGrid, type WalkableGrid, type ObstaclePolygon } from './grid-builder.js';
 import { findRoute } from './astar.js';
 import { CAMPUS_FIXTURE } from './campus-fixture.js';
+import { generateDraftNetwork } from './network-generator.js';
+import { NavigationService } from '../navigation/navigation.service.js';
 
 
 function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -24,7 +26,10 @@ export class RoutingService implements OnModuleInit {
   private grid: WalkableGrid | null = null;
   private entrances: Array<{ id: string; name: string; latitude: number; longitude: number; obstacleId: string | null }> = [];
 
-  constructor(@Inject(DRIZZLE) private readonly db: DrizzleDB) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: DrizzleDB,
+    private readonly navigation: NavigationService,
+  ) {}
 
   async onModuleInit() {
     await this.seedFixtureIfEmpty();
@@ -199,5 +204,62 @@ export class RoutingService implements OnModuleInit {
       `[Routing] Grid ${this.grid.cols}x${this.grid.rows} células (${this.grid.cellSizeM}m), ` +
         `${obstacles.length} obstáculos, ${this.entrances.length} entradas.`,
     );
+  }
+
+  /**
+   * Gera a MALHA EM RASCUNHO da rede de navegação a partir da grade
+   * caminhável (F1, plano 2026-11-19): geometria automática entre os pontos
+   * AR; atributos de acessibilidade DESCONHECIDOS para a equipe completar
+   * no levantamento. Persiste como versão draft imutável ( ciclo de vida
+   * existente do NavigationModule).
+   */
+  async generateNavigationDraft(
+    dto: { networkId: string; version: string; anchorIds: string[] },
+    actorId: string,
+  ) {
+    if (!this.grid) {
+      throw new Error('Grid do campus não inicializado.');
+    }
+    const rows = await this.db
+      .select({
+        id: anchors.id,
+        name: anchors.name,
+        latitude: anchors.latitude,
+        longitude: anchors.longitude,
+      })
+      .from(anchors)
+      .where(inArray(anchors.id, dto.anchorIds));
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const missing = dto.anchorIds.filter((id) => !byId.has(id));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Pontos AR não encontrados: ${missing.join(', ')}.`,
+      );
+    }
+    const withoutCoords = dto.anchorIds.filter((id) => {
+      const row = byId.get(id)!;
+      return row.latitude == null || row.longitude == null;
+    });
+    if (withoutCoords.length > 0) {
+      throw new BadRequestException(
+        `Pontos AR sem coordenadas geográficas: ${withoutCoords.join(', ')}.`,
+      );
+    }
+
+    const graph = generateDraftNetwork(
+      this.grid,
+      dto.anchorIds.map((id) => {
+        const row = byId.get(id)!;
+        return {
+          id: row.id,
+          name: row.name,
+          latitude: row.latitude as number,
+          longitude: row.longitude as number,
+        };
+      }),
+      dto.networkId,
+      dto.version,
+    );
+    return this.navigation.importVersion(graph, actorId);
   }
 }

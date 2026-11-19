@@ -16,6 +16,7 @@ import { PointEditor } from './point-editor.web';
 import { CategoryManager } from './category-manager.web';
 import { ModelManager } from './model-manager.web';
 import { OrphanAnchors } from './orphan-anchors.web';
+import { SurveyManager } from './survey-manager.web';
 
 const SECTIONS: Array<{
   key: AdminSection;
@@ -27,6 +28,7 @@ const SECTIONS: Array<{
   { key: 'points', label: 'Pontos do campus', shortLabel: 'Pontos', icon: 'location-outline' },
   { key: 'categories', label: 'Categorias', shortLabel: 'Categ.', icon: 'pricetags-outline' },
   { key: 'models', label: 'Modelos 3D', shortLabel: 'Modelos', icon: 'cube-outline' },
+  { key: 'survey', label: 'Levantamento de percursos', shortLabel: 'Percursos', icon: 'map-outline' },
   { key: 'orphans', label: 'Âncoras órfãs', shortLabel: 'Órfãs', icon: 'cloud-offline-outline' },
   { key: 'users', label: 'Usuários', shortLabel: 'Usuários', icon: 'people-outline' },
 ];
@@ -35,6 +37,7 @@ const ICONS = {
   'location-outline': 'location-outline',
   'pricetags-outline': 'pricetags-outline',
   'cube-outline': 'cube-outline',
+  'map-outline': 'map-outline',
   'cloud-offline-outline': 'cloud-offline-outline',
   'people-outline': 'people-outline',
 } as const;
@@ -56,6 +59,11 @@ const SECTION_HEADINGS: Record<AdminSection, { title: string; subtitle: string }
     title: 'Âncoras órfãs',
     subtitle:
       'Âncoras hospedadas na plataforma sem ponto no banco (criação interrompida) — adote para registrá-las sem re-escanear.',
+  },
+  survey: {
+    title: 'Levantamento de percursos',
+    subtitle:
+      'Gere a malha em rascunho a partir da grade caminhável, complete as medições de acessibilidade de cada trecho e publique com revisão.',
   },
   users: {
     title: 'Usuários cadastrados',
@@ -361,6 +369,11 @@ export function AdminScreen() {
             {section === 'models' && (
               <View className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
                 <ModelManager notice={(message) => panel.refresh(message)} />
+              </View>
+            )}
+            {section === 'survey' && (
+              <View className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6">
+                <SurveyManager />
               </View>
             )}
             {section === 'orphans' && (

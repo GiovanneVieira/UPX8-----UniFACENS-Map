@@ -22,6 +22,26 @@ services:
       - unifacens-network
 
   # ============================================================================
+  # 1.5 OTP/Verification Storage (Redis) — melhor-auth secondaryStorage
+  # ============================================================================
+  # OTPs do better-auth (plugin emailOTP) vivem AQUI quando REDIS_URL está
+  # configurado na API (TTL nativo ~300s) — sem volume: restart perde apenas
+  # códigos vivos (usuário re-solicita). Sem REDIS_URL a API faz fallback
+  # para a `verification` table do Postgres (graceful — dev local sem Redis).
+  redis:
+    image: redis:7-alpine
+    container_name: unifacens-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - unifacens-network
+
+  # ============================================================================
   # 2. Backend API (NestJS 12 + Drizzle ORM)
   # ============================================================================
   api:
@@ -64,8 +84,15 @@ services:
       - "8000:8000"
     env_file:
       - .env.api
+    environment:
+      # No compose a API sempre tem Redis disponível (service acima) — os OTPs
+      # (emailOTP) e rate-limits do better-auth vivem no secondaryStorage.
+      # Fora do compose (dev no host), vazio = fallback para o Postgres.
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - /app/node_modules
@@ -95,6 +122,22 @@ services:
           path: ./package-lock.json
         - action: rebuild
           path: ./packages/shared/package.json
+        # ⚠️ Hot sync de CÓDIGO (lição de device 2026-11-18): os envs de
+        # polling (CHOKIDAR/WATCHPACK abaixo) NÃO bastam — bind mounts do
+        # Docker Desktop/Windows são cegos a eventos e o Metro servia
+        # TRANSFORM CACHE ANTIGO até um restart do container (o "Fast
+        # Refresh não aplica" que durou 30min de debug). O sync escreve no
+        # overlay NATIVO do container → watcher dispara → refresh real.
+        # Idem api (ver nota lá) —requires `docker compose watch` ativo.
+        - action: sync
+          path: ./unifacens-client/src
+          target: /app/unifacens-client/src
+        - action: sync
+          path: ./unifacens-client/assets
+          target: /app/unifacens-client/assets
+        - action: sync
+          path: ./packages/shared/src
+          target: /app/packages/shared/src
     ports:
       - "8081:8081"
       - "8080:8081"

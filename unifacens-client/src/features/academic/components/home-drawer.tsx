@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/hooks/use-auth';
+import { AvatarOptionsSheet, AvatarPicker } from '@/features/profile/components/avatar-picker';
 
 const APP_VERSION = '1.0.0-dev';
 
@@ -24,6 +25,7 @@ export function HomeDrawer({ visible, onClose }: DrawerProps) {
   const insets = useSafeAreaInsets();
   const { user, signOut } = useAuth();
   const [emergencyVisible, setEmergencyVisible] = useState(false);
+  const [avatarSheetVisible, setAvatarSheetVisible] = useState(false);
 
   if (!visible) return null;
 
@@ -106,11 +108,11 @@ export function HomeDrawer({ visible, onClose }: DrawerProps) {
               <Text className="text-2xl font-bold text-white">Menu</Text>
             </View>
 
-            {/* Perfil: avatar + nome + curso (espelho oficial) */}
+            {/* Perfil: avatar (troca de foto) + nome + curso (espelho oficial).
+                A FOLHA de opções vive na raiz do Modal (ver AvatarOptionsSheet) —
+                overlay aninhado aqui quebrava o layout (position:relative do pai). */}
             <View className="flex-row items-center gap-4 px-6 py-4">
-              <View className="h-14 w-14 items-center justify-center rounded-full bg-neutral-800">
-                <Ionicons name="person" size={26} color="#D4D4D4" />
-              </View>
+              <AvatarPicker size={56} onOpenOptions={() => setAvatarSheetVisible(true)} />
               <View className="flex-1 gap-0.5">
                 <Text className="text-base font-bold text-white">{user?.name ?? '—'}</Text>
                 <Text className="text-sm text-neutral-400">
@@ -155,6 +157,16 @@ export function HomeDrawer({ visible, onClose }: DrawerProps) {
             </View>
           </ScrollView>
         </View>
+
+        {/* Sheet de opções de FOTO — overlay absoluto na RAIZ do Modal
+            (mesma família do sheet de emergência: Modais RN aninhados e
+            overlays fora da raiz quebram a window/layout). */}
+        {avatarSheetVisible ? (
+          <AvatarOptionsSheet
+            visible
+            onClose={() => setAvatarSheetVisible(false)}
+          />
+        ) : null}
 
         {/* Sheet de Emergência — overlay ABSOLUTO dentro do mesmo Modal
             (evita o bug de Modais RN aninhados) */}

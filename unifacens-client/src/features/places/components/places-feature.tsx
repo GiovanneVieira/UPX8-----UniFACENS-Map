@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -6,7 +7,12 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { router } from "expo-router";
 import { usePlacesExplorer } from "../hooks/use-places-explorer";
+import { haversineMeters, useUserLocation } from "../hooks/use-user-location";
+import { useAnchorsQuery } from "@/features/anchors/queries/use-anchors-query";
+import { useDeleteAnchorMutation } from "@/features/anchors/queries/use-anchors-query";
+import { AnchorDetailSheet } from "@/components/ar/modals/anchor-detail-sheet";
 import CampusMap from "./campus-map";
 import { PlaceFormModal } from "./place-form-modal";
 import { PlaceCard } from "./place-card";
@@ -19,6 +25,40 @@ export function PlacesFeature() {
   const explorer = usePlacesExplorer();
   const { isAdmin } = useAuth();
   const { query, details, places, selectedId, selectPlace, total } = explorer;
+  // Pins AR no mapa 2D: âncoras com coordenada — falha silenciosa (o mapa
+  // segue mostrando places; a tab AR tem o estado completo delas).
+  const { data: anchorsData } = useAnchorsQuery();
+  const anchorMarkers = (anchorsData ?? [])
+    .filter(
+      (anchor): anchor is typeof anchor & { latitude: number; longitude: number } =>
+        anchor.latitude != null && anchor.longitude != null,
+    )
+    .map((anchor) => ({
+      id: anchor.id,
+      name: anchor.name,
+      latitude: anchor.latitude,
+      longitude: anchor.longitude,
+      categoryLabel: anchor.category?.label ?? null,
+    }));
+
+  // Detalhes da âncora pelo marcador do mapa — MESMO sheet da tab AR
+  // (carrossel de imagens, descrição, distância do usuário, "Ir para").
+  const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null);
+  const userCoords = useUserLocation();
+  const deleteAnchor = useDeleteAnchorMutation();
+  const selectedAnchor = useMemo(
+    () => anchorsData?.find((anchor) => anchor.id === selectedAnchorId) ?? null,
+    [anchorsData, selectedAnchorId],
+  );
+  const anchorDistanceM = useMemo(() => {
+    if (!selectedAnchor || !userCoords || selectedAnchor.latitude == null || selectedAnchor.longitude == null) {
+      return undefined;
+    }
+    return haversineMeters(userCoords, {
+      latitude: selectedAnchor.latitude,
+      longitude: selectedAnchor.longitude,
+    });
+  }, [selectedAnchor, userCoords]);
   return (
     <SafeAreaView
       className="flex-1 bg-slate-950"
@@ -75,12 +115,15 @@ export function PlacesFeature() {
             </Text>
             <CampusMap
               places={places}
+              anchors={anchorMarkers}
               selectedPlace={details.data ?? null}
               onSelect={selectPlace}
+              onSelectAnchor={setSelectedAnchorId}
             />
             <Text className="text-xs text-slate-400">
-              O mapa apresenta os locais carregados nesta busca. Confira a
-              origem e a verificação dos dados antes de utilizá-los.
+              O mapa apresenta os locais carregados nesta busca e os pontos AR
+              (pins roxos). Confira a origem e a verificação dos dados antes de
+              utilizá-los.
             </Text>
           </View>
           {details.isFetching && selectedId ? (
@@ -197,6 +240,27 @@ export function PlacesFeature() {
           onSaved={explorer.onSaved}
         />
       ) : null}
+
+      {/* Detalhes da âncora AR tocada no mapa (reuso do sheet da tab AR) */}
+      <AnchorDetailSheet
+        visible={selectedAnchor !== null}
+        anchor={selectedAnchor}
+        distanceMeters={anchorDistanceM}
+        onClose={() => setSelectedAnchorId(null)}
+        onNavigate={() => {
+          // Do mapa 2D: leva à tab AR (onde a navegação de verdade acontece)
+          setSelectedAnchorId(null);
+          router.push("/(tabs)/ar");
+        }}
+        onDelete={
+          isAdmin
+            ? (anchor) => {
+                setSelectedAnchorId(null);
+                deleteAnchor.mutate(anchor.id);
+              }
+            : undefined
+        }
+      />
     </SafeAreaView>
   );
 }

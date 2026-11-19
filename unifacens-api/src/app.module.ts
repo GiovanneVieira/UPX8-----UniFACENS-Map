@@ -5,6 +5,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { DatabaseModule } from './db/database.module.js';
 import { AnchorsModule } from './anchors/anchors.module.js';
+import { UsersModule } from './modules/users/users.module.js';
 import { PlacesModule } from './modules/places/places.module.js';
 import { CategoriesModule } from './modules/categories/categories.module.js';
 import { ModelsModule } from './modules/models/models.module.js';
@@ -36,6 +37,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     CategoriesModule,
     ModelsModule,
     AdminModule,
+    UsersModule,
     RoutingModule,
     NavigationModule,
     ArDiagnosticsModule,

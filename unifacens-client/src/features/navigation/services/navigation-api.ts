@@ -112,3 +112,79 @@ export function calculateAnchorNavigationRoute(
     },
   );
 }
+
+// ── Operações de administração da rede (painel web — Bearer de admin) ──
+
+/** Gera MALHA EM RASCUNHO a partir da grade caminhável (geometria automática). */
+export function generateNavigationDraft(input: {
+  networkId: string;
+  version: string;
+  anchorIds: string[];
+}) {
+  // Endpoint vive no módulo de routing (dono da grade A*).
+  return fetch(`${getApiBaseUrl()}/routing/navigation/drafts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...getTeamAuthorization(),
+    },
+    body: JSON.stringify(input),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(
+        `Não foi possível gerar a malha (HTTP ${response.status}). ${detail.slice(0, 200)}`,
+      );
+    }
+    return response.json();
+  });
+}
+
+/** Importa versão imutável (novo draft a partir do editor). */
+export function importNavigationVersion(graph: unknown) {
+  return fetch(`${getApiBaseUrl()}/navigation/networks`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...getTeamAuthorization(),
+    },
+    body: JSON.stringify(graph),
+  }).then(async (response) => {
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(
+        `Não foi possível salvar a versão (HTTP ${response.status}). ${detail.slice(0, 200)}`,
+      );
+    }
+    return response.json();
+  });
+}
+
+/** Publica versão (levantamento real exige revisão com validade + evidências). */
+export function publishNavigationVersion(
+  network: NavigationNetworkParams,
+  body: { review?: { validUntil: string; evidenceIds: string[] } },
+) {
+  return fetch(
+    `${getApiBaseUrl()}/navigation/networks${versionPath(network)}/publish`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...getTeamAuthorization(),
+      },
+      body: JSON.stringify(body),
+    },
+  ).then(async (response) => {
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(
+        `Não foi possível publicar (HTTP ${response.status}). ${detail.slice(0, 200)}`,
+      );
+    }
+    return response.json();
+  });
+}

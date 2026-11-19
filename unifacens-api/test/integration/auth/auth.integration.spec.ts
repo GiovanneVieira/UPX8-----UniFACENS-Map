@@ -13,6 +13,8 @@ import {
   PostgreSqlContainer,
   type StartedPostgreSqlContainer,
 } from '@testcontainers/postgresql';
+import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
+import { createClient, type RedisClientType } from 'redis';
 import express from 'express';
 import net from 'node:net';
 import pg from 'pg';
@@ -31,12 +33,15 @@ import {
   createBetterAuth,
   type BetterAuthInstance,
 } from '../../../src/common/auth/better-auth.js';
+import { MailerService } from '../../../src/common/mailer/mailer.service.js';
 import { HealthController } from '../../../src/health/health.controller.js';
 import { PlacesController } from '../../../src/modules/places/places.controller.js';
 import { PlacesService } from '../../../src/modules/places/places.service.js';
 import { PlacesRepository } from '../../../src/modules/places/places.repository.js';
 import { AnchorsController } from '../../../src/anchors/anchors.controller.js';
 import { AnchorsService } from '../../../src/anchors/anchors.service.js';
+import { UsersController } from '../../../src/modules/users/users.controller.js';
+import { UsersService } from '../../../src/modules/users/users.service.js';
 import { DRIZZLE, type DrizzleDB } from '../../../src/db/database.module.js';
 import { STORAGE } from '../../../src/modules/storage/storage.types.js';
 import { LocalStorageAdapter } from '../../../src/modules/storage/local.adapter.js';
@@ -82,10 +87,14 @@ function getFreePort(): Promise<number> {
 
 describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real', () => {
   let container: StartedPostgreSqlContainer;
+  let redis: StartedRedisContainer;
+  let redisClient: RedisClientType;
   let pool: pg.Pool;
   let app: NestExpressApplication;
   let db: DrizzleDB;
   let auth: BetterAuthInstance;
+  let storageAdapter: LocalStorageAdapter;
+  let storageDir: string;
   let baseUrl: string;
   let adminJwt: string;
   let commonJwt: string;
@@ -126,6 +135,11 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     container = await new PostgreSqlContainer('postgres:16-alpine')
       .withDatabase('auth_test')
       .start();
+    // Redis real (paridade com o secondaryStorage de produção): os OTPs do
+    // plugin emailOTP devem viver aqui (TTL), não na `verification` table.
+    redis = await new RedisContainer('redis:7-alpine').start();
+    redisClient = createClient({ url: redis.getConnectionUrl() });
+    await redisClient.connect();
     pool = new pg.Pool({ connectionString: container.getConnectionUri() });
     db = drizzle({ client: pool });
     await migrate(db, {
@@ -146,6 +160,10 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
       BETTER_AUTH_SECRET: 'fixture-integration-secret-with-32-chars-min',
       CORS_ORIGINS: origin,
       TRUSTED_APP_ORIGINS: 'unifacensclient://',
+      REDIS_URL: redis.getConnectionUrl(),
+      // Produção exige SMTP (fail-fast); o MailerService de teste usa o
+      // console fallback — SMTP_URL precisa apenas passar no schema.
+      SMTP_URL: 'smtp://fixture:fixture@smtp.example.org:587',
     });
 
     const moduleFixture = await Test.createTestingModule({
@@ -153,6 +171,7 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
         AdminController,
         PlacesController,
         AnchorsController,
+        UsersController,
         AccessController,
         HealthController,
       ],
@@ -162,6 +181,7 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
         PlacesService,
         PlacesRepository,
         AnchorsService,
+        UsersService,
         JwtAdminGuard,
         { provide: APP_GUARD, useExisting: JwtAdminGuard },
         { provide: API_CONFIG, useValue: config },
@@ -169,13 +189,21 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
         { provide: 'PG_POOL', useValue: pool },
         {
           provide: STORAGE,
-          useValue: new LocalStorageAdapter(
-            fs.mkdtempSync(path.join(os.tmpdir(), 'auth-storage-')),
-          ),
+          useValue: (storageAdapter = new LocalStorageAdapter(
+            (storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-storage-'))),
+          )),
         },
         {
           provide: BETTER_AUTH,
-          useFactory: (database: DrizzleDB) => createBetterAuth(config, database),
+          useFactory: (database: DrizzleDB) =>
+            createBetterAuth(
+              config,
+              database,
+              new MailerService(config),
+              // Contadores de rate-limit no Redis tornariam a suíte flaky
+              // (vários sign-ins/OTPs em segundos) — desliga no teste.
+              { disableRateLimit: true },
+            ),
           inject: [DRIZZLE],
         },
       ],
@@ -225,6 +253,8 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
   afterAll(async () => {
     if (app) await app.close();
     if (pool) await pool.end();
+    if (redisClient) await redisClient.quit().catch(() => undefined);
+    if (redis) await redis.stop();
     if (container) await container.stop();
   });
 
@@ -523,6 +553,173 @@ describe('Autenticação better-auth: JWT obrigatório, roles e PostgreSQL real'
     const body = (await firstLogin.json()) as { user: { email: string } };
     expect(body.user.email).toBe(commonFixture.email);
   });
+
+  it('conta não verificada não loga; OTP de verificação (armazenado no Redis) libera o acesso', async () => {
+    // Fluxo F4: requireEmailVerification bloqueia o sign-in até o e-mail ser
+    // verificado via OTP de 6 dígitos. Os códigos vivem no secondaryStorage
+    // (Redis) — a prova é a chave com TTL ≤ 300s no container real.
+    const unverified = {
+      email: 'nao-verificado@facens.dev',
+      password: 'fixture-unverified-123',
+      name: 'Não Verificado',
+    };
+    await auth.api.createUser({
+      body: { ...unverified, role: 'user' }, // SEM emailVerified (default false)
+    });
+
+    const blocked = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({ email: unverified.email, password: unverified.password }),
+    });
+    expect(blocked.status).toBe(403);
+    const blockedBody = (await blocked.json()) as { code?: string };
+    expect(blockedBody.code).toContain('EMAIL_NOT_VERIFIED');
+
+    await auth.api.sendVerificationOTP({
+      body: { email: unverified.email, type: 'email-verification' },
+    });
+    const otpResponse = await auth.api.getVerificationOTP({
+      query: { email: unverified.email, type: 'email-verification' },
+    });
+    expect(otpResponse.otp).toMatch(/^\d{6}$/);
+
+    // PROVA do requisito "OTP no Redis": chave viva com TTL ≤ 300s.
+    const keys = await redisClient.keys(`*${unverified.email}*`);
+    const otpKey = keys.find((key) => key.includes('email-verification-otp'));
+    expect(otpKey).toBeDefined();
+    const ttl = await redisClient.ttl(otpKey!);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(300);
+
+    const verified = await fetch(`${baseUrl}/auth/email-otp/verify-email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({ email: unverified.email, otp: otpResponse.otp }),
+    });
+    expect(verified.ok).toBeTruthy();
+
+    const signIn = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({ email: unverified.email, password: unverified.password }),
+    });
+    expect(signIn.ok).toBeTruthy();
+  });
+
+  it('esqueceu a senha: OTP de reset troca a senha (antiga rejeitada, nova aceita)', async () => {
+    const resettable = {
+      email: 'reset@facens.dev',
+      password: 'fixture-reset-old-123',
+      name: 'Reset Fixture',
+    };
+    await auth.api.createUser({
+      body: { ...resettable, role: 'user', data: { emailVerified: true } },
+    });
+
+    await auth.api.sendVerificationOTP({
+      body: { email: resettable.email, type: 'forget-password' },
+    });
+    const otpResponse = await auth.api.getVerificationOTP({
+      query: { email: resettable.email, type: 'forget-password' },
+    });
+    expect(otpResponse.otp).toMatch(/^\d{6}$/);
+
+    const newPassword = 'fixture-reset-new-456';
+    const reset = await fetch(`${baseUrl}/auth/email-otp/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({
+        email: resettable.email,
+        otp: otpResponse.otp,
+        password: newPassword,
+      }),
+    });
+    expect(reset.ok).toBeTruthy();
+
+    const oldPassword = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({ email: resettable.email, password: resettable.password }),
+    });
+    expect(oldPassword.ok).toBeFalsy();
+
+    const fresh = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify({ email: resettable.email, password: newPassword }),
+    });
+    expect(fresh.ok).toBeTruthy();
+  });
+  it('usuário comum gerencia a própria foto de perfil (upload/troca/remove)', async () => {
+    // PNG 1×1 válido — o mesmo byte stream do upload do client.
+    const png = Buffer.from(
+      '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63f8cfc0f01f0005050201edb46a840000000049454e44ae426082',
+      'hex',
+    );
+    function avatarForm(): FormData {
+      const form = new FormData();
+      form.append('file', new Blob([png], { type: 'image/png' }), 'avatar.png');
+      return form;
+    }
+    const fileOnDisk = (url: string) =>
+      fs.existsSync(path.join(storageDir, storageAdapter.keyFor(url)));
+
+    // Sem token → 401 (mutation exige JWT).
+    const anonymous = await fetch(`${baseUrl}/users/me/avatar`, {
+      method: 'POST',
+      body: avatarForm(),
+    });
+    expect(anonymous.status).toBe(401);
+
+    // User COMUM (não-admin) pode enviar: @AuthenticatedRead.
+    const first = await fetch(`${baseUrl}/users/me/avatar`, {
+      method: 'POST',
+      headers: bearer(commonJwt),
+      body: avatarForm(),
+    });
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as { image: string };
+    expect(firstBody.image).toMatch(/users\/avatars\//);
+    expect(fileOnDisk(firstBody.image)).toBe(true);
+
+    // Troca: nova URL e arquivo antigo REMOVIDO do storage.
+    const second = await fetch(`${baseUrl}/users/me/avatar`, {
+      method: 'POST',
+      headers: bearer(commonJwt),
+      body: avatarForm(),
+    });
+    expect(second.status).toBe(201);
+    const secondBody = (await second.json()) as { image: string };
+    expect(secondBody.image).not.toBe(firstBody.image);
+    expect(fileOnDisk(firstBody.image)).toBe(false);
+    expect(fileOnDisk(secondBody.image)).toBe(true);
+
+    // A sessão (better-auth, via cookie — como o client) reflete a imagem.
+    const signIn = await fetch(`${baseUrl}/auth/sign-in/email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: baseUrl },
+      body: JSON.stringify(commonFixture),
+    });
+    expect(signIn.ok).toBeTruthy();
+    const cookie = signIn.headers
+      .getSetCookie()
+      .map((value) => value.split(';')[0])
+      .join('; ');
+    const session = await auth.api.getSession({
+      headers: new Headers({ cookie }),
+    });
+    expect(session?.user.image).toBe(secondBody.image);
+
+    // DELETE remove o arquivo e zera user.image.
+    const removed = await fetch(`${baseUrl}/users/me/avatar`, {
+      method: 'DELETE',
+      headers: bearer(commonJwt),
+    });
+    expect(removed.status).toBe(200);
+    expect(fileOnDisk(secondBody.image)).toBe(false);
+  });
+
   it('restringe listagem de usuários e edição dos pontos aos administradores', async () => {
     await request(app.getHttpServer()).get('/admin/users').expect(401);
     await request(app.getHttpServer()).get('/admin/users').set(bearer(commonJwt)).expect(403);
